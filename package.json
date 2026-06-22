@@ -1,0 +1,16 @@
+{
+  "name": "knowledge-base",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "npm@11.8.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "npm run check:adr",
+    "check:adr": "node scripts/check-adr.mjs",
+    "adr:new": "node scripts/create-adr.mjs",
+    "generate:adr-index": "node scripts/generate-adr-index.mjs"
+  }
+}
