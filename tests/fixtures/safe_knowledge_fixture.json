@@ -1,0 +1,64 @@
+{
+  "source": {
+    "key": "fixture-notebook",
+    "type": "manual_fixture",
+    "display_name": "Safe Knowledge Fixture",
+    "metadata": {
+      "description": "Synthetic fixture with no personal data."
+    }
+  },
+  "raw_snapshot": {
+    "key": "fixture-notebook-raw-001",
+    "media_type": "text/markdown",
+    "storage_kind": "inline",
+    "storage_uri": "fixture://safe-notebook/001",
+    "payload": "# Systems Thinking Notes\n\nSystems thinking helps writers connect ideas across books, notes, and research workflows. A knowledge graph can preserve context while search retrieves precise passages."
+  },
+  "documents": [
+    {
+      "canonical_id": "systems-thinking-note",
+      "title": "Systems Thinking Notes",
+      "text": "Systems thinking helps writers connect ideas across books, notes, and research workflows. A knowledge graph can preserve context while search retrieves precise passages. Hybrid retrieval combines lexical search, semantic similarity, and graph neighborhoods.",
+      "language": "en",
+      "published_at": "2026-06-23T00:00:00Z",
+      "url": "fixture://safe-notebook/systems-thinking-note",
+      "status": "fixture",
+      "topics": [
+        {
+          "key": "systems-thinking",
+          "label": "Systems thinking",
+          "language": "en",
+          "description": "Thinking about relations and feedback loops.",
+          "confidence": 0.98
+        },
+        {
+          "key": "hybrid-retrieval",
+          "label": "Hybrid retrieval",
+          "language": "en",
+          "description": "Combining lexical, vector, and graph signals.",
+          "confidence": 0.94
+        }
+      ],
+      "authors": [
+        {
+          "key": "fixture-author",
+          "display_name": "Fixture Author",
+          "aliases": []
+        }
+      ],
+      "works": [
+        {
+          "key": "fixture-work-knowledge-graphs",
+          "title": "Knowledge Graphs for Notes",
+          "work_type": "book",
+          "authors": ["Fixture Author"],
+          "published_at": "2024-01-01T00:00:00Z"
+        }
+      ],
+      "metadata": {
+        "fixture": true,
+        "safe_for_git": true
+      }
+    }
+  ]
+}

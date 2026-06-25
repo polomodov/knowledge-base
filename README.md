@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект пока находится на стадии v0: здесь фиксируется назначение, архитектурный контур и правила работы с данными. Реальные импортеры, хранилища, индексы и интерфейсы будут добавляться постепенно.
+Проект находится на ранней стадии, но уже содержит первый исполнимый вертикальный срез: локальный ArangoDB runtime, безопасный fixture ingest, schema/index bootstrap, full-text search, deterministic embeddings, graph traversal, hybrid retrieval и JSONL export. Реальные персональные источники пока не подключены.
 
 ## Зачем
 
@@ -33,19 +33,72 @@
 
 Raw-данные, нормализованные данные и generated outputs должны храниться отдельно. Generated outputs не являются источником истины и должны ссылаться на использованные материалы.
 
-## Будущая структура
+## Что уже есть
 
-Репозиторий пока содержит только документацию. По мере реализации структура может развиваться примерно так:
+- Python package `knowledge_base` и CLI `kb`.
+- ArangoDB Compose runtime с `--vector-index`.
+- Идемпотентный bootstrap коллекций, edge collections, ArangoSearch View, graph definition и vector index.
+- Safe synthetic fixture без персональных данных.
+- Ingest fixture с provenance edges: source, raw snapshot, document, chunk, topic, author, work.
+- Retrieval-команды: `kb search text`, `kb search semantic`, `kb graph neighbors`, `kb search hybrid`.
+- `kb export jsonl` для generated exports в gitignored data zone.
+- Unit и integration tests, включая проверку на живой ArangoDB.
+
+## Быстрый старт
+
+Установить зависимости и поднять runtime:
+
+```bash
+uv run kb --help
+brew install colima docker docker-compose
+colima start --cpu 4 --memory 8 --disk 60
+uv run kb platform up
+uv run kb platform bootstrap
+uv run kb platform health
+```
+
+Прогнать fixture pipeline:
+
+```bash
+uv run kb ingest fixture
+uv run kb index rebuild --target all
+uv run kb search text "systems thinking"
+uv run kb search semantic "ideas across books"
+uv run kb graph neighbors --topic systems-thinking
+uv run kb graph neighbors --author fixture-author
+uv run kb search hybrid "systems thinking writing workflow"
+uv run kb export jsonl --output data/generated/exports/fixture.jsonl
+```
+
+Проверки:
+
+```bash
+uv run --extra test pytest tests/unit
+KB_RUN_INTEGRATION=1 uv run --extra test pytest
+npm run check:adr
+```
+
+## Структура
+
+Текущая структура:
 
 ```text
 .
 ├── README.md
 ├── AGENTS.md
+├── pyproject.toml
 ├── package.json
+├── compose/
+│   └── arangodb.compose.yml
+├── config/
+│   ├── arangodb.env.example
+│   └── pipeline.example.toml
 ├── docs/
 │   ├── architecture.md
 │   ├── roadmap.md
 │   └── adr/
+├── specs/
+│   └── 001-production-knowledge-pipeline/
 ├── scripts/
 │   └── ...
 ├── data/
@@ -53,14 +106,14 @@ Raw-данные, нормализованные данные и generated outpu
 │   ├── processed/
 │   └── generated/
 ├── src/
-│   ├── sources/
-│   ├── storage/
-│   ├── search/
-│   └── visualization/
+│   └── knowledge_base/
 └── tests/
+    ├── fixtures/
+    ├── integration/
+    └── unit/
 ```
 
-Эта структура не является обязательной схемой для первого коммита с кодом, но задает разделение ответственности: источники импортируют, storage хранит, search индексирует, visualization и writing workflows используют уже подготовленную базу.
+`data/raw/`, `data/processed/` и `data/generated/` игнорируются git. В репозитории можно хранить только безопасные fixtures, схемы, specs и документацию.
 
 ## Документация
 
@@ -68,6 +121,7 @@ Raw-данные, нормализованные данные и generated outpu
 - [docs/architecture.md](docs/architecture.md) - целевая архитектура и ключевые сущности.
 - [docs/roadmap.md](docs/roadmap.md) - этапы развития проекта.
 - [docs/adr/README.md](docs/adr/README.md) - журнал архитектурных решений и ADR-процесс.
+- [specs/001-production-knowledge-pipeline/spec.md](specs/001-production-knowledge-pipeline/spec.md) - Spec Kit feature для ArangoDB-centered production pipeline.
 
 ## Spec-Driven Development
 
@@ -87,6 +141,8 @@ $speckit-constitution -> $speckit-specify -> $speckit-plan -> $speckit-tasks -> 
 ```
 
 Feature specs по умолчанию пишутся на русском с кратким English summary. Specs, plans и tasks являются project artifacts и не должны смешиваться с `data/raw`, `data/processed` или `data/generated`.
+
+Первый крупный feature design: [Production Knowledge Pipeline](specs/001-production-knowledge-pipeline/spec.md). Он проектирует ArangoDB как multi-model ядро для documents, graph, full-text search, vector search и hybrid retrieval.
 
 ## Architecture Decisions
 
@@ -108,9 +164,10 @@ npm run check:adr
 ## Roadmap
 
 - **v0** - стартовая документация, принципы, архитектурный контур.
-- **v1** - импорт одного источника и сохранение provenance.
-- **v2** - нормализация, поиск и базовые эмбеддинги.
-- **v3** - визуализация тем, источников и связей.
-- **v4** - writer/research workflow поверх базы знаний.
+- **v1** - production-like ArangoDB fixture pipeline с provenance, search, vector, graph и hybrid retrieval.
+- **v2** - импорт первого реального источника и нормализация.
+- **v3** - расширенный GraphRAG, embeddings и качество retrieval.
+- **v4** - визуализация тем, источников и связей.
+- **v5** - writer/research workflow поверх базы знаний.
 
 Подробнее: [docs/roadmap.md](docs/roadmap.md).

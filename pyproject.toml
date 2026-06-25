@@ -1,0 +1,29 @@
+[project]
+name = "knowledge-base"
+version = "0.1.0"
+description = "Personal knowledge-base pipeline with ArangoDB-centered retrieval."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+]
+
+[project.scripts]
+kb = "knowledge_base.cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/knowledge_base"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = [
+  "integration: tests that require a running ArangoDB service",
+]

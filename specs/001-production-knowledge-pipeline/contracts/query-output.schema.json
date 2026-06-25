@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Knowledge Retrieval Result",
+  "type": "object",
+  "required": ["query", "mode", "status", "results"],
+  "properties": {
+    "query": {
+      "type": "string"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["text", "semantic", "graph", "hybrid"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["ok", "degraded", "error"]
+    },
+    "degraded_components": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "document_key", "score", "score_components", "provenance"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": ["document", "chunk", "topic", "author", "work", "source", "item"]
+          },
+          "entity_key": {
+            "type": "string"
+          },
+          "document_key": {
+            "type": "string"
+          },
+          "chunk_key": {
+            "type": ["string", "null"]
+          },
+          "title": {
+            "type": ["string", "null"]
+          },
+          "label": {
+            "type": ["string", "null"]
+          },
+          "snippet": {
+            "type": ["string", "null"]
+          },
+          "relation": {
+            "type": ["string", "null"]
+          },
+          "score": {
+            "type": "number"
+          },
+          "score_components": {
+            "type": "object",
+            "properties": {
+              "bm25": {
+                "type": ["number", "null"]
+              },
+              "vector": {
+                "type": ["number", "null"]
+              },
+              "graph_boost": {
+                "type": ["number", "null"]
+              }
+            },
+            "additionalProperties": false
+          },
+          "provenance": {
+            "type": "object",
+            "required": ["source_key", "raw_snapshot_key", "import_run_key"],
+            "properties": {
+              "source_key": {
+                "type": "string"
+              },
+              "raw_snapshot_key": {
+                "type": "string"
+              },
+              "import_run_key": {
+                "type": "string"
+              },
+              "url": {
+                "type": ["string", "null"]
+              },
+              "captured_at": {
+                "type": ["string", "null"]
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

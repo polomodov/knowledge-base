@@ -1,0 +1,14 @@
+[arangodb]
+url = "http://127.0.0.1:8529"
+database = "knowledge_base"
+user = "root"
+password_env = "KB_ARANGO_PASSWORD"
+
+[embedding]
+provider = "fixture"
+dimension = 8
+
+[retrieval]
+text_limit = 10
+semantic_limit = 10
+hybrid_limit = 10

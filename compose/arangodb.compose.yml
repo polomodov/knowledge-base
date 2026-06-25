@@ -1,0 +1,27 @@
+services:
+  arangodb:
+    image: ${ARANGODB_IMAGE:-arangodb:3.12}
+    container_name: knowledge-base-arangodb
+    command: ["arangod", "--vector-index"]
+    restart: unless-stopped
+    environment:
+      ARANGO_ROOT_PASSWORD: ${ARANGO_ROOT_PASSWORD:-knowledge-base-dev}
+    ports:
+      - "${ARANGO_PORT:-8529}:8529"
+    volumes:
+      - arangodb-data:/var/lib/arangodb3
+      - arangodb-apps:/var/lib/arangodb3-apps
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "AUTH=$$(printf 'root:%s' \"$${ARANGO_ROOT_PASSWORD}\" | base64); wget --header \"Authorization: Basic $$AUTH\" -qO- http://127.0.0.1:8529/_api/version >/dev/null 2>&1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  arangodb-data:
+  arangodb-apps:

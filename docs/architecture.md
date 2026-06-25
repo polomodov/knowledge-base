@@ -40,6 +40,16 @@ sources -> ingest -> normalize -> store -> index/search -> visualize/write
 
 Индекс поиска должен строиться поверх `processed`, а не напрямую поверх `raw`. Эмбеддинги и RAG-контекст должны сохранять ссылки на документы и provenance, чтобы любой найденный фрагмент можно было проверить по исходному источнику.
 
+Первый production-like pipeline проектируется вокруг ArangoDB: documents/chunks, graph edges, ArangoSearch full-text и vector indexes живут в одном multi-model ядре. Это снижает количество движущихся частей в v1, но сохраняет явные границы storage/search/vector/graph, чтобы позже вынести отдельный движок при bottleneck.
+
+Текущий v1 fixture slice реализует этот контур через Python CLI `kb`:
+
+- `kb platform bootstrap` создает коллекции, edge collections, ArangoSearch View, graph definition и vector index.
+- `kb ingest fixture` загружает безопасный synthetic fixture и создает source/raw/document/chunk/topic/author/work records.
+- `kb index rebuild --target all` идемпотентно проверяет derived search/vector/graph слой.
+- `kb search text`, `kb search semantic`, `kb graph neighbors` и `kb search hybrid` возвращают результаты с provenance.
+- `kb export jsonl` пишет generated exports в gitignored data zone.
+
 ### Visualization
 
 Визуализация должна помогать исследовать связи между источниками, темами, книгами, авторами, датами и собственными текстами. Она не должна становиться источником истины: визуальные представления пересобираются из нормализованных данных.
@@ -83,3 +93,4 @@ Feature workflow строится через GitHub Spec Kit: `.specify/` хра
 - [README.md](../README.md)
 - [Roadmap](roadmap.md)
 - [ADR decision log](adr/README.md)
+- [Production Knowledge Pipeline spec](../specs/001-production-knowledge-pipeline/spec.md)

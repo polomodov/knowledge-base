@@ -13,9 +13,25 @@
 - `docs/adr/` фиксирует архитектурные решения и компромиссы.
 - GitHub Spec Kit подключен как официальный spec-driven development workflow для будущих фич.
 
-## v1 - Первый источник
+## v1 - Production knowledge pipeline
 
-Цель: реализовать импорт одного источника от raw-снимка до нормализованного документа.
+Цель: реализовать ArangoDB-centered pipeline для безопасного fixture ingest, provenance, full-text search, vector search, graph traversal и hybrid retrieval.
+
+Реализованный первый срез:
+
+- ArangoDB runtime как multi-model ядро;
+- safe fixture ingest без реальных персональных данных;
+- коллекции documents/chunks/sources/raw snapshots и edge collections;
+- ArangoSearch View для полнотекстового поиска;
+- vector index для chunk embeddings;
+- graph traversal по source/document/chunk/topic/author/work;
+- hybrid retrieval с score breakdown и provenance.
+- JSONL export в `data/generated/`;
+- unit/integration tests, включая проверку на живой ArangoDB.
+
+## v2 - Первый источник
+
+Цель: реализовать импорт одного реального источника от raw-снимка до нормализованного документа.
 
 Кандидат по умолчанию: "Книжный куб", если доступ к данным проще и важнее для первого вертикального среза. Medium можно выбрать первым, если экспорт или API окажутся надежнее.
 
@@ -27,17 +43,18 @@
 - сохранение provenance для каждого элемента;
 - базовые тесты на импорт и нормализацию.
 
-## v2 - Поиск и эмбеддинги
+## v3 - Поиск, embeddings и GraphRAG
 
 Цель: сделать базу полезной для исследования и RAG-сценариев.
 
 - полнотекстовый поиск по нормализованным документам;
 - подготовка chunks или фрагментов для retrieval;
 - эмбеддинги с привязкой к document/item и provenance;
+- graph-neighborhood boosts и GraphRAG context;
 - простой CLI или notebook для поиска по базе;
 - тесты на воспроизводимость индексации.
 
-## v3 - Визуализация
+## v4 - Визуализация
 
 Цель: увидеть связи внутри базы знаний.
 
@@ -46,7 +63,7 @@
 - временная шкала публикаций и заметок;
 - экспорт графа или простой frontend для исследования.
 
-## v4 - Writer/research workflow
+## v5 - Writer/research workflow
 
 Цель: использовать knowledge database при написании постов, исследований и книг.
 
@@ -58,4 +75,4 @@
 
 ## Текущий статус
 
-Сейчас проект находится на этапе v0. Реализованных импортов, индексов, UI или RAG-пайплайнов в репозитории пока нет.
+Сейчас завершен первый production-like fixture slice из v1. Следующий фокус - v2: выбрать первый реальный источник, описать его через Spec Kit и реализовать source adapter без попадания персональных raw-данных в git.
