@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект находится на ранней стадии, но уже содержит первый исполнимый вертикальный срез: локальный ArangoDB runtime, безопасный fixture ingest, schema/index bootstrap, full-text search, deterministic embeddings, graph traversal, hybrid retrieval и JSONL export. Реальные персональные источники пока не подключены.
+Проект находится на ранней стадии, но уже содержит исполнимый вертикальный срез: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech` и Telegram-канала "Книжный куб", schema/index bootstrap, full-text search, deterministic embeddings, graph traversal, hybrid retrieval и JSONL export.
 
 ## Зачем
 
@@ -16,8 +16,9 @@
 
 ## Планируемые источники
 
-- **"Книжный куб"** - персональный канал с книжными заметками, цитатами, размышлениями и рекомендациями.
-- **Medium** - личный блог с опубликованными текстами и связанными черновыми идеями.
+- **"Книжный куб"** - Telegram-канал с книжными заметками, цитатами, размышлениями и рекомендациями; второй реальный source adapter.
+- **tellmeabout.tech** - публичный блог на Medium/custom domain; первый реальный source adapter.
+- **Medium/export** - будущие локальные экспорты опубликованных текстов и связанных черновых идей.
 - **Другие источники** - локальные заметки, экспорт из read-it-later сервисов, документы, подборки ссылок, исследовательские архивы.
 
 Каждый источник должен сохранять provenance: откуда пришел материал, когда он был получен, какой у него исходный URL или канал, и в каком контексте он был создан.
@@ -39,6 +40,8 @@ Raw-данные, нормализованные данные и generated outpu
 - ArangoDB Compose runtime с `--vector-index`.
 - Идемпотентный bootstrap коллекций, edge collections, ArangoSearch View, graph definition и vector index.
 - Safe synthetic fixture без персональных данных.
+- Source adapter `tellmeabout-tech` для публичных постов из RSS/Atom или локального snapshot/export.
+- Source adapter `book-cube` для публичных постов Telegram-канала из `t.me/s` HTML snapshot или Telegram Desktop JSON export.
 - Ingest fixture с provenance edges: source, raw snapshot, document, chunk, topic, author, work.
 - Retrieval-команды: `kb search text`, `kb search semantic`, `kb graph neighbors`, `kb search hybrid`.
 - `kb export jsonl` для generated exports в gitignored data zone.
@@ -70,6 +73,43 @@ uv run kb search hybrid "systems thinking writing workflow"
 uv run kb export jsonl --output data/generated/exports/fixture.jsonl
 ```
 
+Прогнать первый реальный source adapter на локальном snapshot:
+
+```bash
+uv run kb ingest tellmeabout-tech --input data/raw/tellmeabout-tech/feed.xml
+uv run kb index rebuild --target all
+uv run kb search text "known phrase from the blog"
+uv run kb graph neighbors --topic product-thinking
+uv run kb search hybrid "technology writing systems"
+```
+
+Live feed можно попробовать так:
+
+```bash
+uv run kb ingest tellmeabout-tech --feed-url https://tellmeabout.tech/feed
+```
+
+Если сайт или Medium блокирует автоматический доступ, сохраните RSS/Medium export в `data/raw/tellmeabout-tech/` и используйте `--input`. Эта зона игнорируется git.
+
+Прогнать второй реальный source adapter на локальном snapshot:
+
+```bash
+uv run kb ingest book-cube --input data/raw/book-cube/channel.html
+uv run kb ingest book-cube --input data/raw/book-cube/result.json
+uv run kb index rebuild --target all
+uv run kb search text "known phrase from the channel"
+uv run kb graph neighbors --topic books
+uv run kb search hybrid "книжные заметки"
+```
+
+Live public preview можно попробовать так:
+
+```bash
+uv run kb ingest book-cube --url https://t.me/s/book_cube
+```
+
+Если Telegram блокирует или live URL таймаутится, сохраните public channel HTML snapshot или Telegram Desktop JSON export в `data/raw/book-cube/` и используйте `--input`.
+
 Проверки:
 
 ```bash
@@ -98,7 +138,9 @@ npm run check:adr
 │   ├── roadmap.md
 │   └── adr/
 ├── specs/
-│   └── 001-production-knowledge-pipeline/
+│   ├── 001-production-knowledge-pipeline/
+│   ├── 002-tellmeabout-tech-source/
+│   └── 003-book-cube-telegram-source/
 ├── scripts/
 │   └── ...
 ├── data/
@@ -122,6 +164,8 @@ npm run check:adr
 - [docs/roadmap.md](docs/roadmap.md) - этапы развития проекта.
 - [docs/adr/README.md](docs/adr/README.md) - журнал архитектурных решений и ADR-процесс.
 - [specs/001-production-knowledge-pipeline/spec.md](specs/001-production-knowledge-pipeline/spec.md) - Spec Kit feature для ArangoDB-centered production pipeline.
+- [specs/002-tellmeabout-tech-source/spec.md](specs/002-tellmeabout-tech-source/spec.md) - Spec Kit feature для первого реального источника.
+- [specs/003-book-cube-telegram-source/spec.md](specs/003-book-cube-telegram-source/spec.md) - Spec Kit feature для Telegram-канала "Книжный куб".
 
 ## Spec-Driven Development
 
@@ -144,6 +188,10 @@ Feature specs по умолчанию пишутся на русском с кр
 
 Первый крупный feature design: [Production Knowledge Pipeline](specs/001-production-knowledge-pipeline/spec.md). Он проектирует ArangoDB как multi-model ядро для documents, graph, full-text search, vector search и hybrid retrieval.
 
+Первый реальный source adapter: [Tell Me About Tech Source](specs/002-tellmeabout-tech-source/spec.md). Он импортирует публичные посты из RSS/Atom или локального snapshot, не пытаясь обходить Cloudflare/Medium protections.
+
+Второй source adapter: [Book Cube Telegram Source](specs/003-book-cube-telegram-source/spec.md). Он импортирует публичные посты из HTML snapshot `t.me/s/book_cube` или Telegram Desktop JSON export, не пытаясь обходить Telegram protections.
+
 ## Architecture Decisions
 
 Architecture Decision Records живут в [docs/adr](docs/adr). Это docs-only артефакты: они объясняют важные решения, но не являются исходными данными, обработанными данными или generated outputs.
@@ -165,7 +213,7 @@ npm run check:adr
 
 - **v0** - стартовая документация, принципы, архитектурный контур.
 - **v1** - production-like ArangoDB fixture pipeline с provenance, search, vector, graph и hybrid retrieval.
-- **v2** - импорт первого реального источника и нормализация.
+- **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб".
 - **v3** - расширенный GraphRAG, embeddings и качество retrieval.
 - **v4** - визуализация тем, источников и связей.
 - **v5** - writer/research workflow поверх базы знаний.

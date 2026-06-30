@@ -4,7 +4,7 @@ import math
 from typing import Any
 
 from knowledge_base.arango import ArangoError
-from knowledge_base.embeddings import fixture_embedding
+from knowledge_base.embeddings import hash_embedding
 from knowledge_base.repository import KnowledgeRepository
 
 
@@ -56,7 +56,7 @@ def text_search(repository: KnowledgeRepository, query: str, *, limit: int = 10)
 
 
 def semantic_search(repository: KnowledgeRepository, query: str, *, limit: int = 10, dimension: int = 8) -> dict[str, Any]:
-    query_vector = fixture_embedding(query, dimension=dimension)
+    query_vector = hash_embedding(query, dimension=dimension)
     chunks = repository.client.aql(
         """
         FOR chunk IN chunks

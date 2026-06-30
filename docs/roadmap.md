@@ -33,15 +33,22 @@
 
 Цель: реализовать импорт одного реального источника от raw-снимка до нормализованного документа.
 
-Кандидат по умолчанию: "Книжный куб", если доступ к данным проще и важнее для первого вертикального среза. Medium можно выбрать первым, если экспорт или API окажутся надежнее.
+Первые источники:
 
-Ожидаемый результат:
+- `tellmeabout.tech`, публичный блог на Medium/custom domain. Adapter работает от RSS/Atom live URL или локального snapshot/export в `data/raw/tellmeabout-tech/`.
+- "Книжный куб", Telegram-канал. Adapter работает от public `t.me/s/book_cube` HTML snapshot или Telegram Desktop JSON export в `data/raw/book-cube/`.
 
-- один source adapter;
-- raw-сохранение исходных данных;
-- минимальная нормализация текста и метаданных;
-- сохранение provenance для каждого элемента;
-- базовые тесты на импорт и нормализацию.
+Реализованный первый срез:
+
+- source adapter `tellmeabout-tech`;
+- source adapter `book-cube`;
+- raw snapshot исходного feed/export payload;
+- нормализация title/text/url/date/tags/author для блога;
+- нормализация Telegram message id/text/url/date/hashtags;
+- topics из feed categories/tags;
+- topics из Telegram hashtags;
+- provenance для source/raw/document/chunk/topic/author edges;
+- unit/integration tests на synthetic Medium-like и Telegram fixtures.
 
 ## v3 - Поиск, embeddings и GraphRAG
 
@@ -75,4 +82,4 @@
 
 ## Текущий статус
 
-Сейчас завершен первый production-like fixture slice из v1. Следующий фокус - v2: выбрать первый реальный источник, описать его через Spec Kit и реализовать source adapter без попадания персональных raw-данных в git.
+Сейчас завершены v1 fixture pipeline и два v2 source adapters: `tellmeabout.tech` и "Книжный куб". Следующий фокус - импорт реальных локальных snapshots/exports в `data/raw/` и расширение качества extraction/retrieval.

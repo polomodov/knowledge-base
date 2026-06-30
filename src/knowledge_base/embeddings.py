@@ -6,10 +6,11 @@ import re
 
 
 TOKEN_RE = re.compile(r"[a-zA-Zа-яА-Я0-9_-]+")
+HASH_EMBEDDING_MODEL = "hash-v1"
 
 
-def fixture_embedding(text: str, *, dimension: int = 8) -> list[float]:
-    """Deterministic local embedding for tests and safe fixtures.
+def hash_embedding(text: str, *, dimension: int = 8) -> list[float]:
+    """Deterministic local embedding for tests and local-only source slices.
 
     This is not a semantic model. It is intentionally small, private, and
     reproducible so the first pipeline can exercise vector plumbing without
@@ -32,6 +33,10 @@ def fixture_embedding(text: str, *, dimension: int = 8) -> list[float]:
     if norm == 0:
         return vector
     return [round(value / norm, 6) for value in vector]
+
+
+def fixture_embedding(text: str, *, dimension: int = 8) -> list[float]:
+    return hash_embedding(text, dimension=dimension)
 
 
 def validate_vector(vector: list[float], *, dimension: int = 8) -> None:

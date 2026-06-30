@@ -15,6 +15,9 @@ from knowledge_base.platform import platform_down, platform_up
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_search, text_search
 from knowledge_base.schema import bootstrap_schema, health_report
+from knowledge_base.sources.book_cube import DEFAULT_PUBLIC_URL as BOOK_CUBE_DEFAULT_URL
+from knowledge_base.sources.book_cube import ingest_book_cube
+from knowledge_base.sources.tellmeabout_tech import DEFAULT_FEED_URL, ingest_tellmeabout_tech
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -47,6 +50,14 @@ def _build_parser() -> argparse.ArgumentParser:
     ingest = subcommands.add_parser("ingest", help="Ingest data")
     ingest_sub = ingest.add_subparsers(dest="ingest_command")
     ingest_sub.add_parser("fixture", help="Load safe synthetic fixture").set_defaults(handler=_ingest_fixture)
+    tellmeabout = ingest_sub.add_parser("tellmeabout-tech", help="Load public tellmeabout.tech blog posts")
+    tellmeabout.add_argument("--input", help="Local RSS/Atom snapshot path")
+    tellmeabout.add_argument("--feed-url", default=DEFAULT_FEED_URL, help="RSS/Atom feed URL")
+    tellmeabout.set_defaults(handler=_ingest_tellmeabout_tech)
+    book_cube = ingest_sub.add_parser("book-cube", help="Load public Книжный куб Telegram channel posts")
+    book_cube.add_argument("--input", help="Local Telegram HTML/JSON snapshot path")
+    book_cube.add_argument("--url", default=BOOK_CUBE_DEFAULT_URL, help="Telegram public preview URL")
+    book_cube.set_defaults(handler=_ingest_book_cube)
 
     index = subcommands.add_parser("index", help="Manage derived indexes")
     index_sub = index.add_subparsers(dest="index_command")
@@ -121,6 +132,20 @@ def _platform_bootstrap(args: argparse.Namespace) -> int:
 def _ingest_fixture(args: argparse.Namespace) -> int:
     settings = _settings(args)
     return emit_json(ingest_fixture(_repo(args), settings))
+
+
+def _ingest_tellmeabout_tech(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    input_path = Path(args.input) if args.input else None
+    result = ingest_tellmeabout_tech(_repo(args), settings, input_path=input_path, feed_url=args.feed_url)
+    return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
+
+
+def _ingest_book_cube(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    input_path = Path(args.input) if args.input else None
+    result = ingest_book_cube(_repo(args), settings, input_path=input_path, url=args.url)
+    return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
 
 
 def _index_rebuild(args: argparse.Namespace) -> int:

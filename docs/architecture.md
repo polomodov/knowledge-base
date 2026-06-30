@@ -46,6 +46,8 @@ sources -> ingest -> normalize -> store -> index/search -> visualize/write
 
 - `kb platform bootstrap` создает коллекции, edge collections, ArangoSearch View, graph definition и vector index.
 - `kb ingest fixture` загружает безопасный synthetic fixture и создает source/raw/document/chunk/topic/author/work records.
+- `kb ingest tellmeabout-tech` загружает публичные посты из RSS/Atom или локального snapshot, создавая source/raw/document/chunk/topic/author records.
+- `kb ingest book-cube` загружает публичные посты Telegram-канала из HTML/JSON snapshot, создавая source/raw/document/chunk/topic records.
 - `kb index rebuild --target all` идемпотентно проверяет derived search/vector/graph слой.
 - `kb search text`, `kb search semantic`, `kb graph neighbors` и `kb search hybrid` возвращают результаты с provenance.
 - `kb export jsonl` пишет generated exports в gitignored data zone.
@@ -94,3 +96,5 @@ Feature workflow строится через GitHub Spec Kit: `.specify/` хра
 - [Roadmap](roadmap.md)
 - [ADR decision log](adr/README.md)
 - [Production Knowledge Pipeline spec](../specs/001-production-knowledge-pipeline/spec.md)
+- [Tell Me About Tech Source spec](../specs/002-tellmeabout-tech-source/spec.md)
+- [Book Cube Telegram Source spec](../specs/003-book-cube-telegram-source/spec.md)

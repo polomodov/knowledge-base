@@ -7,7 +7,7 @@ from typing import Any
 
 from knowledge_base.chunking import split_text
 from knowledge_base.config import REPO_ROOT, Settings
-from knowledge_base.embeddings import fixture_embedding
+from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
 from knowledge_base.ids import chunk_key, document_key, sha256_text, stable_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
@@ -124,8 +124,8 @@ def _ingest_document(
             "token_count": chunk.token_count,
             "char_start": chunk.char_start,
             "char_end": chunk.char_end,
-            "embedding": fixture_embedding(chunk.text, dimension=settings.embedding_dimension),
-            "embedding_model": "fixture-hash-v1",
+            "embedding": hash_embedding(chunk.text, dimension=settings.embedding_dimension),
+            "embedding_model": HASH_EMBEDDING_MODEL,
             "metadata": {"fixture": True},
         }
         counts["chunks"] += int(repository.upsert("chunks", chunk_doc)["created"])

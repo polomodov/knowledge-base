@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>Tell Me About Tech</title>
+    <link>https://tellmeabout.tech/</link>
+    <description>Synthetic public blog feed fixture.</description>
+    <item>
+      <title>Systems For Better Technical Writing</title>
+      <link>https://tellmeabout.tech/systems-for-better-technical-writing</link>
+      <guid isPermaLink="true">https://tellmeabout.tech/systems-for-better-technical-writing</guid>
+      <pubDate>Tue, 23 Jun 2026 10:00:00 GMT</pubDate>
+      <dc:creator>Tell Me About Tech Author</dc:creator>
+      <category>Product Thinking</category>
+      <category>Writing Systems</category>
+      <content:encoded><![CDATA[
+        <article>
+          <p>Technical writing improves when notes, decisions, and product context stay connected.</p>
+          <p>A durable knowledge base lets research become reusable material.</p>
+        </article>
+      ]]></content:encoded>
+    </item>
+    <item>
+      <title>Operational Notes For Reliable AI Tools</title>
+      <link>https://tellmeabout.tech/operational-notes-for-reliable-ai-tools</link>
+      <guid>medium-fixture-post-002</guid>
+      <pubDate>Wed, 24 Jun 2026 12:30:00 GMT</pubDate>
+      <dc:creator>Tell Me About Tech Author</dc:creator>
+      <category>AI Tools</category>
+      <category>Product Thinking</category>
+      <description><![CDATA[
+        <p>Reliable AI tools need observable pipelines, repeatable imports, and clear provenance.</p>
+      ]]></description>
+    </item>
+    <item>
+      <title>Empty Draft Should Be Skipped</title>
+      <link>https://tellmeabout.tech/empty-draft</link>
+      <guid>empty-draft</guid>
+      <description><![CDATA[<p>   </p>]]></description>
+    </item>
+  </channel>
+</rss>
