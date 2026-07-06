@@ -4,6 +4,7 @@ import json
 import re
 import urllib.error
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
@@ -24,7 +25,9 @@ DISPLAY_NAME = "Книжный куб"
 CHANNEL_URL = "https://t.me/book_cube"
 DEFAULT_PUBLIC_URL = "https://t.me/s/book_cube"
 LIVE_FETCH_HINT = "Save Telegram HTML/JSON export under data/raw/book-cube/ and rerun with --input."
+ARCHIVE_HINT = "Export Telegram channel as machine-readable JSON and rerun with --archive."
 HASHTAG_RE = re.compile(r"(?<!\w)#([\wа-яА-ЯёЁ_]+)")
+ATTACHMENT_FIELDS = ("photo", "file", "thumbnail")
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,18 @@ class SnapshotPayload:
     sha256: str
     media_type: str
     storage_kind: str
+
+
+@dataclass(frozen=True)
+class ArchivePayload:
+    kind: str
+    ref: str
+    result_json: str
+    result_sha256: str
+    manifest_sha256: str
+    snapshot: SnapshotPayload
+    root_path: Path | None = None
+    zip_members: dict[str, int] | None = None
 
 
 class LiveFetchUnavailable(RuntimeError):
@@ -51,6 +66,24 @@ class LiveFetchUnavailable(RuntimeError):
             "url": url or self.url,
             "hint": LIVE_FETCH_HINT,
             "reason": self.reason,
+        }
+
+
+class ArchiveReadError(RuntimeError):
+    def __init__(self, error: str, archive: Path, detail: str | None = None) -> None:
+        super().__init__(detail or error)
+        self.error = error
+        self.archive = archive
+        self.detail = detail or error
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "status": "error",
+            "error": self.error,
+            "source_key": SOURCE_KEY,
+            "archive": str(self.archive),
+            "hint": ARCHIVE_HINT,
+            "reason": self.detail,
         }
 
 
@@ -167,6 +200,69 @@ def ingest_book_cube(
     }
 
 
+def ingest_book_cube_archive(
+    repository: KnowledgeRepository,
+    settings: Settings,
+    *,
+    archive_path: Path,
+) -> dict[str, Any]:
+    try:
+        archive = read_archive_payload(archive_path)
+    except ArchiveReadError as error:
+        return error.to_payload()
+
+    try:
+        parsed = parse_snapshot(archive.snapshot.payload, media_type="application/json", archive=archive)
+    except (json.JSONDecodeError, TypeError, ValueError) as error:
+        return ArchiveReadError("invalid_telegram_export", archive_path, str(error)).to_payload()
+
+    bootstrap_schema(repository.client)
+    now = _now()
+    counts = _counts()
+
+    source = _source_document(now, DEFAULT_PUBLIC_URL)
+    counts["sources"] += int(repository.upsert("sources", source)["created"])
+
+    raw = _raw_snapshot(archive.snapshot, now, archive=archive)
+    counts["raw_snapshots"] += int(repository.upsert("raw_snapshots", raw)["created"])
+
+    import_run_key = stable_key(SOURCE_KEY, "archive", archive.manifest_sha256[:16], now[:10], prefix="import")
+    import_run = {
+        "_key": import_run_key,
+        "started_at": now,
+        "finished_at": None,
+        "status": "running",
+        "command": f"kb ingest book-cube-archive --archive {archive.ref}",
+        "source_key": SOURCE_KEY,
+        "input_ref": archive.ref,
+        "counts": {},
+        "error": None,
+        "metadata": {"archive": _archive_payload(archive), "skipped": parsed.skipped},
+    }
+    repository.upsert("import_runs", import_run)
+
+    for item in parsed.items:
+        counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
+
+    import_run["finished_at"] = _now()
+    import_run["status"] = "ok"
+    import_run["counts"] = counts
+    repository.upsert("import_runs", import_run)
+
+    return {
+        "status": "ok",
+        "source_key": SOURCE_KEY,
+        "import_run_key": import_run_key,
+        "archive": _archive_payload(archive),
+        "created": counts,
+        "deduplicated": {
+            "documents": max(len(parsed.items) - counts["documents"], 0),
+            "chunks": 0 if counts["chunks"] > 0 else _existing_chunk_count(repository, parsed.items),
+        },
+        "skipped": parsed.skipped,
+    }
+
+
 def read_snapshot_payload(*, input_path: Path | None, url: str) -> SnapshotPayload:
     if input_path is not None:
         payload = input_path.read_text(encoding="utf-8")
@@ -190,6 +286,128 @@ def read_snapshot_payload(*, input_path: Path | None, url: str) -> SnapshotPaylo
     )
 
 
+def read_archive_payload(path: Path) -> ArchivePayload:
+    archive_path = path.expanduser()
+    if not archive_path.exists():
+        raise ArchiveReadError("archive_not_readable", archive_path, "Archive path does not exist")
+    if archive_path.is_dir():
+        return _read_archive_directory(archive_path)
+    if archive_path.is_file() and archive_path.suffix.lower() == ".zip":
+        return _read_archive_zip(archive_path)
+    raise ArchiveReadError("archive_not_readable", archive_path, "Archive must be a directory or .zip file")
+
+
+def _read_archive_directory(path: Path) -> ArchivePayload:
+    result_path = _find_result_json_in_directory(path)
+    if result_path is None:
+        raise ArchiveReadError("result_json_not_found", path)
+    try:
+        payload = result_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ArchiveReadError("archive_not_readable", path, str(error)) from error
+
+    result_sha = sha256_text(payload)
+    snapshot = SnapshotPayload(
+        kind="directory",
+        ref=str(path),
+        payload=payload,
+        sha256=result_sha,
+        media_type="application/json",
+        storage_kind="local_file",
+    )
+    return ArchivePayload(
+        kind="directory",
+        ref=str(path),
+        result_json=str(result_path),
+        result_sha256=result_sha,
+        manifest_sha256=_directory_manifest_sha256(path, result_path, result_sha),
+        snapshot=snapshot,
+        root_path=result_path.parent,
+    )
+
+
+def _read_archive_zip(path: Path) -> ArchivePayload:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = [info for info in archive.infolist() if not info.is_dir()]
+            result_name = _find_result_json_in_zip(members)
+            if result_name is None:
+                raise ArchiveReadError("result_json_not_found", path)
+            payload = archive.read(result_name).decode("utf-8", errors="replace")
+    except ArchiveReadError:
+        raise
+    except (OSError, zipfile.BadZipFile) as error:
+        raise ArchiveReadError("archive_not_readable", path, str(error)) from error
+
+    result_sha = sha256_text(payload)
+    zip_members = {info.filename: info.file_size for info in members}
+    snapshot = SnapshotPayload(
+        kind="zip",
+        ref=str(path),
+        payload=payload,
+        sha256=result_sha,
+        media_type="application/json",
+        storage_kind="local_file",
+    )
+    return ArchivePayload(
+        kind="zip",
+        ref=str(path),
+        result_json=result_name,
+        result_sha256=result_sha,
+        manifest_sha256=_zip_manifest_sha256(members, result_name, result_sha),
+        snapshot=snapshot,
+        zip_members=zip_members,
+    )
+
+
+def _find_result_json_in_directory(path: Path) -> Path | None:
+    direct = path / "result.json"
+    if direct.is_file():
+        return direct
+    candidates = sorted(
+        (candidate for candidate in path.rglob("result.json") if candidate.is_file()),
+        key=lambda candidate: (len(candidate.relative_to(path).parts), str(candidate)),
+    )
+    return candidates[0] if candidates else None
+
+
+def _find_result_json_in_zip(members: list[zipfile.ZipInfo]) -> str | None:
+    names = [info.filename for info in members]
+    if "result.json" in names:
+        return "result.json"
+    candidates = sorted(
+        (name for name in names if Path(name).name == "result.json"),
+        key=lambda name: (len(Path(name).parts), name),
+    )
+    return candidates[0] if candidates else None
+
+
+def _directory_manifest_sha256(path: Path, result_path: Path, result_sha: str) -> str:
+    entries = []
+    for file_path in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
+        relative = file_path.relative_to(path).as_posix()
+        entries.append(
+            {
+                "path": relative,
+                "size_bytes": file_path.stat().st_size,
+                "sha256": result_sha if file_path == result_path else None,
+            },
+        )
+    return sha256_text(json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
+def _zip_manifest_sha256(members: list[zipfile.ZipInfo], result_name: str, result_sha: str) -> str:
+    entries = [
+        {
+            "path": info.filename,
+            "size_bytes": info.file_size,
+            "sha256": result_sha if info.filename == result_name else None,
+        }
+        for info in sorted(members, key=lambda item: item.filename)
+    ]
+    return sha256_text(json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+
+
 def fetch_snapshot_payload(url: str, *, timeout_seconds: float = 15.0) -> str:
     request = urllib.request.Request(url, method="GET")
     request.add_header("Accept", "text/html,application/json;q=0.9,*/*;q=0.8")
@@ -207,9 +425,9 @@ def fetch_snapshot_payload(url: str, *, timeout_seconds: float = 15.0) -> str:
         raise LiveFetchUnavailable(url, str(error)) from error
 
 
-def parse_snapshot(payload: str, *, media_type: str) -> ParsedSourceFeed:
+def parse_snapshot(payload: str, *, media_type: str, archive: ArchivePayload | None = None) -> ParsedSourceFeed:
     if media_type == "application/json" or payload.lstrip().startswith("{"):
-        return _parse_json_export(payload)
+        return _parse_json_export(payload, archive=archive)
     return _parse_public_html(payload)
 
 
@@ -281,7 +499,7 @@ def _parse_public_html(payload: str) -> ParsedSourceFeed:
     )
 
 
-def _parse_json_export(payload: str) -> ParsedSourceFeed:
+def _parse_json_export(payload: str, *, archive: ArchivePayload | None = None) -> ParsedSourceFeed:
     data = json.loads(payload)
     items: list[NormalizedSourceItem] = []
     skipped: list[dict[str, str]] = []
@@ -297,6 +515,14 @@ def _parse_json_export(payload: str) -> ParsedSourceFeed:
             continue
         tags = _hashtags(text)
         canonical_id = canonical_id_from_post(None, message_id)
+        attachments = collect_attachment_refs(message, archive=archive)
+        metadata = {
+            "message_id": message_id,
+            "snapshot_type": "telegram_json",
+            "attachments": attachments,
+        }
+        if archive is not None:
+            metadata["archive"] = _archive_payload(archive)
         items.append(
             NormalizedSourceItem(
                 canonical_id=canonical_id,
@@ -308,7 +534,7 @@ def _parse_json_export(payload: str) -> ParsedSourceFeed:
                 language="unknown",
                 author=None,
                 tags=tags,
-                metadata={"message_id": message_id, "snapshot_type": "telegram_json"},
+                metadata=metadata,
             ),
         )
     return ParsedSourceFeed(
@@ -321,14 +547,97 @@ def _parse_json_export(payload: str) -> ParsedSourceFeed:
 
 
 def _json_message_text(message: dict[str, Any]) -> str:
-    if "text_entities" in message:
-        parts = [entity.get("text", "") if isinstance(entity, dict) else str(entity) for entity in message["text_entities"]]
+    body = _rich_text_value(message.get("text_entities") if "text_entities" in message else message.get("text", ""))
+    caption = _rich_text_value(
+        message.get("caption_entities") if "caption_entities" in message else message.get("caption", ""),
+    )
+    return _clean_text(" ".join(part for part in (body, caption) if part))
+
+
+def _rich_text_value(value: Any) -> str:
+    if isinstance(value, list):
+        parts = [part.get("text", "") if isinstance(part, dict) else str(part) for part in value]
         return _clean_text("".join(parts))
-    text = message.get("text", "")
-    if isinstance(text, list):
-        parts = [part.get("text", "") if isinstance(part, dict) else str(part) for part in text]
-        return _clean_text("".join(parts))
-    return _clean_text(str(text))
+    return _clean_text(str(value or ""))
+
+
+def collect_attachment_refs(message: dict[str, Any], *, archive: ArchivePayload | None) -> list[dict[str, Any]]:
+    refs: list[dict[str, Any]] = []
+    for field in ATTACHMENT_FIELDS:
+        relative_path = _attachment_relative_path(message.get(field))
+        if relative_path is None:
+            continue
+        mime_type = str(message.get("mime_type") or "").strip() or None
+        media_type = str(message.get("media_type") or "").strip() or _guess_media_type(field, relative_path, mime_type)
+        local_path = _attachment_local_path(relative_path, archive)
+        refs.append(
+            {
+                "field": field,
+                "relative_path": relative_path,
+                "local_path": local_path,
+                "media_type": media_type,
+                "mime_type": mime_type,
+                "size_bytes": _attachment_size(relative_path, field, message, archive),
+            },
+        )
+    return refs
+
+
+def _attachment_relative_path(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    if not stripped or stripped.startswith("("):
+        return None
+    return stripped.replace("\\", "/")
+
+
+def _attachment_local_path(relative_path: str, archive: ArchivePayload | None) -> str | None:
+    if archive is None or archive.root_path is None:
+        return None
+    return str(archive.root_path / relative_path)
+
+
+def _attachment_size(
+    relative_path: str,
+    field: str,
+    message: dict[str, Any],
+    archive: ArchivePayload | None,
+) -> int | None:
+    if archive is not None and archive.root_path is not None:
+        candidate = archive.root_path / relative_path
+        if candidate.is_file():
+            return candidate.stat().st_size
+    if archive is not None and archive.zip_members is not None:
+        prefixed = _zip_prefixed_path(relative_path, archive)
+        for candidate in (relative_path, prefixed):
+            if candidate and candidate in archive.zip_members:
+                return archive.zip_members[candidate]
+    for size_key in (f"{field}_file_size", "file_size", "size"):
+        value = message.get(size_key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _zip_prefixed_path(relative_path: str, archive: ArchivePayload) -> str | None:
+    result_parent = Path(archive.result_json).parent
+    if str(result_parent) == ".":
+        return None
+    return (result_parent / relative_path).as_posix()
+
+
+def _guess_media_type(field: str, relative_path: str, mime_type: str | None) -> str:
+    if mime_type:
+        return mime_type.split("/", 1)[0]
+    suffix = Path(relative_path).suffix.lower()
+    if field == "photo" or suffix in {".jpg", ".jpeg", ".png", ".webp", ".gif"}:
+        return "photo"
+    if suffix in {".mp4", ".mov", ".m4v", ".webm"}:
+        return "video_file"
+    if suffix in {".mp3", ".m4a", ".ogg", ".wav"}:
+        return "audio_file"
+    return "file"
 
 
 def _ingest_item(
@@ -441,7 +750,15 @@ def _upsert_chunks(
                     "char_end": chunk.char_end,
                     "embedding": hash_embedding(chunk.text, dimension=settings.embedding_dimension),
                     "embedding_model": HASH_EMBEDDING_MODEL,
-                    "metadata": {"source_key": SOURCE_KEY, "tags": item.tags},
+                    "metadata": {
+                        "source_key": SOURCE_KEY,
+                        "tags": item.tags,
+                        "raw_snapshot_key": raw["_key"],
+                        "import_run_key": import_run_key,
+                        "message_id": item.metadata.get("message_id"),
+                        "archive": item.metadata.get("archive"),
+                        "attachments": item.metadata.get("attachments", []),
+                    },
                 },
             )["created"],
         )
@@ -505,7 +822,13 @@ def _source_document(now: str, url: str) -> dict[str, Any]:
     }
 
 
-def _raw_snapshot(snapshot: SnapshotPayload, now: str) -> dict[str, Any]:
+def _raw_snapshot(snapshot: SnapshotPayload, now: str, *, archive: ArchivePayload | None = None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "input_kind": snapshot.kind,
+        "safe_fixture": snapshot.ref.startswith("tests/fixtures/"),
+    }
+    if archive is not None:
+        metadata["archive"] = _archive_payload(archive)
     return {
         "_key": stable_key(SOURCE_KEY, snapshot.sha256, prefix="raw"),
         "source_key": SOURCE_KEY,
@@ -516,27 +839,42 @@ def _raw_snapshot(snapshot: SnapshotPayload, now: str) -> dict[str, Any]:
         "storage_uri": snapshot.ref,
         "captured_at": now,
         "payload": snapshot.payload,
-        "metadata": {"input_kind": snapshot.kind, "safe_fixture": snapshot.ref.startswith("tests/fixtures/")},
+        "metadata": metadata,
     }
 
 
 def _provenance(item: NormalizedSourceItem, raw: dict[str, Any]) -> dict[str, Any]:
+    telegram_message = {
+        "canonical_id": item.canonical_id,
+        "title": item.title,
+        "published_at": item.published_at,
+        "message_id": item.metadata.get("message_id"),
+    }
+    if "archive" in item.metadata:
+        telegram_message["archive"] = item.metadata["archive"]
+    if item.metadata.get("attachments"):
+        telegram_message["attachments"] = item.metadata["attachments"]
     return {
         "url": item.url,
         "guid": item.guid,
         "raw_snapshot_key": raw["_key"],
         "source_key": SOURCE_KEY,
-        "telegram_message": {
-            "canonical_id": item.canonical_id,
-            "title": item.title,
-            "published_at": item.published_at,
-            "message_id": item.metadata.get("message_id"),
-        },
+        "telegram_message": telegram_message,
     }
 
 
 def _input_payload(snapshot: SnapshotPayload) -> dict[str, str]:
     return {"kind": snapshot.kind, "ref": snapshot.ref, "sha256": snapshot.sha256}
+
+
+def _archive_payload(archive: ArchivePayload) -> dict[str, str]:
+    return {
+        "kind": archive.kind,
+        "ref": archive.ref,
+        "result_json": archive.result_json,
+        "result_sha256": archive.result_sha256,
+        "manifest_sha256": archive.manifest_sha256,
+    }
 
 
 def _command(snapshot: SnapshotPayload, url: str) -> str:

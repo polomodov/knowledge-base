@@ -16,7 +16,7 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_search, text_search
 from knowledge_base.schema import bootstrap_schema, health_report
 from knowledge_base.sources.book_cube import DEFAULT_PUBLIC_URL as BOOK_CUBE_DEFAULT_URL
-from knowledge_base.sources.book_cube import ingest_book_cube
+from knowledge_base.sources.book_cube import ingest_book_cube, ingest_book_cube_archive
 from knowledge_base.sources.tellmeabout_tech import DEFAULT_FEED_URL, ingest_tellmeabout_tech
 
 
@@ -58,6 +58,9 @@ def _build_parser() -> argparse.ArgumentParser:
     book_cube.add_argument("--input", help="Local Telegram HTML/JSON snapshot path")
     book_cube.add_argument("--url", default=BOOK_CUBE_DEFAULT_URL, help="Telegram public preview URL")
     book_cube.set_defaults(handler=_ingest_book_cube)
+    book_cube_archive = ingest_sub.add_parser("book-cube-archive", help="Load Книжный куб owner archive")
+    book_cube_archive.add_argument("--archive", required=True, help="Telegram Desktop JSON export directory or .zip")
+    book_cube_archive.set_defaults(handler=_ingest_book_cube_archive)
 
     index = subcommands.add_parser("index", help="Manage derived indexes")
     index_sub = index.add_subparsers(dest="index_command")
@@ -145,6 +148,12 @@ def _ingest_book_cube(args: argparse.Namespace) -> int:
     settings = _settings(args)
     input_path = Path(args.input) if args.input else None
     result = ingest_book_cube(_repo(args), settings, input_path=input_path, url=args.url)
+    return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
+
+
+def _ingest_book_cube_archive(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    result = ingest_book_cube_archive(_repo(args), settings, archive_path=Path(args.archive))
     return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
 
 
