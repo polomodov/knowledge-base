@@ -8,7 +8,7 @@
 
 **Input**: User description: "Add second data source: Telegram channel 'Книжный куб' (https://t.me/book_cube)."
 
-**EN summary**: Add a Telegram channel source adapter for public `Книжный куб` posts from `t.me/s/book_cube` HTML snapshots or Telegram Desktop JSON exports, preserving provenance and integrating with the existing ArangoDB retrieval pipeline.
+**EN summary**: Add a Telegram channel source adapter for public `Книжный куб` posts from `t.me/s/book_cube` HTML snapshots or single Telegram Desktop JSON snapshots, preserving provenance and integrating with the existing ArangoDB retrieval pipeline. Full owner archive import is handled separately in [spec 004](../004-book-cube-owner-archive-import/spec.md).
 
 ## User Scenarios & Testing
 
@@ -22,7 +22,7 @@
 
 1. **Given** valid Telegram public channel HTML snapshot, **When** ingest runs, **Then** valid text messages become documents/chunks.
 2. **Given** the same snapshot is ingested twice, **When** ingest runs again, **Then** canonical documents and chunks are not duplicated.
-3. **Given** Telegram Desktop JSON export, **When** ingest runs, **Then** text messages are parsed with the same normalized contract.
+3. **Given** a single Telegram Desktop JSON snapshot, **When** ingest runs, **Then** text messages are parsed with the same normalized contract.
 
 ### User Story 2 - Live Public Preview With Safe Fallback (Priority: P1)
 
@@ -40,7 +40,7 @@
 
 - **FR-001**: System MUST create source `book-cube` with type `telegram_channel`.
 - **FR-002**: System MUST parse Telegram public channel HTML snapshots from `t.me/s/book_cube`.
-- **FR-003**: System MUST parse Telegram Desktop JSON export snapshots with `messages`.
+- **FR-003**: System MUST parse single Telegram Desktop JSON export snapshots with `messages`.
 - **FR-004**: System MUST normalize post text, URLs, message ids, publication timestamps and hashtags.
 - **FR-005**: System MUST derive deterministic canonical ids from Telegram message ids or `data-post`.
 - **FR-006**: System MUST map hashtags to `topics`.
@@ -69,5 +69,6 @@
 
 - First source scope is public channel posts only.
 - Canonical input defaults to local HTML/JSON snapshot fallback.
+- Full owner archive directory/zip import is out of scope here and covered by [Book Cube Owner Archive Import](../004-book-cube-owner-archive-import/spec.md).
 - Hashtags are the only automatic topic extraction in this slice.
 - No attempt is made to bypass Telegram anti-bot, auth or regional restrictions.

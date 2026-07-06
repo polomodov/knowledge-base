@@ -14,7 +14,7 @@ uv run kb platform health
 uv run kb ingest book-cube --url https://t.me/s/book_cube
 ```
 
-If Telegram blocks or times out, save a public channel HTML snapshot or Telegram Desktop JSON export under `data/raw/book-cube/`.
+If Telegram blocks or times out, save a public channel HTML snapshot or single Telegram Desktop JSON snapshot under `data/raw/book-cube/`.
 
 ## Ingest Local Snapshot
 
@@ -27,6 +27,12 @@ JSON export is also supported:
 
 ```bash
 uv run kb ingest book-cube --input data/raw/book-cube/result.json
+```
+
+For a full owner Telegram Desktop archive directory or `.zip`, use [Book Cube Owner Archive Import](../004-book-cube-owner-archive-import/spec.md):
+
+```bash
+uv run kb ingest book-cube-archive --archive data/raw/book-cube/export
 ```
 
 ## Query

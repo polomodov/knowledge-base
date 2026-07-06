@@ -4,7 +4,7 @@
 
 ## Summary
 
-Add a reproducible source adapter for Telegram channel `Книжный куб`. The adapter accepts public `t.me/s/book_cube` HTML snapshots, Telegram Desktop JSON exports, or a live public preview URL, normalizes text messages into the existing ArangoDB data model, and reuses current search/vector/graph retrieval.
+Add a reproducible source adapter for Telegram channel `Книжный куб`. The adapter accepts public `t.me/s/book_cube` HTML snapshots, single Telegram Desktop JSON snapshots, or a live public preview URL, normalizes text messages into the existing ArangoDB data model, and reuses current search/vector/graph retrieval. Full owner archive directory/zip import is covered by [spec 004](../004-book-cube-owner-archive-import/spec.md).
 
 ## Technical Context
 
@@ -22,7 +22,7 @@ Add a reproducible source adapter for Telegram channel `Книжный куб`. 
 
 - Add source adapter `knowledge_base.sources.book_cube`.
 - Parse Telegram public HTML with `html.parser`, using `data-post`, message text blocks, message date links and `<time datetime>`.
-- Parse Telegram Desktop JSON exports by reading `messages`, extracting text/text_entities and hashtags.
+- Parse single Telegram Desktop JSON snapshots by reading `messages`, extracting text/text_entities and hashtags.
 - Persist payload as one raw snapshot and valid messages as documents/chunks/topics/edges.
 - Use deterministic `hash-v1` embeddings.
 - Add CLI command `kb ingest book-cube` with `--input` and `--url`.

@@ -36,15 +36,17 @@
 Первые источники:
 
 - `tellmeabout.tech`, публичный блог на Medium/custom domain. Adapter работает от RSS/Atom live URL или локального snapshot/export в `data/raw/tellmeabout-tech/`.
-- "Книжный куб", Telegram-канал. Adapter работает от public `t.me/s/book_cube` HTML snapshot или Telegram Desktop JSON export в `data/raw/book-cube/`.
+- "Книжный куб", Telegram-канал. Adapter работает от public `t.me/s/book_cube` HTML snapshot, одиночного Telegram Desktop JSON export или полного владельческого Telegram Desktop JSON archive directory/`.zip` в `data/raw/book-cube/`.
 
 Реализованный первый срез:
 
 - source adapter `tellmeabout-tech`;
 - source adapter `book-cube`;
+- owner archive adapter `book-cube-archive`;
 - raw snapshot исходного feed/export payload;
 - нормализация title/text/url/date/tags/author для блога;
 - нормализация Telegram message id/text/url/date/hashtags;
+- нормализация captions и attachment references для полного Telegram archive import без загрузки media binaries в базу или git;
 - topics из feed categories/tags;
 - topics из Telegram hashtags;
 - provenance для source/raw/document/chunk/topic/author edges;
@@ -82,4 +84,4 @@
 
 ## Текущий статус
 
-Сейчас завершены v1 fixture pipeline и два v2 source adapters: `tellmeabout.tech` и "Книжный куб". Следующий фокус - импорт реальных локальных snapshots/exports в `data/raw/` и расширение качества extraction/retrieval.
+Сейчас завершены v1 fixture pipeline и v2 source adapters: `tellmeabout.tech`, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import. Следующий фокус - прогон реальных локальных archives/snapshots из `data/raw/` и расширение качества extraction/retrieval.

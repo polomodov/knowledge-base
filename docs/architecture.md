@@ -48,6 +48,7 @@ sources -> ingest -> normalize -> store -> index/search -> visualize/write
 - `kb ingest fixture` загружает безопасный synthetic fixture и создает source/raw/document/chunk/topic/author/work records.
 - `kb ingest tellmeabout-tech` загружает публичные посты из RSS/Atom или локального snapshot, создавая source/raw/document/chunk/topic/author records.
 - `kb ingest book-cube` загружает публичные посты Telegram-канала из HTML/JSON snapshot, создавая source/raw/document/chunk/topic records.
+- `kb ingest book-cube-archive` загружает полный владельческий Telegram Desktop JSON archive из directory или `.zip`, создавая documents/chunks/topics и сохраняя media/file attachments только как local raw references.
 - `kb index rebuild --target all` идемпотентно проверяет derived search/vector/graph слой.
 - `kb search text`, `kb search semantic`, `kb graph neighbors` и `kb search hybrid` возвращают результаты с provenance.
 - `kb export jsonl` пишет generated exports в gitignored data zone.
@@ -98,3 +99,4 @@ Feature workflow строится через GitHub Spec Kit: `.specify/` хра
 - [Production Knowledge Pipeline spec](../specs/001-production-knowledge-pipeline/spec.md)
 - [Tell Me About Tech Source spec](../specs/002-tellmeabout-tech-source/spec.md)
 - [Book Cube Telegram Source spec](../specs/003-book-cube-telegram-source/spec.md)
+- [Book Cube Owner Archive Import spec](../specs/004-book-cube-owner-archive-import/spec.md)
