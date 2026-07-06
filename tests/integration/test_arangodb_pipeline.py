@@ -29,7 +29,7 @@ def test_fixture_pipeline_end_to_end() -> None:
     dedupe_result = ingest_fixture(repository, settings)
     index_result = rebuild_indexes(repository, target="all")
     text = text_search(repository, "systems thinking")
-    no_match = text_search(repository, "nonexistent ultramarine fixture query")
+    no_match = text_search(repository, "zzzxqvnomatch928371")
     semantic = semantic_search(repository, "ideas across books", dimension=settings.embedding_dimension)
     topic_graph = graph_neighbors(repository, topic="systems-thinking")
     author_graph = graph_neighbors(repository, author="fixture-author")

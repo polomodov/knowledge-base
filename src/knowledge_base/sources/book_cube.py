@@ -457,7 +457,10 @@ def title_from_text(text: str, *, max_length: int = 80) -> str:
 
 
 def topic_key(label: str) -> str:
-    slug = re.sub(r"[^a-zA-Zа-яА-ЯёЁ0-9_-]+", "-", label.lstrip("#").strip().lower())
+    normalized = label.lstrip("#").strip().lower()
+    if not normalized.isascii():
+        return stable_key(normalized, prefix="topic")
+    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", normalized)
     slug = re.sub(r"-{2,}", "-", slug).strip("-_")
     return slug or "topic"
 
