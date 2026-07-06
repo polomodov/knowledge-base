@@ -1,0 +1,74 @@
+{
+  "name": "Книжный куб",
+  "type": "public_channel",
+  "id": 654321,
+  "messages": [
+    {
+      "id": 301,
+      "type": "message",
+      "date": "2026-06-25T10:00:00",
+      "text": [
+        "Архивная заметка про владельческий экспорт канала. ",
+        {
+          "type": "hashtag",
+          "text": "#archive"
+        },
+        " ",
+        {
+          "type": "hashtag",
+          "text": "#books"
+        }
+      ],
+      "photo": "photos/photo_301.jpg",
+      "media_type": "photo"
+    },
+    {
+      "id": 302,
+      "type": "message",
+      "date": "2026-06-26T12:00:00",
+      "text": "",
+      "caption": [
+        "Caption к файлу с книжной подборкой. ",
+        {
+          "type": "hashtag",
+          "text": "#reading"
+        }
+      ],
+      "file": "files/reading-list.pdf",
+      "mime_type": "application/pdf",
+      "media_type": "file"
+    },
+    {
+      "id": 303,
+      "type": "message",
+      "date": "2026-06-27T09:00:00",
+      "photo": "photos/photo_303.jpg",
+      "media_type": "photo"
+    },
+    {
+      "id": 304,
+      "type": "service",
+      "date": "2026-06-27T09:05:00",
+      "text": "Channel title changed"
+    },
+    {
+      "id": 305,
+      "type": "message",
+      "date": "2026-06-28T13:00:00",
+      "text_entities": [
+        {
+          "type": "plain",
+          "text": "Карточка из архива с сущностями текста. "
+        },
+        {
+          "type": "hashtag",
+          "text": "#notes"
+        }
+      ],
+      "thumbnail": "video_files/thumb_305.jpg",
+      "file": "video_files/video_305.mp4",
+      "mime_type": "video/mp4",
+      "media_type": "video_file"
+    }
+  ]
+}
