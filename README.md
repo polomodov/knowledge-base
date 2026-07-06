@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект находится на ранней стадии, но уже содержит исполнимый вертикальный срез: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech` и Telegram-канала "Книжный куб", включая владельческий Telegram Desktop archive import, schema/index bootstrap, full-text search, deterministic embeddings, graph traversal, hybrid retrieval и JSONL export.
+Проект находится на ранней стадии, но уже содержит исполнимый вертикальный срез: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб", включая владельческий Telegram Desktop archive import, schema/index bootstrap, full-text search, deterministic embeddings, graph traversal, hybrid retrieval и JSONL export.
 
 ## Зачем
 
@@ -18,7 +18,7 @@
 
 - **"Книжный куб"** - Telegram-канал с книжными заметками, цитатами, размышлениями и рекомендациями; поддерживает public snapshots и полный владельческий Telegram Desktop JSON archive.
 - **tellmeabout.tech** - публичный блог на Medium/custom domain; первый реальный source adapter.
-- **Medium/export** - будущие локальные экспорты опубликованных текстов и связанных черновых идей.
+- **Medium/export** - локальные HTML-экспорты собственных Medium-статей из account export; v1 импортирует опубликованные `posts/*.html`, drafts остаются raw-only по умолчанию.
 - **Другие источники** - локальные заметки, экспорт из read-it-later сервисов, документы, подборки ссылок, исследовательские архивы.
 
 Каждый источник должен сохранять provenance: откуда пришел материал, когда он был получен, какой у него исходный URL или канал, и в каком контексте он был создан.
@@ -41,6 +41,7 @@ Raw-данные, нормализованные данные и generated outpu
 - Идемпотентный bootstrap коллекций, edge collections, ArangoSearch View, graph definition и vector index.
 - Safe synthetic fixture без персональных данных.
 - Source adapter `tellmeabout-tech` для публичных постов из RSS/Atom или локального snapshot/export.
+- Source adapter `medium-export` для локального Medium account export directory или `.zip`.
 - Source adapter `book-cube` для публичных постов Telegram-канала из `t.me/s` HTML snapshot или одиночного Telegram Desktop JSON export.
 - Source adapter `book-cube-archive` для полного владельческого Telegram Desktop JSON archive из directory или `.zip` с `result.json`; media binaries остаются локальными raw references.
 - Ingest fixture с provenance edges: source, raw snapshot, document, chunk, topic, author, work.
@@ -91,6 +92,19 @@ uv run kb ingest tellmeabout-tech --feed-url https://tellmeabout.tech/feed
 ```
 
 Если сайт или Medium блокирует автоматический доступ, сохраните RSS/Medium export в `data/raw/tellmeabout-tech/` и используйте `--input`. Эта зона игнорируется git.
+
+Прогнать импорт собственного Medium account export:
+
+```bash
+uv run kb ingest medium-export --archive data/raw/medium/apolomodov/medium-export-2026-06-06
+uv run kb ingest medium-export --archive data/raw/medium/apolomodov/medium-export.zip
+uv run kb index rebuild --target all
+uv run kb search text "known phrase from Medium" --source medium-export
+uv run kb graph neighbors --author alexander-polomodov --source medium-export --documents-only
+uv run kb search hybrid "architecture writing research" --source medium-export
+```
+
+Medium export должен оставаться в `data/raw/medium/`, который игнорируется git. Адаптер v1 нормализует только опубликованные `posts/*.html`; `profile`, `sessions`, `ips`, `notes`, `bookmarks`, `claps`, following lists и drafts по умолчанию остаются только raw provenance. Если нужно явно импортировать черновики, используйте `--include-drafts`.
 
 Прогнать второй реальный source adapter на локальном snapshot:
 
@@ -155,7 +169,8 @@ npm run check:adr
 │   ├── 001-production-knowledge-pipeline/
 │   ├── 002-tellmeabout-tech-source/
 │   ├── 003-book-cube-telegram-source/
-│   └── 004-book-cube-owner-archive-import/
+│   ├── 004-book-cube-owner-archive-import/
+│   └── 005-medium-export-source/
 ├── scripts/
 │   └── ...
 ├── data/
@@ -182,6 +197,7 @@ npm run check:adr
 - [specs/002-tellmeabout-tech-source/spec.md](specs/002-tellmeabout-tech-source/spec.md) - Spec Kit feature для первого реального источника.
 - [specs/003-book-cube-telegram-source/spec.md](specs/003-book-cube-telegram-source/spec.md) - Spec Kit feature для Telegram-канала "Книжный куб".
 - [specs/004-book-cube-owner-archive-import/spec.md](specs/004-book-cube-owner-archive-import/spec.md) - Spec Kit feature для полного владельческого Telegram archive import.
+- [specs/005-medium-export-source/spec.md](specs/005-medium-export-source/spec.md) - Spec Kit feature для Medium account export import.
 
 ## Spec-Driven Development
 
@@ -209,6 +225,8 @@ Feature specs по умолчанию пишутся на русском с кр
 Второй source adapter: [Book Cube Telegram Source](specs/003-book-cube-telegram-source/spec.md). Он импортирует публичные посты из HTML snapshot `t.me/s/book_cube` или одиночного Telegram Desktop JSON export, не пытаясь обходить Telegram protections.
 
 Расширение второго source adapter: [Book Cube Owner Archive Import](specs/004-book-cube-owner-archive-import/spec.md). Оно импортирует полный владельческий Telegram Desktop JSON archive из directory или `.zip`, сохраняет attachment references как metadata и не коммитит реальные raw/media данные.
+
+Третий реальный source adapter: [Medium Export Source](specs/005-medium-export-source/spec.md). Он импортирует локальный Medium account export directory или `.zip`, строит raw manifest snapshot и нормализует опубликованные `posts/*.html` с Medium post id, canonical URL, author, dates and provenance.
 
 ## Architecture Decisions
 

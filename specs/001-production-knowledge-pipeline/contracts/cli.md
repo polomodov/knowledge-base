@@ -91,13 +91,31 @@ Expected output:
 
 Returns BM25-ranked lexical matches.
 
+Optional source filter:
+
+```bash
+kb search text "query" --source medium-export
+```
+
 ### `kb search semantic "query"`
 
 Returns vector nearest-neighbor matches.
 
+Optional source filter:
+
+```bash
+kb search semantic "query" --source medium-export
+```
+
 ### `kb search hybrid "query"`
 
 Returns merged lexical, vector and graph-neighborhood results.
+
+Optional source filter:
+
+```bash
+kb search hybrid "query" --source medium-export
+```
 
 ### `kb graph neighbors --topic topic-key`
 
@@ -111,6 +129,12 @@ kb graph neighbors --author fixture-author
 kb graph neighbors --work fixture-work-knowledge-graphs
 kb graph neighbors --document doc-key
 kb graph neighbors --chunk chunk-key
+```
+
+Optional source filter and distinct document mode:
+
+```bash
+kb graph neighbors --author fixture-author --source medium-export --documents-only
 ```
 
 ## Export

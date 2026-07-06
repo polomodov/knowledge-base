@@ -17,6 +17,7 @@ from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_se
 from knowledge_base.schema import bootstrap_schema, health_report
 from knowledge_base.sources.book_cube import DEFAULT_PUBLIC_URL as BOOK_CUBE_DEFAULT_URL
 from knowledge_base.sources.book_cube import ingest_book_cube, ingest_book_cube_archive
+from knowledge_base.sources.medium_export import ingest_medium_export
 from knowledge_base.sources.tellmeabout_tech import DEFAULT_FEED_URL, ingest_tellmeabout_tech
 
 
@@ -61,6 +62,10 @@ def _build_parser() -> argparse.ArgumentParser:
     book_cube_archive = ingest_sub.add_parser("book-cube-archive", help="Load Книжный куб owner archive")
     book_cube_archive.add_argument("--archive", required=True, help="Telegram Desktop JSON export directory or .zip")
     book_cube_archive.set_defaults(handler=_ingest_book_cube_archive)
+    medium_export = ingest_sub.add_parser("medium-export", help="Load Medium account export posts")
+    medium_export.add_argument("--archive", required=True, help="Medium export directory or .zip")
+    medium_export.add_argument("--include-drafts", action="store_true", help="Import draft posts as draft documents")
+    medium_export.set_defaults(handler=_ingest_medium_export)
 
     index = subcommands.add_parser("index", help="Manage derived indexes")
     index_sub = index.add_subparsers(dest="index_command")
@@ -73,14 +78,17 @@ def _build_parser() -> argparse.ArgumentParser:
     text = search_sub.add_parser("text", help="Run full-text search")
     text.add_argument("query")
     text.add_argument("--limit", type=int, default=10)
+    text.add_argument("--source", help="Optional exact source_key filter")
     text.set_defaults(handler=_search_text)
     semantic = search_sub.add_parser("semantic", help="Run semantic search")
     semantic.add_argument("query")
     semantic.add_argument("--limit", type=int, default=10)
+    semantic.add_argument("--source", help="Optional exact source_key filter")
     semantic.set_defaults(handler=_search_semantic)
     hybrid = search_sub.add_parser("hybrid", help="Run hybrid search")
     hybrid.add_argument("query")
     hybrid.add_argument("--limit", type=int, default=10)
+    hybrid.add_argument("--source", help="Optional exact source_key filter")
     hybrid.set_defaults(handler=_search_hybrid)
 
     graph = subcommands.add_parser("graph", help="Run graph queries")
@@ -93,6 +101,8 @@ def _build_parser() -> argparse.ArgumentParser:
     start.add_argument("--document")
     start.add_argument("--chunk")
     neighbors.add_argument("--limit", type=int, default=10)
+    neighbors.add_argument("--source", help="Optional exact source_key filter")
+    neighbors.add_argument("--documents-only", action="store_true", help="Return distinct document results only")
     neighbors.set_defaults(handler=_graph_neighbors)
 
     export = subcommands.add_parser("export", help="Export data")
@@ -157,22 +167,49 @@ def _ingest_book_cube_archive(args: argparse.Namespace) -> int:
     return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
 
 
+def _ingest_medium_export(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    result = ingest_medium_export(
+        _repo(args),
+        settings,
+        archive_path=Path(args.archive),
+        include_drafts=args.include_drafts,
+    )
+    return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
+
+
 def _index_rebuild(args: argparse.Namespace) -> int:
     return emit_json(rebuild_indexes(_repo(args), target=args.target))
 
 
 def _search_text(args: argparse.Namespace) -> int:
-    return emit_json(text_search(_repo(args), args.query, limit=args.limit))
+    return emit_json(text_search(_repo(args), args.query, limit=args.limit, source_key=args.source))
 
 
 def _search_semantic(args: argparse.Namespace) -> int:
     settings = _settings(args)
-    return emit_json(semantic_search(_repo(args), args.query, limit=args.limit, dimension=settings.embedding_dimension))
+    return emit_json(
+        semantic_search(
+            _repo(args),
+            args.query,
+            limit=args.limit,
+            dimension=settings.embedding_dimension,
+            source_key=args.source,
+        ),
+    )
 
 
 def _search_hybrid(args: argparse.Namespace) -> int:
     settings = _settings(args)
-    return emit_json(hybrid_search(_repo(args), args.query, limit=args.limit, dimension=settings.embedding_dimension))
+    return emit_json(
+        hybrid_search(
+            _repo(args),
+            args.query,
+            limit=args.limit,
+            dimension=settings.embedding_dimension,
+            source_key=args.source,
+        ),
+    )
 
 
 def _graph_neighbors(args: argparse.Namespace) -> int:
@@ -185,6 +222,8 @@ def _graph_neighbors(args: argparse.Namespace) -> int:
             document=args.document,
             chunk=args.chunk,
             limit=args.limit,
+            source_key=args.source,
+            documents_only=args.documents_only,
         ),
     )
 

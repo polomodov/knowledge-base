@@ -36,21 +36,25 @@
 Первые источники:
 
 - `tellmeabout.tech`, публичный блог на Medium/custom domain. Adapter работает от RSS/Atom live URL или локального snapshot/export в `data/raw/tellmeabout-tech/`.
+- Medium account export. Adapter работает от локального HTML export directory или `.zip` в `data/raw/medium/` и импортирует опубликованные `posts/*.html`.
 - "Книжный куб", Telegram-канал. Adapter работает от public `t.me/s/book_cube` HTML snapshot, одиночного Telegram Desktop JSON export или полного владельческого Telegram Desktop JSON archive directory/`.zip` в `data/raw/book-cube/`.
 
 Реализованный первый срез:
 
 - source adapter `tellmeabout-tech`;
+- source adapter `medium-export`;
 - source adapter `book-cube`;
 - owner archive adapter `book-cube-archive`;
 - raw snapshot исходного feed/export payload;
+- raw manifest snapshot Medium export без сохранения полного приватного HTML payload в одном документе ArangoDB;
 - нормализация title/text/url/date/tags/author для блога;
+- нормализация Medium post id/title/text/canonical URL/published date/author/export date/image references/link references для опубликованных статей;
 - нормализация Telegram message id/text/url/date/hashtags;
 - нормализация captions и attachment references для полного Telegram archive import без загрузки media binaries в базу или git;
 - topics из feed categories/tags;
 - topics из Telegram hashtags;
 - provenance для source/raw/document/chunk/topic/author edges;
-- unit/integration tests на synthetic Medium-like и Telegram fixtures.
+- unit/integration tests на synthetic Medium-like, Medium export и Telegram fixtures.
 
 ## v3 - Поиск, embeddings и GraphRAG
 
@@ -84,4 +88,4 @@
 
 ## Текущий статус
 
-Сейчас завершены v1 fixture pipeline и v2 source adapters: `tellmeabout.tech`, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import. Следующий фокус - прогон реальных локальных archives/snapshots из `data/raw/` и расширение качества extraction/retrieval.
+Сейчас завершены v1 fixture pipeline и v2 source adapters: `tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import. Следующий фокус - прогон реальных локальных archives/snapshots из `data/raw/` и расширение качества extraction/retrieval.
