@@ -7,7 +7,7 @@ import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from knowledge_base.chunking import split_text
@@ -587,10 +587,11 @@ def _attachment_relative_path(value: Any) -> str | None:
         return None
     normalized = stripped.replace("\\", "/")
     # Attachment paths come from an attacker-controllable result.json. Reject absolute
-    # paths and ".." traversal so they cannot be joined with the archive root to stat()
-    # or record files outside the export (finding #41).
-    pure = PurePosixPath(normalized)
-    if pure.is_absolute() or ".." in pure.parts:
+    # paths, Windows drive/UNC paths, and ".." traversal so they cannot be joined with the
+    # archive root to stat() or record files outside the export (finding #41).
+    posix = PurePosixPath(normalized)
+    windows = PureWindowsPath(normalized)
+    if posix.is_absolute() or windows.is_absolute() or windows.drive or ".." in posix.parts:
         return None
     return normalized
 
