@@ -5,18 +5,25 @@ import re
 import urllib.parse
 import zipfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
-from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
-from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
-from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key
+from knowledge_base.ids import sha256_text, slugify, stable_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
+from knowledge_base.sources.ingest_core import (
+    empty_counts,
+    parse_date,
+    planned_chunk_count,
+    upsert_author,
+    upsert_chunks,
+    upsert_document,
+    utc_now,
+)
 
 SOURCE_KEY = "medium-export"
 DISPLAY_NAME = "Medium Export"
@@ -129,7 +136,7 @@ class _MediumPostHTMLParser(HTMLParser):
             self._author_depth += 1
 
         if tag == "time" and "dt-published" in classes and attr.get("datetime"):
-            self.published_at = _parse_date(attr["datetime"])
+            self.published_at = parse_date(attr["datetime"])
 
     def handle_data(self, data: str) -> None:
         if self._in_title:
@@ -181,8 +188,8 @@ def ingest_medium_export(
         return MediumArchiveReadError("invalid_medium_export", archive_path, str(error)).to_payload()
 
     bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
-    now = _now()
-    counts = _counts()
+    now = utc_now()
+    counts = empty_counts()
 
     source = _source_document(now)
     counts["sources"] += int(repository.upsert("sources", source)["created"])
@@ -212,7 +219,7 @@ def ingest_medium_export(
     for item in parsed.items:
         counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
 
-    import_run["finished_at"] = _now()
+    import_run["finished_at"] = utc_now()
     import_run["status"] = "ok"
     import_run["counts"] = counts
     repository.upsert("import_runs", import_run)
@@ -226,7 +233,7 @@ def ingest_medium_export(
         "created": counts,
         "deduplicated": {
             "documents": max(len(parsed.items) - counts["documents"], 0),
-            "chunks": max(_planned_chunk_count(parsed.items) - counts["chunks"], 0),
+            "chunks": max(planned_chunk_count(parsed.items) - counts["chunks"], 0),
         },
         "skipped": parsed.skipped,
     }
@@ -473,149 +480,54 @@ def _ingest_item(
     now: str,
     counts: dict[str, int],
 ) -> dict[str, int]:
-    doc_key = document_key(SOURCE_KEY, item.canonical_id)
+    provenance = _provenance(item, raw)
     medium_post = {**item.metadata.get("medium_post", {}), "raw_snapshot_key": raw["_key"]}
-    document = {
-        "_key": doc_key,
-        "source_key": SOURCE_KEY,
-        "canonical_id": item.canonical_id,
-        "title": item.title,
-        "text": item.text,
-        "language": item.language,
-        "published_at": item.published_at,
-        "url": item.url,
-        "status": item.metadata.get("status", "published"),
-        "metadata": {
-            **item.metadata,
-            "medium_post": medium_post,
-            "tags": item.tags,
-            "author": item.author,
-            "raw_snapshot_key": raw["_key"],
-        },
-        "created_at": now,
-        "updated_at": now,
+    metadata = {
+        **item.metadata,
+        "medium_post": medium_post,
+        "tags": item.tags,
+        "author": item.author,
+        "raw_snapshot_key": raw["_key"],
     }
-    counts["documents"] += int(repository.upsert("documents", document)["created"])
-    counts["edges"] += int(
-        repository.upsert_edge(
-            "document_from_source",
-            {
-                "_key": stable_key(doc_key, SOURCE_KEY, prefix="edge"),
-                "_from": f"documents/{doc_key}",
-                "_to": f"sources/{SOURCE_KEY}",
-                "import_run_key": import_run_key,
-                "provenance": _provenance(item, raw),
-                "created_at": now,
-            },
-        )["created"],
+    doc_key = upsert_document(
+        repository,
+        SOURCE_KEY,
+        item,
+        import_run_key,
+        now,
+        counts,
+        metadata=metadata,
+        status=item.metadata.get("status", "published"),
+        provenance=provenance,
     )
-
-    _upsert_author(repository, item, doc_key, raw, import_run_key, now, counts)
-    _upsert_chunks(repository, settings, item, doc_key, raw, import_run_key, now, counts)
+    upsert_author(
+        repository,
+        item,
+        doc_key,
+        SOURCE_KEY,
+        import_run_key,
+        now,
+        counts,
+        method="medium_export_author",
+        provenance=provenance,
+    )
+    upsert_chunks(
+        repository,
+        settings,
+        item,
+        doc_key,
+        raw,
+        import_run_key,
+        now,
+        counts,
+        chunk_metadata={
+            "source_key": SOURCE_KEY,
+            "raw_snapshot_key": raw["_key"],
+            "import_run_key": import_run_key,
+            "medium_post": item.metadata.get("medium_post"),
+        },
+    )
     return counts
-
-
-def _upsert_author(
-    repository: KnowledgeRepository,
-    item: NormalizedSourceItem,
-    doc_key: str,
-    raw: dict[str, Any],
-    import_run_key: str,
-    now: str,
-    counts: dict[str, int],
-) -> None:
-    if not item.author:
-        return
-    author_key = slugify(item.author, fallback="author")
-    counts["authors"] += int(
-        repository.upsert(
-            "authors",
-            {
-                "_key": author_key,
-                "display_name": item.author,
-                "aliases": [],
-                "metadata": {"source": "medium_export_author", "source_key": SOURCE_KEY},
-            },
-        )["created"],
-    )
-    counts["edges"] += int(
-        repository.upsert_edge(
-            "document_mentions_author",
-            {
-                "_key": stable_key(doc_key, author_key, prefix="edge"),
-                "_from": f"documents/{doc_key}",
-                "_to": f"authors/{author_key}",
-                "confidence": 1.0,
-                "method": "medium_export_author",
-                "evidence": item.author,
-                "import_run_key": import_run_key,
-                "provenance": _provenance(item, raw),
-                "created_at": now,
-            },
-        )["created"],
-    )
-
-
-def _upsert_chunks(
-    repository: KnowledgeRepository,
-    settings: Settings,
-    item: NormalizedSourceItem,
-    doc_key: str,
-    raw: dict[str, Any],
-    import_run_key: str,
-    now: str,
-    counts: dict[str, int],
-) -> None:
-    for chunk in split_text(item.text):
-        c_key = chunk_key(doc_key, chunk.ordinal, chunk.text)
-        counts["chunks"] += int(
-            repository.upsert(
-                "chunks",
-                {
-                    "_key": c_key,
-                    "document_key": doc_key,
-                    "ordinal": chunk.ordinal,
-                    "text": chunk.text,
-                    "token_count": chunk.token_count,
-                    "char_start": chunk.char_start,
-                    "char_end": chunk.char_end,
-                    "embedding": hash_embedding(chunk.text, dimension=settings.embedding_dimension),
-                    "embedding_model": HASH_EMBEDDING_MODEL,
-                    "metadata": {
-                        "source_key": SOURCE_KEY,
-                        "raw_snapshot_key": raw["_key"],
-                        "import_run_key": import_run_key,
-                        "medium_post": item.metadata.get("medium_post"),
-                    },
-                },
-            )["created"],
-        )
-        counts["edges"] += int(
-            repository.upsert_edge(
-                "chunk_of_document",
-                {
-                    "_key": stable_key(c_key, doc_key, prefix="edge"),
-                    "_from": f"chunks/{c_key}",
-                    "_to": f"documents/{doc_key}",
-                    "ordinal": chunk.ordinal,
-                    "created_at": now,
-                },
-            )["created"],
-        )
-        counts["edges"] += int(
-            repository.upsert_edge(
-                "chunk_derived_from_raw",
-                {
-                    "_key": stable_key(c_key, raw["_key"], prefix="edge"),
-                    "_from": f"chunks/{c_key}",
-                    "_to": f"raw_snapshots/{raw['_key']}",
-                    "document_key": doc_key,
-                    "char_start": chunk.char_start,
-                    "char_end": chunk.char_end,
-                    "import_run_key": import_run_key,
-                },
-            )["created"],
-        )
 
 
 def _source_document(now: str) -> dict[str, Any]:
@@ -674,26 +586,6 @@ def _command(archive: MediumArchivePayload, *, include_drafts: bool) -> str:
     return f"kb ingest medium-export --archive {archive.ref}{suffix}"
 
 
-def _counts() -> dict[str, int]:
-    return {
-        "sources": 0,
-        "raw_snapshots": 0,
-        "documents": 0,
-        "chunks": 0,
-        "topics": 0,
-        "authors": 0,
-        "works": 0,
-        "edges": 0,
-    }
-
-
-def _planned_chunk_count(items: list[NormalizedSourceItem]) -> int:
-    # Number of chunks the batch produces, computed in-process (no per-item AQL
-    # round-trip, finding #37) so deduplicated.chunks is correct even on a
-    # partial re-ingest (finding #34).
-    return sum(len(split_text(item.text)) for item in items)
-
-
 def _title_from_text(text: str, *, max_length: int = 100) -> str:
     first = text.split(".", 1)[0].strip() or "Medium post"
     return first if len(first) <= max_length else first[: max_length - 3].rstrip() + "..."
@@ -707,18 +599,6 @@ def _parse_export_date(payload: str) -> str | None:
         return datetime.strptime(match.group(1), "%B %d, %Y").date().isoformat()
     except ValueError:
         return match.group(1)
-
-
-def _parse_date(value: str | None) -> str | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _dedupe_strings(values: list[str]) -> list[str]:
@@ -754,7 +634,3 @@ def _int_or_none(value: str | None) -> int | None:
 
 def _clean_text(value: Any) -> str:
     return " ".join(str(value or "").split())
-
-
-def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")

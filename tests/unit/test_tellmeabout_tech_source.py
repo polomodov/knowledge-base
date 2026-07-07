@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from knowledge_base.ids import topic_key
 from knowledge_base.sources.tellmeabout_tech import (
     DEFAULT_FEED_URL,
     LiveFetchUnavailable,
@@ -9,7 +10,6 @@ from knowledge_base.sources.tellmeabout_tech import (
     fetch_feed_payload,
     html_to_text,
     parse_feed,
-    topic_key,
 )
 
 FIXTURE = Path("tests/fixtures/tellmeabout_tech_feed.xml")

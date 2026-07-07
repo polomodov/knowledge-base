@@ -3,21 +3,27 @@ from __future__ import annotations
 import urllib.error
 import urllib.parse
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree
 
-from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
-from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
-from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
+from knowledge_base.ids import sha256_text, slugify, stable_key
 from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
+from knowledge_base.sources.ingest_core import (
+    empty_counts,
+    parse_date,
+    planned_chunk_count,
+    upsert_author,
+    upsert_chunks,
+    upsert_document,
+    upsert_topics,
+    utc_now,
+)
 
 SOURCE_KEY = "tellmeabout-tech"
 DISPLAY_NAME = "Tell Me About Tech"
@@ -87,8 +93,8 @@ def ingest_tellmeabout_tech(
 
     parsed = parse_feed(feed_payload.payload)
     bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
-    now = _now()
-    counts = _counts()
+    now = utc_now()
+    counts = empty_counts()
 
     source = _source_document(now, feed_url)
     counts["sources"] += int(repository.upsert("sources", source)["created"])
@@ -114,7 +120,7 @@ def ingest_tellmeabout_tech(
     for item in parsed.items:
         counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
 
-    import_run["finished_at"] = _now()
+    import_run["finished_at"] = utc_now()
     import_run["status"] = "ok"
     import_run["counts"] = counts
     import_run["metadata"]["skipped"] = parsed.skipped
@@ -128,7 +134,7 @@ def ingest_tellmeabout_tech(
         "created": counts,
         "deduplicated": {
             "documents": max(len(parsed.items) - counts["documents"], 0),
-            "chunks": max(_planned_chunk_count(parsed.items) - counts["chunks"], 0),
+            "chunks": max(planned_chunk_count(parsed.items) - counts["chunks"], 0),
         },
         "skipped": parsed.skipped,
     }
@@ -253,7 +259,7 @@ def _rss_item(item: ElementTree.Element) -> NormalizedSourceItem:
     tags = [_clean_text(child.text or "") for child in item if _local_name(child.tag) == "category"]
     tags = [tag for tag in tags if tag]
     author = _child_text(item, "creator") or _child_text(item, "author")
-    published_at = _parse_date(_child_text(item, "pubDate"))
+    published_at = parse_date(_child_text(item, "pubDate"))
     canonical_id = canonical_id_from_url_or_guid(url, guid)
     return NormalizedSourceItem(
         canonical_id=canonical_id,
@@ -281,7 +287,7 @@ def _atom_entry(entry: ElementTree.Element) -> NormalizedSourceItem:
             tags.append(_clean_text(label))
     author_node = next(iter(_children(entry, "author")), None)
     author = _child_text(author_node, "name") if author_node is not None else None
-    published_at = _parse_date(_child_text(entry, "published") or _child_text(entry, "updated"))
+    published_at = parse_date(_child_text(entry, "published") or _child_text(entry, "updated"))
     canonical_id = canonical_id_from_url_or_guid(url, guid)
     return NormalizedSourceItem(
         canonical_id=canonical_id,
@@ -306,203 +312,47 @@ def _ingest_item(
     now: str,
     counts: dict[str, int],
 ) -> dict[str, int]:
-    doc_key = document_key(SOURCE_KEY, item.canonical_id)
-    document = {
-        "_key": doc_key,
-        "source_key": SOURCE_KEY,
-        "canonical_id": item.canonical_id,
-        "title": item.title,
-        "text": item.text,
-        "language": item.language,
-        "published_at": item.published_at,
-        "url": item.url,
-        "status": "published",
-        "metadata": {
-            **item.metadata,
-            "tags": item.tags,
-            "author": item.author,
-            "raw_snapshot_key": raw["_key"],
-        },
-        "created_at": now,
-        "updated_at": now,
-    }
-    counts["documents"] += int(repository.upsert("documents", document)["created"])
-    counts["edges"] += int(
-        repository.upsert_edge(
-            "document_from_source",
-            {
-                "_key": stable_key(doc_key, SOURCE_KEY, prefix="edge"),
-                "_from": f"documents/{doc_key}",
-                "_to": f"sources/{SOURCE_KEY}",
-                "import_run_key": import_run_key,
-                "provenance": _provenance(item, raw),
-                "created_at": now,
-            },
-        )["created"],
+    provenance = _provenance(item, raw)
+    metadata = {**item.metadata, "tags": item.tags, "author": item.author, "raw_snapshot_key": raw["_key"]}
+    doc_key = upsert_document(
+        repository,
+        SOURCE_KEY,
+        item,
+        import_run_key,
+        now,
+        counts,
+        metadata=metadata,
+        status="published",
+        provenance=provenance,
     )
-
-    _upsert_topics(repository, item, doc_key, raw, import_run_key, now, counts)
-    _upsert_author(repository, item, doc_key, raw, import_run_key, now, counts)
-    _upsert_chunks(repository, settings, item, doc_key, raw, import_run_key, now, counts)
+    upsert_topics(
+        repository,
+        item,
+        doc_key,
+        SOURCE_KEY,
+        import_run_key,
+        now,
+        counts,
+        method="feed_category",
+        evidence=lambda tag: tag,
+        provenance=provenance,
+    )
+    upsert_author(repository, item, doc_key, SOURCE_KEY, import_run_key, now, counts, method="feed_author", provenance=provenance)
+    upsert_chunks(
+        repository,
+        settings,
+        item,
+        doc_key,
+        raw,
+        import_run_key,
+        now,
+        counts,
+        chunk_metadata={"source_key": SOURCE_KEY, "tags": item.tags},
+        topic_method="feed_category",
+        topic_evidence=lambda tag: tag,
+        provenance=provenance,
+    )
     return counts
-
-
-def _upsert_topics(
-    repository: KnowledgeRepository,
-    item: NormalizedSourceItem,
-    doc_key: str,
-    raw: dict[str, Any],
-    import_run_key: str,
-    now: str,
-    counts: dict[str, int],
-) -> None:
-    for tag in item.tags:
-        key = topic_key(tag)
-        counts["topics"] += int(
-            repository.upsert(
-                "topics",
-                {
-                    "_key": key,
-                    "label": tag,
-                    "language": "unknown",
-                    "description": "",
-                    "confidence": 1.0,
-                    "metadata": {"source": "feed_category", "source_key": SOURCE_KEY},
-                },
-            )["created"],
-        )
-        counts["edges"] += int(
-            repository.upsert_edge(
-                "document_mentions_topic",
-                {
-                    "_key": stable_key(doc_key, key, prefix="edge"),
-                    "_from": f"documents/{doc_key}",
-                    "_to": f"topics/{key}",
-                    "confidence": 1.0,
-                    "method": "feed_category",
-                    "evidence": tag,
-                    "import_run_key": import_run_key,
-                    "provenance": _provenance(item, raw),
-                    "created_at": now,
-                },
-            )["created"],
-        )
-
-
-def _upsert_author(
-    repository: KnowledgeRepository,
-    item: NormalizedSourceItem,
-    doc_key: str,
-    raw: dict[str, Any],
-    import_run_key: str,
-    now: str,
-    counts: dict[str, int],
-) -> None:
-    if not item.author:
-        return
-    author_key = slugify(item.author, fallback="author")
-    counts["authors"] += int(
-        repository.upsert(
-            "authors",
-            {
-                "_key": author_key,
-                "display_name": item.author,
-                "aliases": [],
-                "metadata": {"source": "feed_author", "source_key": SOURCE_KEY},
-            },
-        )["created"],
-    )
-    counts["edges"] += int(
-        repository.upsert_edge(
-            "document_mentions_author",
-            {
-                "_key": stable_key(doc_key, author_key, prefix="edge"),
-                "_from": f"documents/{doc_key}",
-                "_to": f"authors/{author_key}",
-                "confidence": 1.0,
-                "method": "feed_author",
-                "evidence": item.author,
-                "import_run_key": import_run_key,
-                "provenance": _provenance(item, raw),
-                "created_at": now,
-            },
-        )["created"],
-    )
-
-
-def _upsert_chunks(
-    repository: KnowledgeRepository,
-    settings: Settings,
-    item: NormalizedSourceItem,
-    doc_key: str,
-    raw: dict[str, Any],
-    import_run_key: str,
-    now: str,
-    counts: dict[str, int],
-) -> None:
-    for chunk in split_text(item.text):
-        c_key = chunk_key(doc_key, chunk.ordinal, chunk.text)
-        counts["chunks"] += int(
-            repository.upsert(
-                "chunks",
-                {
-                    "_key": c_key,
-                    "document_key": doc_key,
-                    "ordinal": chunk.ordinal,
-                    "text": chunk.text,
-                    "token_count": chunk.token_count,
-                    "char_start": chunk.char_start,
-                    "char_end": chunk.char_end,
-                    "embedding": hash_embedding(chunk.text, dimension=settings.embedding_dimension),
-                    "embedding_model": HASH_EMBEDDING_MODEL,
-                    "metadata": {"source_key": SOURCE_KEY, "tags": item.tags},
-                },
-            )["created"],
-        )
-        counts["edges"] += int(
-            repository.upsert_edge(
-                "chunk_of_document",
-                {
-                    "_key": stable_key(c_key, doc_key, prefix="edge"),
-                    "_from": f"chunks/{c_key}",
-                    "_to": f"documents/{doc_key}",
-                    "ordinal": chunk.ordinal,
-                    "created_at": now,
-                },
-            )["created"],
-        )
-        counts["edges"] += int(
-            repository.upsert_edge(
-                "chunk_derived_from_raw",
-                {
-                    "_key": stable_key(c_key, raw["_key"], prefix="edge"),
-                    "_from": f"chunks/{c_key}",
-                    "_to": f"raw_snapshots/{raw['_key']}",
-                    "document_key": doc_key,
-                    "char_start": chunk.char_start,
-                    "char_end": chunk.char_end,
-                    "import_run_key": import_run_key,
-                },
-            )["created"],
-        )
-        for tag in item.tags:
-            key = topic_key(tag)
-            counts["edges"] += int(
-                repository.upsert_edge(
-                    "document_mentions_topic",
-                    {
-                        "_key": stable_key(c_key, key, prefix="edge"),
-                        "_from": f"chunks/{c_key}",
-                        "_to": f"topics/{key}",
-                        "confidence": 1.0,
-                        "method": "feed_category",
-                        "evidence": tag,
-                        "import_run_key": import_run_key,
-                        "provenance": _provenance(item, raw),
-                        "created_at": now,
-                    },
-                )["created"],
-            )
 
 
 def _source_document(now: str, feed_url: str) -> dict[str, Any]:
@@ -550,26 +400,6 @@ def _command(feed_payload: FeedPayload, feed_url: str) -> str:
     return f"kb ingest tellmeabout-tech --feed-url {feed_url}"
 
 
-def _counts() -> dict[str, int]:
-    return {
-        "sources": 0,
-        "raw_snapshots": 0,
-        "documents": 0,
-        "chunks": 0,
-        "topics": 0,
-        "authors": 0,
-        "works": 0,
-        "edges": 0,
-    }
-
-
-def _planned_chunk_count(items: list[NormalizedSourceItem]) -> int:
-    # Number of chunks the batch produces, computed in-process (no per-item AQL
-    # round-trip, finding #37) so deduplicated.chunks is correct even on a
-    # partial re-ingest (finding #34).
-    return sum(len(split_text(item.text)) for item in items)
-
-
 def _child_text(node: ElementTree.Element | None, local_name: str) -> str | None:
     if node is None:
         return None
@@ -597,22 +427,3 @@ def _local_name(tag: str) -> str:
 
 def _clean_text(value: str | None) -> str:
     return " ".join((value or "").split())
-
-
-def _parse_date(value: str | None) -> str | None:
-    if not value:
-        return None
-    try:
-        parsed = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        try:
-            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return value
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=UTC)
-    return parsed.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
