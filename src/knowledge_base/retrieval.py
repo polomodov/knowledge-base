@@ -25,8 +25,14 @@ def text_search(
           FILTER doc != null
           FILTER @source_key == null OR doc.source_key == @source_key
           LET score = BM25(item)
-          SORT score DESC
+          COLLECT document_key = doc._key INTO group = { item: item, doc: doc, is_chunk: is_chunk, score: score }
+          LET best = FIRST(FOR candidate IN group SORT candidate.score DESC LIMIT 1 RETURN candidate)
+          SORT best.score DESC
           LIMIT @limit
+          LET item = best.item
+          LET doc = best.doc
+          LET is_chunk = best.is_chunk
+          LET score = best.score
           LET anchor_chunk = is_chunk ? item : FIRST(
             FOR chunk_doc IN chunks
               FILTER chunk_doc.document_key == doc._key
@@ -94,7 +100,14 @@ def semantic_search(
         score = _cosine(query_vector, chunk["embedding"])
         results.append({"chunk": chunk, "score": score})
     results.sort(key=lambda result: result["score"], reverse=True)
-    hydrated = [_semantic_result_for_chunk(repository, result["chunk"], result["score"]) for result in results[:limit]]
+    # Keep the single best-scoring chunk per document before applying the limit, so
+    # one document does not occupy several slots and hybrid gets `limit` distinct
+    # documents to merge rather than `limit` chunks of a few documents (finding #14).
+    best_per_document: dict[str, dict[str, Any]] = {}
+    for result in results:
+        best_per_document.setdefault(result["chunk"]["document_key"], result)
+    top = list(best_per_document.values())[:limit]
+    hydrated = [_semantic_result_for_chunk(repository, result["chunk"], result["score"]) for result in top]
     return {"query": query, "mode": "semantic", "status": "ok", "results": hydrated}
 
 

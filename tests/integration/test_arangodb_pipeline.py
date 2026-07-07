@@ -56,8 +56,11 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert index_result["status"] == "ok"
     assert text["results"]
     assert no_match["results"] == []
+    # text and semantic each return at most one row per document (finding #14).
+    assert _unique_document_keys(text["results"])
     _assert_provenance(text["results"])
     assert semantic["status"] in {"ok", "degraded"}
+    assert _unique_document_keys(semantic["results"])
     _assert_provenance(semantic["results"])
     assert topic_graph["status"] == "ok"
     assert author_graph["status"] == "ok"
@@ -72,11 +75,15 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert hybrid["results"]
     assert {"bm25", "vector", "graph_boost"} <= set(hybrid["results"][0]["score_components"])
     # One row per document (finding #14) and no negative fused scores (finding #16).
-    hybrid_keys = [result["document_key"] for result in hybrid["results"]]
-    assert len(hybrid_keys) == len(set(hybrid_keys))
+    assert _unique_document_keys(hybrid["results"])
     assert all(result["score"] >= 0 for result in hybrid["results"])
     assert all(result["score_components"]["graph_boost"] is None for result in hybrid["results"])
     _assert_provenance(hybrid["results"])
+
+
+def _unique_document_keys(results: list[dict]) -> bool:
+    keys = [result["document_key"] for result in results]
+    return len(keys) == len(set(keys))
 
 
 def _document_created_at(repository: KnowledgeRepository) -> dict[str, str]:
