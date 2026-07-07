@@ -70,6 +70,16 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert {result["kind"] for result in topic_graph["results"]} & {"document", "chunk", "topic", "author", "work"}
     assert {result["kind"] for result in author_graph["results"]} & {"document", "topic", "work"}
     assert {result["kind"] for result in work_graph["results"]} & {"document", "topic", "author"}
+    # Each graph vertex is returned once (finding #13).
+    for graph_result in (topic_graph, author_graph, work_graph):
+        ids = [result["id"] for result in graph_result["results"]]
+        assert len(ids) == len(set(ids))
+    # Source filter stays consistent with the unfiltered branch and still dedups (finding #18).
+    filtered_topic = graph_neighbors(repository, topic="systems-thinking", source_key="fixture-notebook")
+    assert filtered_topic["status"] == "ok"
+    assert filtered_topic["results"]
+    assert len({result["id"] for result in filtered_topic["results"]}) == len(filtered_topic["results"])
+    assert all(result["provenance"]["source_key"] == "fixture-notebook" for result in filtered_topic["results"])
     _assert_provenance(topic_graph["results"])
     assert hybrid["status"] in {"ok", "degraded"}
     assert hybrid["results"]
@@ -79,6 +89,66 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert all(result["score"] >= 0 for result in hybrid["results"])
     assert all(result["score_components"]["graph_boost"] is None for result in hybrid["results"])
     _assert_provenance(hybrid["results"])
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_graph_source_filter_keeps_cross_source_shared_vertices() -> None:
+    # A topic/author shared across sources must not become a false negative under a
+    # source filter just because it was first reached via another source's document
+    # (finding #18 / PR #7 review): dedup happens after the source filter, not during
+    # the traversal.
+    settings = load_settings()
+    repository = KnowledgeRepository(ArangoClient(settings))
+    bootstrap_schema(repository.client)
+
+    now = "2026-07-07T00:00:00Z"
+    topic = "audit-shared-topic"
+    author = "audit-shared-author"
+    sources = ("audit-src-a", "audit-src-b")
+    repository.upsert("topics", {"_key": topic, "label": "Audit Shared Topic"})
+    repository.upsert("authors", {"_key": author, "display_name": "Audit Shared Author"})
+    for source_key in sources:
+        repository.upsert(
+            "sources",
+            {"_key": source_key, "type": "test", "display_name": source_key, "created_at": now},
+        )
+        document_key_value = f"audit-doc-{source_key}"
+        repository.upsert(
+            "documents",
+            {
+                "_key": document_key_value,
+                "source_key": source_key,
+                "canonical_id": document_key_value,
+                "title": f"Doc {source_key}",
+                "text": "shared audit document",
+                "url": None,
+                "created_at": now,
+            },
+        )
+        for collection, target in (("document_mentions_topic", f"topics/{topic}"),
+                                   ("document_mentions_author", f"authors/{author}")):
+            repository.upsert_edge(
+                collection,
+                {
+                    "_key": f"edge-{document_key_value}-{collection}",
+                    "_from": f"documents/{document_key_value}",
+                    "_to": target,
+                    "import_run_key": "audit",
+                    "provenance": {"raw_snapshot_key": "audit"},
+                },
+            )
+
+    # The shared author is reachable from the topic via both sources' documents.
+    # Filtering by either source must still surface it, scoped to that source only.
+    for source_key in sources:
+        result = graph_neighbors(repository, topic=topic, source_key=source_key)
+        assert result["status"] == "ok"
+        entity_keys = {row["entity_key"] for row in result["results"]}
+        assert author in entity_keys, f"shared author missing under source {source_key}"
+        assert f"audit-doc-{source_key}" in entity_keys
+        assert all(row["provenance"]["source_key"] == source_key for row in result["results"])
+        ids = [row["id"] for row in result["results"]]
+        assert len(ids) == len(set(ids))
 
 
 def _unique_document_keys(results: list[dict]) -> bool:
