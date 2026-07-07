@@ -76,3 +76,18 @@ def test_parse_snapshot_json_without_messages_key_is_empty() -> None:
     parsed = parse_snapshot('{"name": "Книжный куб"}', media_type="application/json")
     assert parsed.items == []
     assert parsed.title == "Книжный куб"
+
+
+def test_parse_snapshot_html_void_tags_do_not_drop_messages() -> None:
+    # A message containing void tags (<img> photo, <br>) must not unbalance the depth counter
+    # and drop itself or the following message (finding #22).
+    html = (
+        '<div class="tgme_widget_message" data-post="book_cube/1">'
+        '<img class="tgme_widget_message_photo" src="x.jpg">'
+        '<div class="tgme_widget_message_text">First message.<br>with a break</div></div>'
+        '<div class="tgme_widget_message" data-post="book_cube/2">'
+        '<div class="tgme_widget_message_text">Second message here.</div></div>'
+    )
+    parsed = parse_snapshot(html, media_type="text/html")
+    assert sorted(item.metadata["message_id"] for item in parsed.items) == ["1", "2"]
+    assert parsed.items[0].text == "First message. with a break"

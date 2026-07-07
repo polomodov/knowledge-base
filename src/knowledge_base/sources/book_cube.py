@@ -33,6 +33,7 @@ LIVE_FETCH_HINT = "Save Telegram HTML/JSON export under data/raw/book-cube/ and 
 ARCHIVE_HINT = "Export Telegram channel as machine-readable JSON and rerun with --archive."
 HASHTAG_RE = re.compile(r"(?<!\w)#([\wа-яА-ЯёЁ_]+)")
 ATTACHMENT_FIELDS = ("photo", "file", "thumbnail")
+VOID_TAGS = {"br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,10 @@ class _TelegramHTMLParser(HTMLParser):
             return
 
         if self._current is not None:
-            self._message_depth += 1
+            # Void tags (<br>, <img>, ...) never emit an end tag; counting them would leave the
+            # depth permanently unbalanced and drop the message and its text (finding #22).
+            if tag not in VOID_TAGS:
+                self._message_depth += 1
             if tag == "a" and "tgme_widget_message_date" in classes and attr.get("href"):
                 self._current["url"] = attr["href"]
             if tag == "time" and attr.get("datetime"):
@@ -121,7 +125,8 @@ class _TelegramHTMLParser(HTMLParser):
                 self._text_depth = 1
                 self._text_parts = []
             elif self._collect_text:
-                self._text_depth += 1
+                if tag not in VOID_TAGS:
+                    self._text_depth += 1
                 if tag in {"br", "p", "div"}:
                     self._text_parts.append(" ")
 
@@ -130,7 +135,7 @@ class _TelegramHTMLParser(HTMLParser):
             self._text_parts.append(data)
 
     def handle_endtag(self, tag: str) -> None:
-        if self._current is None:
+        if self._current is None or tag in VOID_TAGS:
             return
         if self._collect_text:
             if tag in {"p", "div"}:

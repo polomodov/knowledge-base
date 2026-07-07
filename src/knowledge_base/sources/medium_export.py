@@ -132,7 +132,9 @@ class _MediumPostHTMLParser(HTMLParser):
 
         if tag == "a" and "p-author" in classes:
             self._author_depth = 1
-        elif self._author_depth > 0:
+        elif self._author_depth > 0 and tag not in VOID_TAGS:
+            # An <img> avatar inside the author link has no end tag; counting it would keep
+            # author capture open and swallow the rest of the document (finding #23).
             self._author_depth += 1
 
         if tag == "time" and "dt-published" in classes and attr.get("datetime"):
@@ -150,6 +152,10 @@ class _MediumPostHTMLParser(HTMLParser):
         tag = tag.lower()
         if tag == "title":
             self._in_title = False
+        if tag in VOID_TAGS:
+            # A stray void end tag (e.g. </br>) must not decrement a depth it never opened,
+            # which would truncate the body early (finding #4).
+            return
 
         if self._author_depth > 0:
             self._author_depth -= 1

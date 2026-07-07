@@ -5,11 +5,39 @@ import pytest
 
 from knowledge_base.sources.medium_export import (
     MediumArchiveReadError,
+    _MediumPostHTMLParser,
     canonical_id_from_post_id,
     medium_post_id_from_url,
     parse_medium_archive,
     read_medium_archive_payload,
 )
+
+
+def test_author_link_with_avatar_image_does_not_swallow_body() -> None:
+    # An <img> avatar inside the p-author anchor has no end tag; author capture must still
+    # close on </a> instead of absorbing the following text (finding #23).
+    parser = _MediumPostHTMLParser()
+    parser.feed(
+        "<html><head><title>Post</title></head><body>"
+        '<section data-field="body"><p>Body paragraph one.</p><p>Body two.</p></section>'
+        '<footer><p>By <a class="p-author h-card" href="https://medium.com/@a">'
+        '<img src="avatar.jpg">Alice</a> on June 1, 2026.</p></footer></body></html>'
+    )
+    parser.close()
+    assert parser.author == "Alice"
+    assert "Body paragraph one." in parser.text
+    assert "Body two." in parser.text
+
+
+def test_body_survives_stray_void_end_tag() -> None:
+    # A stray </br> must not decrement the body depth it never opened and truncate the article
+    # (finding #4).
+    parser = _MediumPostHTMLParser()
+    parser.feed('<html><body><section data-field="body"><p>Part one.</p></br><p>Part two.</p></section></body></html>')
+    parser.close()
+    assert "Part one." in parser.text
+    assert "Part two." in parser.text
+
 
 ARCHIVE_DIR = Path("tests/fixtures/medium_export")
 
