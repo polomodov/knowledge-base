@@ -129,7 +129,7 @@ def ingest_tellmeabout_tech(
         "created": counts,
         "deduplicated": {
             "documents": max(len(parsed.items) - counts["documents"], 0),
-            "chunks": 0 if counts["chunks"] > 0 else _existing_chunk_count(repository, parsed.items),
+            "chunks": max(_planned_chunk_count(parsed.items) - counts["chunks"], 0),
         },
         "skipped": parsed.skipped,
     }
@@ -566,13 +566,11 @@ def _counts() -> dict[str, int]:
     }
 
 
-def _existing_chunk_count(repository: KnowledgeRepository, items: list[NormalizedSourceItem]) -> int:
-    count = 0
-    for item in items:
-        doc_key = document_key(SOURCE_KEY, item.canonical_id)
-        result = repository.client.aql("RETURN LENGTH(FOR chunk IN chunks FILTER chunk.document_key == @doc RETURN 1)", {"doc": doc_key})
-        count += int(result[0])
-    return count
+def _planned_chunk_count(items: list[NormalizedSourceItem]) -> int:
+    # Number of chunks the batch produces, computed in-process (no per-item AQL
+    # round-trip, finding #37) so deduplicated.chunks is correct even on a
+    # partial re-ingest (finding #34).
+    return sum(len(split_text(item.text)) for item in items)
 
 
 def _child_text(node: ElementTree.Element | None, local_name: str) -> str | None:

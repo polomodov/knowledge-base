@@ -10,10 +10,12 @@ class KnowledgeRepository:
         self.client = client
 
     def upsert(self, collection: str, document: dict[str, Any]) -> dict[str, Any]:
+        # created_at is immutable: on update, keep the original first-seen value
+        # instead of letting the incoming payload overwrite it (finding #11).
         query = """
         UPSERT { _key: @key }
         INSERT @document
-        UPDATE MERGE(OLD, @document)
+        UPDATE MERGE(OLD, @document, HAS(OLD, "created_at") ? { created_at: OLD.created_at } : {})
         IN @@collection
         RETURN { old: OLD, new: NEW }
         """

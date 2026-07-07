@@ -68,7 +68,14 @@ def ingest_fixture(repository: KnowledgeRepository, settings: Settings, fixture_
     import_run["counts"] = counts
     repository.upsert("import_runs", import_run)
 
-    return {"status": "ok", "import_run_key": import_run_key, "created": counts, "deduplicated": _deduplicated(counts)}
+    total_documents = len(fixture["documents"])
+    total_chunks = sum(len(split_text(" ".join(item["text"].split()))) for item in fixture["documents"])
+    return {
+        "status": "ok",
+        "import_run_key": import_run_key,
+        "created": counts,
+        "deduplicated": _deduplicated(total_documents, total_chunks, counts),
+    }
 
 
 def _ingest_document(
@@ -82,12 +89,16 @@ def _ingest_document(
     counts: dict[str, int],
 ) -> dict[str, int]:
     doc_key = document_key(source["_key"], item["canonical_id"])
+    # Store the whitespace-normalized text so chunk char_start/char_end index
+    # faithfully into document.text (finding #36); split_text normalizes the
+    # same way, so the stored text and the chunk offsets stay aligned.
+    text = " ".join(item["text"].split())
     document = {
         "_key": doc_key,
         "source_key": source["_key"],
         "canonical_id": item["canonical_id"],
         "title": item["title"],
-        "text": item["text"],
+        "text": text,
         "language": item.get("language", "unknown"),
         "published_at": item.get("published_at"),
         "url": item.get("url"),
@@ -114,7 +125,7 @@ def _ingest_document(
     _upsert_topics_authors_works(repository, item, now, counts)
     _upsert_document_entity_edges(repository, item, doc_key, raw["_key"], import_run_key, now, counts)
 
-    for chunk in split_text(item["text"]):
+    for chunk in split_text(text):
         c_key = chunk_key(doc_key, chunk.ordinal, chunk.text)
         chunk_doc = {
             "_key": c_key,
@@ -308,8 +319,13 @@ def _counts() -> dict[str, int]:
     }
 
 
-def _deduplicated(created: dict[str, int]) -> dict[str, int]:
-    return {"documents": 0 if created["documents"] > 0 else 1, "chunks": 0 if created["chunks"] > 0 else 1}
+def _deduplicated(total_documents: int, total_chunks: int, created: dict[str, int]) -> dict[str, int]:
+    # Report how many documents/chunks were already present (skipped), computed
+    # from real totals rather than a hardcoded 0/1 flag (finding #35).
+    return {
+        "documents": max(total_documents - created["documents"], 0),
+        "chunks": max(total_chunks - created["chunks"], 0),
+    }
 
 
 def _now() -> str:
