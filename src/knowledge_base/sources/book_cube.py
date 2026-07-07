@@ -10,7 +10,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from knowledge_base.config import Settings
-from knowledge_base.ids import sha256_text, slugify, stable_key, topic_key
+from knowledge_base.ids import sha256_file, sha256_stream, sha256_text, slugify, stable_key, topic_key
 from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
@@ -330,7 +330,7 @@ def _read_archive_directory(path: Path) -> ArchivePayload:
         ref=str(path),
         result_json=str(result_path),
         result_sha256=result_sha,
-        manifest_sha256=_directory_manifest_sha256(path, result_path, result_sha),
+        manifest_sha256=_directory_manifest_sha256(path),
         snapshot=snapshot,
         root_path=result_path.parent,
     )
@@ -344,6 +344,10 @@ def _read_archive_zip(path: Path) -> ArchivePayload:
             if result_name is None:
                 raise ArchiveReadError("result_json_not_found", path)
             payload = archive.read(result_name).decode("utf-8", errors="replace")
+            member_hashes = {}
+            for info in members:
+                with archive.open(info) as handle:
+                    member_hashes[info.filename] = sha256_stream(handle)
     except ArchiveReadError:
         raise
     except (OSError, zipfile.BadZipFile) as error:
@@ -364,7 +368,7 @@ def _read_archive_zip(path: Path) -> ArchivePayload:
         ref=str(path),
         result_json=result_name,
         result_sha256=result_sha,
-        manifest_sha256=_zip_manifest_sha256(members, result_name, result_sha),
+        manifest_sha256=_zip_manifest_sha256(members, member_hashes),
         snapshot=snapshot,
         zip_members=zip_members,
     )
@@ -392,27 +396,23 @@ def _find_result_json_in_zip(members: list[zipfile.ZipInfo]) -> str | None:
     return candidates[0] if candidates else None
 
 
-def _directory_manifest_sha256(path: Path, result_path: Path, result_sha: str) -> str:
-    entries = []
-    for file_path in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
-        relative = file_path.relative_to(path).as_posix()
-        entries.append(
-            {
-                "path": relative,
-                "size_bytes": file_path.stat().st_size,
-                "sha256": result_sha if file_path == result_path else None,
-            },
-        )
+def _directory_manifest_sha256(path: Path) -> str:
+    # Content-hash every file (streaming, so large media is not loaded into memory) so a
+    # same-size replacement changes the manifest and is not treated as unchanged (finding #24).
+    entries = [
+        {
+            "path": file_path.relative_to(path).as_posix(),
+            "size_bytes": file_path.stat().st_size,
+            "sha256": sha256_file(file_path),
+        }
+        for file_path in sorted(candidate for candidate in path.rglob("*") if candidate.is_file())
+    ]
     return sha256_text(json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
 
 
-def _zip_manifest_sha256(members: list[zipfile.ZipInfo], result_name: str, result_sha: str) -> str:
+def _zip_manifest_sha256(members: list[zipfile.ZipInfo], member_hashes: dict[str, str]) -> str:
     entries = [
-        {
-            "path": info.filename,
-            "size_bytes": info.file_size,
-            "sha256": result_sha if info.filename == result_name else None,
-        }
+        {"path": info.filename, "size_bytes": info.file_size, "sha256": member_hashes[info.filename]}
         for info in sorted(members, key=lambda item: item.filename)
     ]
     return sha256_text(json.dumps(entries, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
