@@ -14,7 +14,7 @@ from xml.etree import ElementTree
 from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
 from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
-from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key
+from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
@@ -204,10 +204,6 @@ def canonical_id_from_url_or_guid(url: str | None, guid: str | None) -> str:
         if path:
             return slugify(path.replace("/", "-"), fallback="post")
     return slugify(guid or "post", fallback="post")
-
-
-def topic_key(label: str) -> str:
-    return slugify(label, fallback="topic")
 
 
 def detect_media_type(payload: str) -> str:

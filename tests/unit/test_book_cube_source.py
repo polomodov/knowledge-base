@@ -53,7 +53,9 @@ def test_title_and_canonical_helpers_are_stable() -> None:
 
 def test_topic_key_normalizes_hashtags() -> None:
     assert topic_key("#Books") == "books"
-    assert topic_key("исследования").startswith("topic-topic-")
+    key = topic_key("исследования")
+    assert key.startswith("topic-")
+    assert not key.startswith("topic-topic-")
 
 
 def test_live_fetch_unavailable_for_bad_url() -> None:

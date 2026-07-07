@@ -48,6 +48,9 @@ def test_canonical_id_prefers_url_path_and_falls_back_to_guid() -> None:
 def test_topic_key_normalizes_tags() -> None:
     assert topic_key("Product Thinking") == "product-thinking"
     assert topic_key("AI Tools") == "ai-tools"
+    # Non-ASCII tags must not all collapse into a single "topic" bucket (finding #1).
+    assert topic_key("машинное обучение") != topic_key("базы данных")
+    assert topic_key("машинное обучение") != "topic"
 
 
 def test_live_fetch_unavailable_for_bad_url() -> None:
