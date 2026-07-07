@@ -58,3 +58,32 @@ def test_live_fetch_unavailable_for_bad_url() -> None:
 
     assert error.value.feed_url == "http://127.0.0.1:1/not-running"
     assert error.value.to_payload(DEFAULT_FEED_URL)["error"] == "live_fetch_unavailable"
+
+
+def test_parse_rss_item_missing_link_and_title_falls_back() -> None:
+    # An item without <link>/<title> must still parse with a stable canonical id from the
+    # guid and a default title, not produce null provenance (finding #46).
+    rss = (
+        '<?xml version="1.0"?><rss version="2.0"><channel>'
+        "<title>Feed</title><link>https://tellmeabout.tech/</link>"
+        "<item><guid>post-42</guid><description>Some body text here.</description></item>"
+        "</channel></rss>"
+    )
+    parsed = parse_feed(rss)
+    assert len(parsed.items) == 1
+    item = parsed.items[0]
+    assert item.title == "Untitled"
+    assert item.canonical_id == "post-42"  # derived from guid since there is no link
+    assert item.url is None
+
+
+def test_parse_rss_skips_item_with_empty_text() -> None:
+    rss = (
+        '<?xml version="1.0"?><rss version="2.0"><channel>'
+        "<title>Feed</title><link>https://tellmeabout.tech/</link>"
+        "<item><title>Empty</title><link>https://tellmeabout.tech/empty</link><description></description></item>"
+        "</channel></rss>"
+    )
+    parsed = parse_feed(rss)
+    assert parsed.items == []
+    assert parsed.skipped and parsed.skipped[0]["reason"] == "empty_text"

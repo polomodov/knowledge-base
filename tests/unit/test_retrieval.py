@@ -1,4 +1,26 @@
-from knowledge_base.retrieval import _dedup_best_by_document, _merge_hybrid, _vector_ranked
+from knowledge_base.retrieval import (
+    _cosine,
+    _dedup_best_by_document,
+    _merge_hybrid,
+    _start_vertex,
+    _vector_ranked,
+)
+
+
+def test_cosine_similarity_edge_cases() -> None:
+    assert _cosine([1.0, 0.0], [0.0, 1.0]) == 0.0  # orthogonal
+    assert _cosine([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == 1.0  # identical
+    assert _cosine([1.0, 1.0], [-1.0, -1.0]) == -1.0  # opposite
+    assert _cosine([0.0, 0.0], [1.0, 2.0]) == 0.0  # zero vector -> 0, no ZeroDivisionError
+
+
+def test_start_vertex_precedence_and_none() -> None:
+    assert _start_vertex(topic="t", author="a", work=None, document=None, chunk=None) == "topics/t"
+    assert _start_vertex(topic=None, author="a", work="w", document=None, chunk=None) == "authors/a"
+    assert _start_vertex(topic=None, author=None, work="w", document="d", chunk=None) == "works/w"
+    assert _start_vertex(topic=None, author=None, work=None, document="d", chunk="c") == "documents/d"
+    assert _start_vertex(topic=None, author=None, work=None, document=None, chunk="c") == "chunks/c"
+    assert _start_vertex(topic=None, author=None, work=None, document=None, chunk=None) is None
 
 
 def _text(document_key: str, bm25: float, *, chunk_key: str | None = None, snippet: str = "snippet") -> dict:
