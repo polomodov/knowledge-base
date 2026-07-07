@@ -14,7 +14,7 @@ def rebuild_indexes(repository: KnowledgeRepository, *, target: str = "all") -> 
 
     started = _now()
     index_run_key = stable_key("index", target, started, prefix="index")
-    run = {
+    run: dict[str, Any] = {
         "_key": index_run_key,
         "started_at": started,
         "finished_at": None,

@@ -509,13 +509,13 @@ def _merge_hybrid(
         document_key_value = result["document_key"]
         raw = result["score_components"].get("vector")
         vector = float(raw) if raw is not None else float(result["score"])
-        record = records.get(document_key_value)
-        if record is None:
-            record = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
-        if record["vector"] is None or vector > record["vector"]:
-            record["vector"] = vector
-            if record["bm25"] is None:
-                record["row"] = result
+        existing = records.get(document_key_value)
+        if existing is None:
+            existing = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
+        if existing["vector"] is None or vector > existing["vector"]:
+            existing["vector"] = vector
+            if existing["bm25"] is None:
+                existing["row"] = result
 
     bm25_values = [record["bm25"] for record in records.values() if record["bm25"] is not None]
     low = min(bm25_values) if bm25_values else 0.0

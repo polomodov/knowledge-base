@@ -14,6 +14,7 @@ dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
   "ruff>=0.14",
+  "mypy>=1.13",
 ]
 
 [project.scripts]
@@ -42,6 +43,13 @@ target-version = "py312"
 select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM", "RUF"]
 # Ambiguous-unicode rules fire on intentional Cyrillic content (Russian is a first-class language here).
 ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
 
 [tool.coverage.run]
 source = ["knowledge_base"]

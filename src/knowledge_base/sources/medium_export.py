@@ -100,8 +100,8 @@ class _MediumPostHTMLParser(HTMLParser):
                 self._body_depth += 1
             if tag in BLOCK_TAGS or tag == "br":
                 self.body_parts.append(" ")
-            if tag == "a" and attr.get("href"):
-                self.links.append(attr["href"])
+            if tag == "a" and (href := attr.get("href")):
+                self.links.append(href)
             if tag == "img":
                 image = {
                     "src": attr.get("src"),
@@ -191,7 +191,7 @@ def ingest_medium_export(
     counts["raw_snapshots"] += int(repository.upsert("raw_snapshots", raw)["created"])
 
     import_run_key = stable_key(SOURCE_KEY, "archive", archive.manifest_sha256[:16], now[:10], prefix="import")
-    import_run = {
+    import_run: dict[str, Any] = {
         "_key": import_run_key,
         "started_at": now,
         "finished_at": None,

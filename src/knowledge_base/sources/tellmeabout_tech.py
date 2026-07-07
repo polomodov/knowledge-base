@@ -97,7 +97,7 @@ def ingest_tellmeabout_tech(
     counts["raw_snapshots"] += int(repository.upsert("raw_snapshots", raw)["created"])
 
     import_run_key = stable_key(SOURCE_KEY, feed_payload.kind, feed_payload.sha256[:16], now[:10], prefix="import")
-    import_run = {
+    import_run: dict[str, Any] = {
         "_key": import_run_key,
         "started_at": now,
         "finished_at": None,

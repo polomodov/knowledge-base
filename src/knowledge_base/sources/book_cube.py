@@ -163,7 +163,7 @@ def ingest_book_cube(
     counts["raw_snapshots"] += int(repository.upsert("raw_snapshots", raw)["created"])
 
     import_run_key = stable_key(SOURCE_KEY, snapshot.kind, snapshot.sha256[:16], now[:10], prefix="import")
-    import_run = {
+    import_run: dict[str, Any] = {
         "_key": import_run_key,
         "started_at": now,
         "finished_at": None,
@@ -226,7 +226,7 @@ def ingest_book_cube_archive(
     counts["raw_snapshots"] += int(repository.upsert("raw_snapshots", raw)["created"])
 
     import_run_key = stable_key(SOURCE_KEY, "archive", archive.manifest_sha256[:16], now[:10], prefix="import")
-    import_run = {
+    import_run: dict[str, Any] = {
         "_key": import_run_key,
         "started_at": now,
         "finished_at": None,
@@ -613,9 +613,9 @@ def _attachment_size(
             return candidate.stat().st_size
     if archive is not None and archive.zip_members is not None:
         prefixed = _zip_prefixed_path(relative_path, archive)
-        for candidate in (relative_path, prefixed):
-            if candidate and candidate in archive.zip_members:
-                return archive.zip_members[candidate]
+        for name in (relative_path, prefixed):
+            if name and name in archive.zip_members:
+                return archive.zip_members[name]
     for size_key in (f"{field}_file_size", "file_size", "size"):
         value = message.get(size_key)
         if isinstance(value, int):
