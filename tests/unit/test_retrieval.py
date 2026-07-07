@@ -93,7 +93,7 @@ def test_vector_ranked_grows_window_until_limit_is_filled() -> None:
         {"id": f"d{j}-c0", "key": f"d{j}-c0", "document_key": f"d{j}", "text": "t", "score": 0.5 - j * 1e-4} for j in range(2, 21)
     ]
     repository = _FakeRepository(rows)
-    ranked = _vector_ranked(repository, [0.0] * 8, limit=10, dimension=8, source_key=None)
+    ranked = _vector_ranked(repository, [0.0] * 8, limit=10, source_key=None)
 
     assert ranked is not None
     document_keys = {item["document_key"] for item in ranked}
@@ -103,11 +103,12 @@ def test_vector_ranked_grows_window_until_limit_is_filled() -> None:
     assert len(repository.client.requested) >= 2  # had to grow at least once
 
 
-def test_vector_ranked_skips_index_for_source_or_dimension() -> None:
+def test_vector_ranked_skips_index_for_source_filter() -> None:
+    # The ANN index cannot be combined with a source filter, so that case falls back without
+    # querying the index. Non-default dimensions are served by the index itself (finding #33).
     repository = _FakeRepository([])
-    assert _vector_ranked(repository, [0.0] * 8, limit=10, dimension=8, source_key="src") is None
-    assert _vector_ranked(repository, [0.0] * 16, limit=10, dimension=16, source_key=None) is None
-    assert repository.client.requested == []  # never queried the index in these cases
+    assert _vector_ranked(repository, [0.0] * 8, limit=10, source_key="src") is None
+    assert repository.client.requested == []  # never queried the index for a source-filtered request
 
 
 def test_dedup_best_by_document_keeps_first_per_document() -> None:
