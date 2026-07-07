@@ -11,7 +11,6 @@ from knowledge_base.retrieval import graph_neighbors, hybrid_search, text_search
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.tellmeabout_tech import ingest_tellmeabout_tech
 
-
 pytestmark = pytest.mark.integration
 
 

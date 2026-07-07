@@ -11,7 +11,6 @@ from knowledge_base.sources.medium_export import (
     read_medium_archive_payload,
 )
 
-
 ARCHIVE_DIR = Path("tests/fixtures/medium_export")
 
 

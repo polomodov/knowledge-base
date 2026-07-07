@@ -19,7 +19,6 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
 
-
 SOURCE_KEY = "tellmeabout-tech"
 DISPLAY_NAME = "Tell Me About Tech"
 SITE_URL = "https://tellmeabout.tech/"

@@ -12,7 +12,6 @@ from knowledge_base.sources.book_cube import (
     topic_key,
 )
 
-
 HTML_FIXTURE = Path("tests/fixtures/book_cube_channel.html")
 JSON_FIXTURE = Path("tests/fixtures/book_cube_export.json")
 

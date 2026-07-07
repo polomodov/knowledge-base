@@ -12,7 +12,6 @@ from knowledge_base.ids import chunk_key, document_key, sha256_text, stable_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 
-
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "safe_knowledge_fixture.json"
 
 

@@ -88,11 +88,9 @@ def test_vector_ranked_grows_window_until_limit_is_filled() -> None:
     # A fixed candidate cap would return only that one document, so the window must grow
     # until `limit` distinct documents are collected (PR #8 review).
     rows = [
-        {"id": f"d1-c{i}", "key": f"d1-c{i}", "document_key": "d1", "text": "t", "score": 1.0 - i * 1e-4}
-        for i in range(200)
+        {"id": f"d1-c{i}", "key": f"d1-c{i}", "document_key": "d1", "text": "t", "score": 1.0 - i * 1e-4} for i in range(200)
     ] + [
-        {"id": f"d{j}-c0", "key": f"d{j}-c0", "document_key": f"d{j}", "text": "t", "score": 0.5 - j * 1e-4}
-        for j in range(2, 21)
+        {"id": f"d{j}-c0", "key": f"d{j}-c0", "document_key": f"d{j}", "text": "t", "score": 0.5 - j * 1e-4} for j in range(2, 21)
     ]
     repository = _FakeRepository(rows)
     ranked = _vector_ranked(repository, [0.0] * 8, limit=10, dimension=8, source_key=None)

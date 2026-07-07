@@ -19,7 +19,6 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
 
-
 SOURCE_KEY = "book-cube"
 DISPLAY_NAME = "Книжный куб"
 CHANNEL_URL = "https://t.me/book_cube"

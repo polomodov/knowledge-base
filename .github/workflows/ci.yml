@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - name: Ruff lint
+        run: uv run --extra dev ruff check src tests
+      - name: Ruff format check
+        run: uv run --extra dev ruff format --check src tests
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      arangodb:
+        image: arangodb:3.12
+        env:
+          ARANGO_ROOT_PASSWORD: knowledge-base-dev
+        ports:
+          - 8529:8529
+    env:
+      KB_ARANGO_URL: http://127.0.0.1:8529
+      KB_ARANGO_USER: root
+      KB_ARANGO_PASSWORD: knowledge-base-dev
+      KB_RUN_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install uv
+      - name: Wait for ArangoDB
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -sf -u root:knowledge-base-dev http://127.0.0.1:8529/_api/version >/dev/null; then
+              echo "ArangoDB is ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ArangoDB did not become ready in time" >&2
+          exit 1
+      - name: Tests with coverage (unit + integration)
+        run: uv run --extra dev pytest --cov=knowledge_base --cov-report=term-missing --cov-fail-under=70
