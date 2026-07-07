@@ -1,4 +1,4 @@
-from knowledge_base.retrieval import _merge_hybrid
+from knowledge_base.retrieval import _dedup_best_by_document, _merge_hybrid
 
 
 def _text(document_key: str, bm25: float, *, chunk_key: str | None = None, snippet: str = "snippet") -> dict:
@@ -65,3 +65,16 @@ def test_merge_hybrid_respects_limit() -> None:
     results = _merge_hybrid(text, [], limit=2)
     assert len(results) == 2
     assert [result["document_key"] for result in results] == ["d4", "d3"]
+
+
+def test_dedup_best_by_document_keeps_first_per_document() -> None:
+    # Input is sorted by score descending; the first (best) chunk per document wins,
+    # and order is preserved (finding #14).
+    scored = [
+        {"id": "c1", "document_key": "d1", "score": 0.9},
+        {"id": "c2", "document_key": "d1", "score": 0.7},
+        {"id": "c3", "document_key": "d2", "score": 0.6},
+    ]
+    deduped = _dedup_best_by_document(scored)
+    assert [item["document_key"] for item in deduped] == ["d1", "d2"]
+    assert deduped[0]["id"] == "c1"  # best chunk of d1, not the 0.7 one

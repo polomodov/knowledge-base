@@ -4,6 +4,7 @@ import math
 from typing import Any
 
 from knowledge_base.arango import ArangoError
+from knowledge_base.constants import VECTOR_DIMENSION
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.repository import KnowledgeRepository
 
@@ -83,32 +84,36 @@ def semantic_search(
     source_key: str | None = None,
 ) -> dict[str, Any]:
     query_vector = hash_embedding(query, dimension=dimension)
-    chunks = _semantic_candidate_chunks(repository, dimension=dimension, source_key=source_key)
-    if not chunks:
-        if source_key is not None:
-            return {"query": query, "mode": "semantic", "status": "ok", "results": []}
-        return {
-            "query": query,
-            "mode": "semantic",
-            "status": "degraded",
-            "degraded_components": ["vector"],
-            "results": [],
-        }
+    ranked = _vector_ranked(repository, query_vector, limit=limit, dimension=dimension, source_key=source_key)
+    if ranked is None:
+        # Fallback: full-scan cosine in Python. Used when the ANN index is unavailable,
+        # the embedding dimension differs from the index, or a source filter is set (the
+        # vector index cannot be combined with a filter).
+        chunks = _semantic_candidate_chunks(repository, dimension=dimension, source_key=source_key)
+        if not chunks:
+            if source_key is not None:
+                return {"query": query, "mode": "semantic", "status": "ok", "results": []}
+            return {
+                "query": query,
+                "mode": "semantic",
+                "status": "degraded",
+                "degraded_components": ["vector"],
+                "results": [],
+            }
+        scored = [
+            {
+                "id": chunk["_id"],
+                "key": chunk["_key"],
+                "document_key": chunk["document_key"],
+                "text": chunk["text"],
+                "score": _cosine(query_vector, chunk["embedding"]),
+            }
+            for chunk in chunks
+        ]
+        scored.sort(key=lambda item: item["score"], reverse=True)
+        ranked = _dedup_best_by_document(scored)
 
-    results = []
-    for chunk in chunks:
-        score = _cosine(query_vector, chunk["embedding"])
-        results.append({"chunk": chunk, "score": score})
-    results.sort(key=lambda result: result["score"], reverse=True)
-    # Keep the single best-scoring chunk per document before applying the limit, so
-    # one document does not occupy several slots and hybrid gets `limit` distinct
-    # documents to merge rather than `limit` chunks of a few documents (finding #14).
-    best_per_document: dict[str, dict[str, Any]] = {}
-    for result in results:
-        best_per_document.setdefault(result["chunk"]["document_key"], result)
-    top = list(best_per_document.values())[:limit]
-    hydrated = [_semantic_result_for_chunk(repository, result["chunk"], result["score"]) for result in top]
-    return {"query": query, "mode": "semantic", "status": "ok", "results": hydrated}
+    return {"query": query, "mode": "semantic", "status": "ok", "results": _hydrate_semantic(repository, ranked[:limit])}
 
 
 def _semantic_candidate_chunks(
@@ -147,43 +152,86 @@ def _semantic_candidate_chunks(
         offset += batch_size
 
 
-def _semantic_result_for_chunk(repository: KnowledgeRepository, chunk: dict[str, Any], score: float) -> dict[str, Any]:
-    row = repository.client.aql(
-        """
-        LET doc = DOCUMENT("documents", @document_key)
-        LET raw_edge = FIRST(
-          FOR e IN chunk_derived_from_raw
-            FILTER e._from == @chunk_id
-            LIMIT 1
-            RETURN e
+def _vector_ranked(
+    repository: KnowledgeRepository,
+    query_vector: list[float],
+    *,
+    limit: int,
+    dimension: int,
+    source_key: str | None,
+) -> list[dict[str, Any]] | None:
+    """ANN ranking via the chunks vector index (findings #9, #12).
+
+    Returns the best chunk per document ordered by cosine similarity, or None to signal
+    that the caller should fall back to the full-scan path. The vector index only serves
+    the default embedding dimension and cannot be combined with a source filter, so those
+    cases (and any index error) fall back.
+    """
+    if source_key is not None or dimension != VECTOR_DIMENSION:
+        return None
+    try:
+        candidates = repository.client.aql(
+            """
+            FOR chunk IN chunks
+              LET score = APPROX_NEAR_COSINE(chunk.embedding, @query)
+              SORT score DESC
+              LIMIT @candidates
+              RETURN { id: chunk._id, key: chunk._key, document_key: chunk.document_key, text: chunk.text, score: score }
+            """,
+            {"query": query_vector, "candidates": max(limit * 10, 50)},
         )
-        LET raw = raw_edge ? DOCUMENT(raw_edge._to) : null
-        LET source_edge = doc ? FIRST(FOR e IN document_from_source FILTER e._from == doc._id RETURN e) : null
-        RETURN { doc: doc, raw_edge: raw_edge, raw: raw, source_edge: source_edge }
+    except ArangoError:
+        return None
+    if not candidates:
+        return None
+    return _dedup_best_by_document(candidates)
+
+
+def _dedup_best_by_document(scored: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Keep the single best-scoring chunk per document (input must be sorted by score
+    # descending) so one document does not occupy several result slots (finding #14).
+    best: dict[str, dict[str, Any]] = {}
+    for item in scored:
+        best.setdefault(item["document_key"], item)
+    return list(best.values())
+
+
+def _hydrate_semantic(repository: KnowledgeRepository, ranked: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    # Hydrate all ranked chunks with document + provenance in a single query instead of
+    # one round-trip per result (finding #17). Order of @items is preserved.
+    if not ranked:
+        return []
+    return repository.client.aql(
+        """
+        FOR item IN @items
+          LET doc = DOCUMENT("documents", item.document_key)
+          LET raw_edge = FIRST(FOR e IN chunk_derived_from_raw FILTER e._from == item.id LIMIT 1 RETURN e)
+          LET raw = raw_edge ? DOCUMENT(raw_edge._to) : null
+          LET source_edge = doc ? FIRST(FOR e IN document_from_source FILTER e._from == doc._id RETURN e) : null
+          RETURN {
+            id: item.id,
+            document_key: doc ? doc._key : item.document_key,
+            chunk_key: item.key,
+            title: doc.title,
+            snippet: SUBSTRING(item.text, 0, 240),
+            score: item.score,
+            score_components: { bm25: null, vector: item.score, graph_boost: null },
+            provenance: {
+              source_key: doc.source_key,
+              raw_snapshot_key: raw ? raw._key : null,
+              import_run_key: raw_edge ? raw_edge.import_run_key : (source_edge ? source_edge.import_run_key : null),
+              medium_post: (
+                source_edge != null AND HAS(source_edge, "provenance") AND HAS(source_edge.provenance, "medium_post")
+                  ? source_edge.provenance.medium_post
+                  : null
+              ),
+              url: doc.url,
+              captured_at: raw ? raw.captured_at : null
+            }
+          }
         """,
-        {"document_key": chunk["document_key"], "chunk_id": chunk["_id"]},
-    )[0]
-    doc = row["doc"] or {}
-    raw_edge = row["raw_edge"]
-    raw = row["raw"]
-    source_edge = row["source_edge"]
-    return {
-        "id": chunk["_id"],
-        "document_key": doc.get("_key") or chunk["document_key"],
-        "chunk_key": chunk["_key"],
-        "title": doc.get("title"),
-        "snippet": chunk.get("text", "")[:240],
-        "score": score,
-        "score_components": {"bm25": None, "vector": score, "graph_boost": None},
-        "provenance": {
-            "source_key": doc.get("source_key"),
-            "raw_snapshot_key": raw.get("_key") if raw else None,
-            "import_run_key": raw_edge.get("import_run_key") if raw_edge else None,
-            "medium_post": (source_edge.get("provenance") or {}).get("medium_post") if source_edge else None,
-            "url": doc.get("url"),
-            "captured_at": raw.get("captured_at") if raw else None,
-        },
-    }
+        {"items": ranked},
+    )
 
 
 def graph_neighbors(
