@@ -39,6 +39,27 @@ def test_body_survives_stray_void_end_tag() -> None:
     assert "Part two." in parser.text
 
 
+def test_published_post_with_unparsable_date_is_kept_not_dropped(tmp_path: Path) -> None:
+    # A published post whose dt-published date does not parse must be ingested with a null
+    # published_at, not misclassified as a draft and dropped (PR #17 review; findings #25, #46).
+    root = tmp_path / "export"
+    (root / "posts").mkdir(parents=True)
+    (root / "README.html").write_text("<html></html>", encoding="utf-8")
+    (root / "posts" / "2026_A-Post-abc123abc123.html").write_text(
+        "<html><head><title>A Post</title></head><body>"
+        '<a href="https://medium.com/@me/a-post-abc123abc123" class="p-canonical">c</a>'
+        '<section data-field="body"><p>Body text here.</p></section>'
+        '<footer><time class="dt-published" datetime="whenever, not a date">x</time></footer>'
+        "</body></html>",
+        encoding="utf-8",
+    )
+    parsed = parse_medium_archive(read_medium_archive_payload(root))
+    assert parsed.skipped == []
+    assert len(parsed.items) == 1
+    assert parsed.items[0].metadata["status"] == "published"
+    assert parsed.items[0].published_at is None
+
+
 ARCHIVE_DIR = Path("tests/fixtures/medium_export")
 
 
