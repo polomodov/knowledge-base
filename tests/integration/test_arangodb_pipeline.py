@@ -71,6 +71,11 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert hybrid["status"] in {"ok", "degraded"}
     assert hybrid["results"]
     assert {"bm25", "vector", "graph_boost"} <= set(hybrid["results"][0]["score_components"])
+    # One row per document (finding #14) and no negative fused scores (finding #16).
+    hybrid_keys = [result["document_key"] for result in hybrid["results"]]
+    assert len(hybrid_keys) == len(set(hybrid_keys))
+    assert all(result["score"] >= 0 for result in hybrid["results"])
+    assert all(result["score_components"]["graph_boost"] is None for result in hybrid["results"])
     _assert_provenance(hybrid["results"])
 
 
