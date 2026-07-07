@@ -24,18 +24,20 @@
 
 ## Приоритетный план
 
-Каждый шаг оформляется **отдельным MR** (PR против `main`). Шаги упорядочены по влиянию; внутри шага находки — по важности. Полные формулировки находок — в разделе «Перечень находок».
+**Статус: выполнено (7 июля 2026).** Все 46 находок устранены и смерджены в `main` через 20 отдельных MR. Крупные шаги разбиты на несколько MR (см. колонку «MR»). На каждом MR — зелёный CI (ruff + mypy + pytest-cov; unit + integration против ArangoDB service-container). Каждый комментарий ревью учтён отдельным коммитом.
 
-| Шаг | Ветка / MR | Находки | Статус |
-|----:|------------|---------|--------|
-| 0 | `docs/implementation-audit-plan` | — (этот документ) | 🟡 на ревью |
-| 1 | `fix/unified-topic-key` | #1 #2 | ☐ не начат |
-| 2 | `fix/provenance-and-dedup-reporting` | #11 #34 #35 #36 #37 | ☐ не начат |
-| 3 | `fix/retrieval-quality` | #9 #12 #13 #14 #15 #16 #17 #18 | ☐ не начат |
-| 4 | `fix/security-hardening` | #19 #20 #39 #40 #41 | ☐ не начат |
-| 5 | `chore/engineering-hygiene-and-tests` | #3 #7 #8 #21 #29 #33 #42 #43 #44 #45 #46 | ☐ не начат |
-| 6 | `fix/parser-robustness` | #4 #5 #6 #22 #23 #24 #25 #26 #38 | ☐ не начат |
-| 7 | `docs/cli-contracts-and-config-cleanup` | #10 #27 #28 #30 #31 #32 | ☐ не начат |
+| Шаг | Тема | Находки | MR | Статус |
+|----:|------|---------|-----|--------|
+| 0 | План устранения | — | [#1](https://github.com/polomodov/knowledge-base/pull/1) | ✅ merged |
+| 1 | Единый `topic_key` | #1 #2 | [#2](https://github.com/polomodov/knowledge-base/pull/2) | ✅ merged |
+| 2 | Провенанс и честный дедуп | #11 #34 #35 #36 #37 | [#3](https://github.com/polomodov/knowledge-base/pull/3), [#4](https://github.com/polomodov/knowledge-base/pull/4) | ✅ merged |
+| 3 | Качество retrieval | #9 #12 #13 #14 #15 #16 #17 #18 | [#5](https://github.com/polomodov/knowledge-base/pull/5), [#7](https://github.com/polomodov/knowledge-base/pull/7), [#8](https://github.com/polomodov/knowledge-base/pull/8) | ✅ merged |
+| 4 | Безопасность и приватность | #19 #20 #39 #40 #41 | [#9](https://github.com/polomodov/knowledge-base/pull/9), [#10](https://github.com/polomodov/knowledge-base/pull/10) | ✅ merged |
+| 5 | Инженерная гигиена и тесты | #3 #7 #8 #21 #29 #33 #42 #43 #44 #45 #46 | [#11](https://github.com/polomodov/knowledge-base/pull/11), [#12](https://github.com/polomodov/knowledge-base/pull/12), [#13](https://github.com/polomodov/knowledge-base/pull/13), [#14](https://github.com/polomodov/knowledge-base/pull/14), [#15](https://github.com/polomodov/knowledge-base/pull/15) | ✅ merged |
+| 6 | Робастность парсеров источников | #4 #5 #6 #22 #23 #24 #25 #26 #38 | [#16](https://github.com/polomodov/knowledge-base/pull/16), [#17](https://github.com/polomodov/knowledge-base/pull/17), [#18](https://github.com/polomodov/knowledge-base/pull/18) | ✅ merged |
+| 7 | Конфиг, ошибки и документация | #10 #27 #28 #30 #31 #32 | [#19](https://github.com/polomodov/knowledge-base/pull/19), [#20](https://github.com/polomodov/knowledge-base/pull/20) | ✅ merged |
+
+Роадмап синхронизирован с планом в [#6](https://github.com/polomodov/knowledge-base/pull/6). Ниже — исходные формулировки шагов и полный перечень находок (сохранены для истории).
 
 ### Шаг 1 — Единый topic_key — целостность тем
 
