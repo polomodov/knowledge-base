@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -9,6 +10,24 @@ from dataclasses import dataclass
 from typing import Any
 
 from knowledge_base.config import Settings
+
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+_warned_insecure_transport = False
+
+
+def _warn_insecure_transport(url: str) -> None:
+    # Basic auth is only base64-encoded; warn once if it would be sent in cleartext to a
+    # non-loopback host over http (finding #40).
+    global _warned_insecure_transport
+    if _warned_insecure_transport:
+        return
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme == "http" and (parsed.hostname or "") not in _LOOPBACK_HOSTS:
+        _warned_insecure_transport = True
+        sys.stderr.write(
+            f"warning: sending ArangoDB Basic-auth credentials in cleartext over http to "
+            f"{parsed.hostname}; use https for non-local hosts.\n",
+        )
 
 
 class ArangoError(RuntimeError):
@@ -37,6 +56,7 @@ class ArangoClient:
         request.add_header("Accept", "application/json")
         if data is not None:
             request.add_header("Content-Type", "application/json")
+        _warn_insecure_transport(self.settings.arango_url)
         token = f"{self.settings.arango_user}:{self.settings.arango_password}".encode("utf-8")
         request.add_header("Authorization", f"Basic {base64.b64encode(token).decode('ascii')}")
 

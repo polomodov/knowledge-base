@@ -13,6 +13,7 @@ build/
 .env
 .env.*
 !.env.example
+config/arangodb.env
 .local/
 
 # Personal knowledge data

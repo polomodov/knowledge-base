@@ -35,26 +35,54 @@ def _load_toml(path: Path | None) -> dict[str, Any]:
         return tomllib.load(handle)
 
 
+def _load_env_file(path: Path) -> dict[str, str]:
+    # Parse the gitignored config/arangodb.env (simple KEY=VALUE lines) so the client uses
+    # the same credentials `kb platform up` started the container with (finding #20 / PR #10).
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        values[key.strip()] = value.strip()
+    return values
+
+
 def load_settings(config_path: str | None = None) -> Settings:
     path = Path(config_path).expanduser().resolve() if config_path else None
     data = _load_toml(path)
     arango = data.get("arangodb", {})
     embedding = data.get("embedding", {})
+    env_file = _load_env_file(REPO_ROOT / "config" / "arangodb.env")
+
+    def resolve(key: str, toml_value: Any, default: Any) -> Any:
+        # process env var > TOML (--config) > config/arangodb.env override > default
+        if os.getenv(key) is not None:
+            return os.getenv(key)
+        if toml_value is not None:
+            return toml_value
+        if key in env_file:
+            return env_file[key]
+        return default
 
     password_env = arango.get("password_env", "KB_ARANGO_PASSWORD")
+    password = os.getenv("KB_ARANGO_PASSWORD")
+    if password is None and password_env != "KB_ARANGO_PASSWORD":
+        password = os.getenv(password_env)
+    if password is None:
+        password = arango.get("password")
+    if password is None:
+        password = env_file.get("KB_ARANGO_PASSWORD")
+    if password is None:
+        password = Settings.arango_password
+
     return Settings(
-        arango_url=os.getenv("KB_ARANGO_URL", arango.get("url", Settings.arango_url)).rstrip("/"),
-        arango_database=os.getenv(
-            "KB_ARANGO_DATABASE",
-            arango.get("database", Settings.arango_database),
-        ),
-        arango_user=os.getenv("KB_ARANGO_USER", arango.get("user", Settings.arango_user)),
-        arango_password=os.getenv(
-            "KB_ARANGO_PASSWORD",
-            os.getenv(password_env, arango.get("password", Settings.arango_password)),
-        ),
-        embedding_dimension=int(
-            os.getenv("KB_EMBEDDING_DIMENSION", embedding.get("dimension", Settings.embedding_dimension)),
-        ),
+        arango_url=resolve("KB_ARANGO_URL", arango.get("url"), Settings.arango_url).rstrip("/"),
+        arango_database=resolve("KB_ARANGO_DATABASE", arango.get("database"), Settings.arango_database),
+        arango_user=resolve("KB_ARANGO_USER", arango.get("user"), Settings.arango_user),
+        arango_password=password,
+        embedding_dimension=int(resolve("KB_EMBEDDING_DIMENSION", embedding.get("dimension"), Settings.embedding_dimension)),
         repo_root=REPO_ROOT,
     )
