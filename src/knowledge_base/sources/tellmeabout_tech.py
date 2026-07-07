@@ -59,6 +59,25 @@ class LiveFetchUnavailable(RuntimeError):
         }
 
 
+class FeedParseError(ValueError):
+    """Raised when a fetched/loaded feed is not valid RSS/Atom (finding #6)."""
+
+    def __init__(self, reason: str, feed_ref: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.feed_ref = feed_ref
+
+    def to_payload(self, feed_ref: str | None = None) -> dict[str, Any]:
+        return {
+            "status": "error",
+            "error": "invalid_feed",
+            "source_key": SOURCE_KEY,
+            "feed_ref": feed_ref or self.feed_ref,
+            "hint": LIVE_FETCH_HINT,
+            "reason": self.reason,
+        }
+
+
 class _TextExtractor(HTMLParser):
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -91,7 +110,10 @@ def ingest_tellmeabout_tech(
     except LiveFetchUnavailable as error:
         return error.to_payload(feed_url)
 
-    parsed = parse_feed(feed_payload.payload)
+    try:
+        parsed = parse_feed(feed_payload.payload)
+    except FeedParseError as error:
+        return error.to_payload(feed_payload.ref)
     bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
     now = utc_now()
     counts = empty_counts()
@@ -183,18 +205,21 @@ def fetch_feed_payload(feed_url: str, *, timeout_seconds: float = 15.0) -> str:
 
 
 def parse_feed(payload: str) -> ParsedSourceFeed:
-    root = ElementTree.fromstring(payload)
+    try:
+        root = ElementTree.fromstring(payload)
+    except ElementTree.ParseError as error:
+        raise FeedParseError(f"malformed XML: {error}") from error
     root_name = _local_name(root.tag)
     media_type = detect_media_type(payload)
 
     if root_name == "rss":
         channel = root.find("channel")
         if channel is None:
-            raise ValueError("RSS feed is missing channel")
+            raise FeedParseError("RSS feed is missing a <channel> element")
         return _parse_rss(channel, media_type)
     if root_name == "feed":
         return _parse_atom(root, media_type)
-    raise ValueError(f"Unsupported feed root: {root_name}")
+    raise FeedParseError(f"unsupported feed root element: <{root_name}>")
 
 
 def html_to_text(html: str) -> str:
