@@ -147,7 +147,7 @@ class ArangoClient:
                 return {"name": body.get("name"), "created": False}
             raise
 
-    def aql(self, query: str, bind_vars: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    def aql(self, query: str, bind_vars: dict[str, Any] | None = None) -> list[Any]:
         response = self.request(
             "POST",
             "/_api/cursor",

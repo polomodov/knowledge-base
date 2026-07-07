@@ -18,6 +18,8 @@ jobs:
         run: uv run --extra dev ruff check src tests
       - name: Ruff format check
         run: uv run --extra dev ruff format --check src tests
+      - name: Mypy
+        run: uv run --extra dev mypy
 
   test:
     runs-on: ubuntu-latest

@@ -75,7 +75,7 @@ def ensure_vector_index(client: ArangoClient) -> dict[str, Any]:
 
 
 def _ensure_persistent_indexes(client: ArangoClient) -> list[dict[str, Any]]:
-    definitions = [
+    definitions: list[tuple[str, dict[str, Any]]] = [
         ("sources", {"type": "persistent", "name": "idx_sources_type", "fields": ["type"]}),
         (
             "raw_snapshots",

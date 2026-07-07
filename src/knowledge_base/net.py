@@ -40,7 +40,7 @@ def _resolve_public(host: str, port: int) -> str:
         raise UnsafeUrlError(f"cannot resolve host: {host}")
     for info in infos:
         _reject_non_public(ipaddress.ip_address(info[4][0]), host)
-    return infos[0][4][0]
+    return str(infos[0][4][0])
 
 
 def check_public_url(url: str) -> None:
@@ -66,9 +66,9 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
         self._pinned_ip = pinned_ip
 
     def connect(self) -> None:
-        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout, self.source_address)
-        if self._tunnel_host:
-            self._tunnel()
+        self.sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
+        if self._tunnel_host:  # type: ignore[attr-defined]
+            self._tunnel()  # type: ignore[attr-defined]
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -77,13 +77,13 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         self._pinned_ip = pinned_ip
 
     def connect(self) -> None:
-        sock = socket.create_connection((self._pinned_ip, self.port), self.timeout, self.source_address)
-        if self._tunnel_host:
+        sock = socket.create_connection((self._pinned_ip, self.port), self.timeout)
+        if self._tunnel_host:  # type: ignore[attr-defined]
             self.sock = sock
-            self._tunnel()
+            self._tunnel()  # type: ignore[attr-defined]
             sock = self.sock
         # TLS validates SNI / certificate against the real hostname, not the pinned IP.
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)  # type: ignore[attr-defined]
 
 
 def _guarded_factory(tls: bool) -> Any:
