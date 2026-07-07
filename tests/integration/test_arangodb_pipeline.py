@@ -26,7 +26,9 @@ def test_fixture_pipeline_end_to_end() -> None:
 
     bootstrap_schema(client)
     ingest_result = ingest_fixture(repository, settings)
+    created_before = _document_created_at(repository)
     dedupe_result = ingest_fixture(repository, settings)
+    created_after = _document_created_at(repository)
     index_result = rebuild_indexes(repository, target="all")
     text = text_search(repository, "systems thinking")
     no_match = text_search(repository, "zzzxqvnomatch928371")
@@ -40,6 +42,13 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert ingest_result["status"] == "ok"
     assert dedupe_result["created"]["documents"] == 0
     assert dedupe_result["created"]["chunks"] == 0
+    # created_at is immutable across re-ingest (finding #11).
+    assert created_before
+    assert created_after == created_before
+    # deduplicated report reflects real totals, not a hardcoded flag (finding #35).
+    assert ingest_result["deduplicated"] == {"documents": 0, "chunks": 0}
+    assert dedupe_result["deduplicated"]["documents"] == ingest_result["created"]["documents"]
+    assert dedupe_result["deduplicated"]["chunks"] == ingest_result["created"]["chunks"]
     assert index_result["status"] == "ok"
     assert text["results"]
     assert no_match["results"] == []
@@ -59,6 +68,13 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert hybrid["results"]
     assert {"bm25", "vector", "graph_boost"} <= set(hybrid["results"][0]["score_components"])
     _assert_provenance(hybrid["results"])
+
+
+def _document_created_at(repository: KnowledgeRepository) -> dict[str, str]:
+    rows = repository.client.aql(
+        "FOR d IN documents SORT d._key RETURN {key: d._key, created_at: d.created_at}",
+    )
+    return {row["key"]: row["created_at"] for row in rows}
 
 
 def _assert_provenance(results: list[dict]) -> None:
