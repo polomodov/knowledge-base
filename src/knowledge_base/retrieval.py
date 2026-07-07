@@ -205,11 +205,11 @@ def graph_neighbors(
     if documents_only:
         return _graph_document_neighbors(repository, start=start, limit=limit, source_key=source_key)
 
-    query = """
+    template = """
         LET start = DOCUMENT(@start)
         FILTER start != null
         FOR vertex, edge, path IN 1..2 ANY start GRAPH "knowledge_graph"
-          OPTIONS { order: "bfs", uniqueVertices: "global", uniqueEdges: "path" }
+          __OPTIONS__
           LET kind = IS_SAME_COLLECTION("documents", vertex) ? "document" : (
             IS_SAME_COLLECTION("chunks", vertex) ? "chunk" : (
               IS_SAME_COLLECTION("topics", vertex) ? "topic" : (
@@ -229,8 +229,7 @@ def graph_neighbors(
             )
           )
           FILTER doc != null
-          FILTER @source_key == null OR doc.source_key == @source_key
-          LIMIT @limit
+          __SOURCE_STAGE__
           LET anchor_chunk = IS_SAME_COLLECTION("chunks", vertex) ? vertex : path_chunk
           LET raw_edge = anchor_chunk ? FIRST(FOR e IN chunk_derived_from_raw FILTER e._from == anchor_chunk._id RETURN e) : (
             FIRST(
@@ -291,10 +290,36 @@ def graph_neighbors(
             }
           }
         """
-    rows = repository.client.aql(
-        query,
-        {"start": start, "limit": limit, "source_key": source_key},
-    )
+    if source_key is None:
+        # No source filter: global vertex uniqueness returns each neighbor once and lets
+        # the traversal stop at `limit` without enumerating the whole neighborhood, which
+        # keeps hub vertices fast (findings #13, #18).
+        options = 'OPTIONS { order: "bfs", uniqueVertices: "global", uniqueEdges: "path" }'
+        source_stage = "LIMIT @limit"
+        bind_vars: dict[str, Any] = {"start": start, "limit": limit}
+    else:
+        # Source-scoped: a vertex shared across sources must survive the filter even when
+        # first reached via another source's document, so paths are enumerated and
+        # deduplicated AFTER the source filter rather than during the traversal
+        # (finding #18 / PR #7 review). The filter keeps this set small.
+        options = 'OPTIONS { uniqueEdges: "path" }'
+        source_stage = """
+          FILTER doc.source_key == @source_key
+          COLLECT vertex_id = vertex._id AGGREGATE depth = MIN(LENGTH(path.edges)) INTO group = {
+            vertex: vertex, edge: edge, doc: doc, kind: kind, path_chunk: path_chunk
+          }
+          SORT depth ASC, vertex_id ASC
+          LIMIT @limit
+          LET rep = FIRST(group)
+          LET vertex = rep.vertex
+          LET edge = rep.edge
+          LET doc = rep.doc
+          LET kind = rep.kind
+          LET path_chunk = rep.path_chunk
+        """
+        bind_vars = {"start": start, "limit": limit, "source_key": source_key}
+    query = template.replace("__OPTIONS__", options).replace("__SOURCE_STAGE__", source_stage)
+    rows = repository.client.aql(query, bind_vars)
     return {"query": start, "mode": "graph", "status": "ok", "results": rows}
 
 
