@@ -3,18 +3,18 @@ from __future__ import annotations
 import json
 import re
 import urllib.error
-import urllib.request
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
 from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
 from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
+from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
@@ -409,16 +409,18 @@ def _zip_manifest_sha256(members: list[zipfile.ZipInfo], result_name: str, resul
 
 
 def fetch_snapshot_payload(url: str, *, timeout_seconds: float = 15.0) -> str:
-    request = urllib.request.Request(url, method="GET")
-    request.add_header("Accept", "text/html,application/json;q=0.9,*/*;q=0.8")
-    request.add_header("User-Agent", "knowledge-base-ingest/0.1 (+https://t.me/book_cube)")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    headers = {
+        "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+        "User-Agent": "knowledge-base-ingest/0.1 (+https://t.me/book_cube)",
+    }
     try:
-        with opener.open(request, timeout=timeout_seconds) as response:
+        with open_public_url(url, headers=headers, timeout=timeout_seconds) as response:
             status = getattr(response, "status", 200)
             if status >= 400:
                 raise LiveFetchUnavailable(url, f"HTTP {status}")
             return response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+    except UnsafeUrlError as error:
+        raise LiveFetchUnavailable(url, f"blocked URL: {error}") from error
     except urllib.error.HTTPError as error:
         raise LiveFetchUnavailable(url, f"HTTP {error.code}") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
@@ -583,7 +585,15 @@ def _attachment_relative_path(value: Any) -> str | None:
     stripped = value.strip()
     if not stripped or stripped.startswith("("):
         return None
-    return stripped.replace("\\", "/")
+    normalized = stripped.replace("\\", "/")
+    # Attachment paths come from an attacker-controllable result.json. Reject absolute
+    # paths, Windows drive/UNC paths, and ".." traversal so they cannot be joined with the
+    # archive root to stat() or record files outside the export (finding #41).
+    posix = PurePosixPath(normalized)
+    windows = PureWindowsPath(normalized)
+    if posix.is_absolute() or windows.is_absolute() or windows.drive or ".." in posix.parts:
+        return None
+    return normalized
 
 
 def _attachment_local_path(relative_path: str, archive: ArchivePayload | None) -> str | None:
