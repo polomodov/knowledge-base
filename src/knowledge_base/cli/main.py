@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import traceback
 from pathlib import Path
 
 from knowledge_base.arango import ArangoClient, ArangoError
@@ -31,8 +33,13 @@ def main(argv: list[str] | None = None) -> int:
         return args.handler(args)
     except ArangoError as error:
         return emit_json({"status": "error", "error": str(error), "details": error.payload}, exit_code=1)
-    except Exception as error:  # pragma: no cover - defensive CLI boundary
-        return emit_json({"status": "error", "error": str(error)}, exit_code=1)
+    except Exception as error:  # defensive CLI boundary
+        # Keep the exception type (and, under KB_DEBUG, the traceback) instead of flattening
+        # every failure to a bare message (finding #30).
+        payload = {"status": "error", "error": str(error), "error_type": type(error).__name__}
+        if os.getenv("KB_DEBUG"):
+            payload["traceback"] = traceback.format_exc()
+        return emit_json(payload, exit_code=1)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -123,17 +130,25 @@ def _repo(args: argparse.Namespace) -> KnowledgeRepository:
 
 
 def _platform_up(args: argparse.Namespace) -> int:
-    return emit_json(platform_up(_settings(args)), exit_code=0)
+    result = platform_up(_settings(args))
+    return emit_json(result, exit_code=0 if result["status"] == "started" else 1)
 
 
 def _platform_down(args: argparse.Namespace) -> int:
-    return emit_json(platform_down(_settings(args)), exit_code=0)
+    result = platform_down(_settings(args))
+    return emit_json(result, exit_code=0 if result["status"] == "stopped" else 1)
 
 
 def _platform_health(args: argparse.Namespace) -> int:
     settings = _settings(args)
     report = health_report(ArangoClient(settings))
-    return emit_json(report, exit_code=0 if report["status"] in {"ok", "degraded"} else 1)
+    # Exit non-zero when a core component (server, collections, view, graph) is missing so
+    # scripted readiness gates fail; a degraded-only vector index is tolerated because
+    # semantic search falls back to a full scan (finding #32).
+    core_ready = report["status"] != "error" and all(
+        check["status"] == "ok" for check in report.get("checks", []) if check["name"] != "vector_index"
+    )
+    return emit_json(report, exit_code=0 if core_ready else 1)
 
 
 def _platform_bootstrap(args: argparse.Namespace) -> int:
