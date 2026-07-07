@@ -5,12 +5,24 @@ import pytest
 from knowledge_base.ids import topic_key
 from knowledge_base.sources.tellmeabout_tech import (
     DEFAULT_FEED_URL,
+    FeedParseError,
     LiveFetchUnavailable,
     canonical_id_from_url_or_guid,
     fetch_feed_payload,
     html_to_text,
     parse_feed,
 )
+
+
+def test_parse_feed_raises_structured_error_on_malformed_input() -> None:
+    # Malformed or non-feed XML must raise a typed FeedParseError with a structured payload,
+    # not an opaque ElementTree.ParseError at the CLI boundary (finding #6).
+    for payload in ("<rss><channel><item>", "not xml at all", "<html><body>nope</body></html>"):
+        with pytest.raises(FeedParseError) as error:
+            parse_feed(payload)
+        assert error.value.to_payload("feed.xml")["error"] == "invalid_feed"
+        assert error.value.to_payload("feed.xml")["source_key"] == "tellmeabout-tech"
+
 
 FIXTURE = Path("tests/fixtures/tellmeabout_tech_feed.xml")
 

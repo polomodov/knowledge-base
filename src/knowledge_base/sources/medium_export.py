@@ -83,6 +83,7 @@ class _MediumPostHTMLParser(HTMLParser):
         self.post_url: str | None = None
         self.post_id: str | None = None
         self.published_at: str | None = None
+        self.has_published_time = False
         self.images: list[dict[str, Any]] = []
         self.links: list[str] = []
         self._in_title = False
@@ -138,6 +139,9 @@ class _MediumPostHTMLParser(HTMLParser):
             self._author_depth += 1
 
         if tag == "time" and "dt-published" in classes and attr.get("datetime"):
+            # Track that the post declares a published time separately from whether that time
+            # parses, so an unparsable date does not misclassify a published post as a draft.
+            self.has_published_time = True
             self.published_at = parse_date(attr["datetime"])
 
     def handle_data(self, data: str) -> None:
@@ -436,7 +440,8 @@ def _parse_post(
 
     post_id = parser.post_id or medium_post_id_from_url(parser.canonical_url)
     guid = post_id or post.relative_path
-    status = "draft" if Path(post.relative_path).name.startswith("draft_") or not parser.published_at else "published"
+    is_draft = Path(post.relative_path).name.startswith("draft_") or not parser.has_published_time
+    status = "draft" if is_draft else "published"
     if status == "draft" and not include_drafts:
         return {"guid": guid, "reason": "draft_excluded"}
     if not post_id:

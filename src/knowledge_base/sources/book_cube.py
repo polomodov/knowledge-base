@@ -458,11 +458,10 @@ def canonical_id_from_post(data_post: str | None, message_id: int | str | None) 
 
 
 def title_from_text(text: str, *, max_length: int = 80) -> str:
-    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
-    title = first_line or "Книжный куб"
-    sentence = re.split(r"(?<=[.!?])\s+", title, maxsplit=1)[0]
-    if sentence:
-        title = sentence
+    # Callers pass whitespace-collapsed text (no newlines), so the title is the leading
+    # sentence of the post (finding #38: the previous splitlines() first-line logic was dead).
+    stripped = text.strip() or "Книжный куб"
+    title = re.split(r"(?<=[.!?])\s+", stripped, maxsplit=1)[0] or stripped
     if len(title) <= max_length:
         return title
     return title[: max_length - 3].rstrip() + "..."

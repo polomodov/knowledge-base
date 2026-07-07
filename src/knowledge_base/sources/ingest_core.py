@@ -30,7 +30,11 @@ def utc_now() -> str:
 
 
 def parse_date(value: str | None) -> str | None:
-    """Normalize an RFC 2822 (RSS pubDate) or ISO-8601 timestamp to UTC; raw value on failure."""
+    """Normalize an RFC 2822 (RSS pubDate) or ISO-8601 timestamp to UTC.
+
+    Returns None for missing or unparseable input so published_at is always either a
+    normalized ISO-8601 string or null, never arbitrary junk (finding #25).
+    """
     if not value:
         return None
     try:
@@ -39,7 +43,7 @@ def parse_date(value: str | None) -> str | None:
         try:
             parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
-            return value
+            return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
