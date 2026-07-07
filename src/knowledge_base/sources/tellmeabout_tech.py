@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -15,6 +14,7 @@ from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
 from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
 from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
+from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
@@ -159,16 +159,18 @@ def read_feed_payload(*, input_path: Path | None, feed_url: str) -> FeedPayload:
 
 
 def fetch_feed_payload(feed_url: str, *, timeout_seconds: float = 15.0) -> str:
-    request = urllib.request.Request(feed_url, method="GET")
-    request.add_header("Accept", "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8")
-    request.add_header("User-Agent", "knowledge-base-ingest/0.1 (+https://tellmeabout.tech/)")
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    headers = {
+        "Accept": "application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8",
+        "User-Agent": "knowledge-base-ingest/0.1 (+https://tellmeabout.tech/)",
+    }
     try:
-        with opener.open(request, timeout=timeout_seconds) as response:
+        with open_public_url(feed_url, headers=headers, timeout=timeout_seconds) as response:
             status = getattr(response, "status", 200)
             if status >= 400:
                 raise LiveFetchUnavailable(feed_url, f"HTTP {status}")
             return response.read().decode(response.headers.get_content_charset() or "utf-8", errors="replace")
+    except UnsafeUrlError as error:
+        raise LiveFetchUnavailable(feed_url, f"blocked URL: {error}") from error
     except urllib.error.HTTPError as error:
         raise LiveFetchUnavailable(feed_url, f"HTTP {error.code}") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
