@@ -88,4 +88,15 @@
 
 ## Текущий статус
 
-Сейчас завершены v1 fixture pipeline и v2 source adapters: `tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import. Следующий фокус - прогон реальных локальных archives/snapshots из `data/raw/` и расширение качества extraction/retrieval.
+Сейчас завершены v1 fixture pipeline и v2 source adapters: `tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import.
+
+По итогам аудита реализации (июль 2026) ближайший фокус - устранение находок в порядке приоритета, зафиксированном в [docs/implementation-audit-plan.md](implementation-audit-plan.md):
+
+1. целостность тем - единый `topic_key` для всех адаптеров;
+2. провенанс и честный дедуп (`created_at`, корректные счётчики);
+3. качество retrieval - дедуп выдачи, корректный фьюжн скора, реальное использование vector index;
+4. безопасность и приватность - учётные данные, валидация fetch-URL, экспорт;
+5. инженерная гигиена - общий ingest core, lint/type/coverage, CI;
+6. робастность парсеров источников.
+
+Параллельно - прогон реальных локальных archives/snapshots из `data/raw/` и расширение качества extraction/retrieval.
