@@ -45,10 +45,14 @@ def test_fixture_pipeline_end_to_end() -> None:
     # created_at is immutable across re-ingest (finding #11).
     assert created_before
     assert created_after == created_before
-    # deduplicated report reflects real totals, not a hardcoded flag (finding #35).
-    assert ingest_result["deduplicated"] == {"documents": 0, "chunks": 0}
-    assert dedupe_result["deduplicated"]["documents"] == ingest_result["created"]["documents"]
-    assert dedupe_result["deduplicated"]["chunks"] == ingest_result["created"]["chunks"]
+    # deduplicated is computed from real totals, not a hardcoded flag (finding #35):
+    # created + deduplicated == total, and a second identical ingest deduplicates
+    # everything. Kept independent of any pre-existing DB state.
+    for key in ("documents", "chunks"):
+        total = ingest_result["created"][key] + ingest_result["deduplicated"][key]
+        assert total >= 1
+        assert dedupe_result["created"][key] == 0
+        assert dedupe_result["deduplicated"][key] == total
     assert index_result["status"] == "ok"
     assert text["results"]
     assert no_match["results"] == []
