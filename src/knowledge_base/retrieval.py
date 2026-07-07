@@ -25,8 +25,14 @@ def text_search(
           FILTER doc != null
           FILTER @source_key == null OR doc.source_key == @source_key
           LET score = BM25(item)
-          SORT score DESC
+          COLLECT document_key = doc._key INTO group = { item: item, doc: doc, is_chunk: is_chunk, score: score }
+          LET best = FIRST(FOR candidate IN group SORT candidate.score DESC LIMIT 1 RETURN candidate)
+          SORT best.score DESC
           LIMIT @limit
+          LET item = best.item
+          LET doc = best.doc
+          LET is_chunk = best.is_chunk
+          LET score = best.score
           LET anchor_chunk = is_chunk ? item : FIRST(
             FOR chunk_doc IN chunks
               FILTER chunk_doc.document_key == doc._key
@@ -94,7 +100,14 @@ def semantic_search(
         score = _cosine(query_vector, chunk["embedding"])
         results.append({"chunk": chunk, "score": score})
     results.sort(key=lambda result: result["score"], reverse=True)
-    hydrated = [_semantic_result_for_chunk(repository, result["chunk"], result["score"]) for result in results[:limit]]
+    # Keep the single best-scoring chunk per document before applying the limit, so
+    # one document does not occupy several slots and hybrid gets `limit` distinct
+    # documents to merge rather than `limit` chunks of a few documents (finding #14).
+    best_per_document: dict[str, dict[str, Any]] = {}
+    for result in results:
+        best_per_document.setdefault(result["chunk"]["document_key"], result)
+    top = list(best_per_document.values())[:limit]
+    hydrated = [_semantic_result_for_chunk(repository, result["chunk"], result["score"]) for result in top]
     return {"query": query, "mode": "semantic", "status": "ok", "results": hydrated}
 
 
@@ -367,38 +380,16 @@ def hybrid_search(
 ) -> dict[str, Any]:
     degraded_components: list[str] = []
     try:
-        text = text_search(repository, query, limit=limit, source_key=source_key)["results"]
+        text_results = text_search(repository, query, limit=limit, source_key=source_key)["results"]
     except ArangoError:
-        text = []
+        text_results = []
         degraded_components.append("text")
 
     semantic = semantic_search(repository, query, limit=limit, dimension=dimension, source_key=source_key)
     if semantic["status"] == "degraded":
         degraded_components.append("vector")
 
-    merged: dict[str, dict[str, Any]] = {}
-    for result in text:
-        key = result.get("chunk_key") or result["document_key"]
-        merged[key] = result
-        merged[key]["score"] = _normalize(result["score"])
-    for result in semantic["results"]:
-        key = result.get("chunk_key") or result["document_key"]
-        existing = merged.get(key)
-        if existing:
-            existing["score_components"]["vector"] = result["score_components"]["vector"]
-            existing["score"] += _normalize(result["score"])
-        else:
-            merged[key] = result
-            merged[key]["score"] = _normalize(result["score"])
-
-    tokens = {token.lower() for token in query.split() if token}
-    for result in merged.values():
-        snippet = (result.get("snippet") or "").lower()
-        graph_boost = 0.1 if any(token in snippet for token in tokens) else 0.0
-        result["score_components"]["graph_boost"] = graph_boost
-        result["score"] += graph_boost
-
-    results = sorted(merged.values(), key=lambda item: item["score"], reverse=True)[:limit]
+    results = _merge_hybrid(text_results, semantic["results"], limit=limit)
     return {
         "query": query,
         "mode": "hybrid",
@@ -406,6 +397,65 @@ def hybrid_search(
         "degraded_components": degraded_components,
         "results": results,
     }
+
+
+def _merge_hybrid(
+    text_results: list[dict[str, Any]],
+    semantic_results: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fuse text (BM25) and semantic (cosine) hits into one ranked list.
+
+    Aggregates by document_key so a single document never occupies several slots
+    and its text/semantic hits combine instead of competing (finding #14). BM25 is
+    min-max normalized to [0, 1] over the result set and cosine is clamped to [0, 1],
+    so a negative cosine contributes 0 rather than dragging the combined score below
+    text-only hits (finding #16). Hybrid does not traverse the graph, so graph_boost
+    is left null instead of a misleading lexical substring signal (finding #15).
+    """
+    records: dict[str, dict[str, Any]] = {}
+    for result in text_results:
+        document_key_value = result["document_key"]
+        raw = result["score_components"].get("bm25")
+        bm25 = float(raw) if raw is not None else float(result["score"])
+        record = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
+        if record["bm25"] is None or bm25 > record["bm25"]:
+            record["bm25"] = bm25
+            record["row"] = result
+    for result in semantic_results:
+        document_key_value = result["document_key"]
+        raw = result["score_components"].get("vector")
+        vector = float(raw) if raw is not None else float(result["score"])
+        record = records.get(document_key_value)
+        if record is None:
+            record = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
+        if record["vector"] is None or vector > record["vector"]:
+            record["vector"] = vector
+            if record["bm25"] is None:
+                record["row"] = result
+
+    bm25_values = [record["bm25"] for record in records.values() if record["bm25"] is not None]
+    low = min(bm25_values) if bm25_values else 0.0
+    high = max(bm25_values) if bm25_values else 0.0
+
+    fused: list[dict[str, Any]] = []
+    for document_key_value, record in records.items():
+        if record["bm25"] is None:
+            norm_text = 0.0
+        elif high <= low:
+            norm_text = 1.0
+        else:
+            norm_text = (record["bm25"] - low) / (high - low)
+        norm_vector = max(0.0, record["vector"]) if record["vector"] is not None else 0.0
+        row = dict(record["row"])
+        row["document_key"] = document_key_value
+        row["score_components"] = {"bm25": record["bm25"], "vector": record["vector"], "graph_boost": None}
+        row["score"] = round(norm_text + norm_vector, 6)
+        fused.append(row)
+
+    fused.sort(key=lambda item: item["score"], reverse=True)
+    return fused[:limit]
 
 
 def _start_vertex(
@@ -434,9 +484,3 @@ def _cosine(left: list[float], right: list[float]) -> float:
     if denominator == 0:
         return 0.0
     return round(sum(a * b for a, b in zip(left, right, strict=False)) / denominator, 6)
-
-
-def _normalize(value: float | int | None) -> float:
-    if value is None:
-        return 0.0
-    return float(value) / (1.0 + abs(float(value)))
