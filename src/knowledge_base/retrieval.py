@@ -169,22 +169,33 @@ def _vector_ranked(
     """
     if source_key is not None or dimension != VECTOR_DIMENSION:
         return None
-    try:
-        candidates = repository.client.aql(
-            """
-            FOR chunk IN chunks
-              LET score = APPROX_NEAR_COSINE(chunk.embedding, @query)
-              SORT score DESC
-              LIMIT @candidates
-              RETURN { id: chunk._id, key: chunk._key, document_key: chunk.document_key, text: chunk.text, score: score }
-            """,
-            {"query": query_vector, "candidates": max(limit * 10, 50)},
-        )
-    except ArangoError:
-        return None
-    if not candidates:
-        return None
-    return _dedup_best_by_document(candidates)
+    # Grow the ANN candidate window until we have `limit` distinct documents or the index
+    # has returned everything it holds, so one long document contributing many near chunks
+    # cannot starve the result of other documents (PR #8 review, finding #14).
+    candidates_limit = max(limit * 10, 50)
+    deduped: list[dict[str, Any]] = []
+    for _ in range(8):
+        try:
+            candidates = repository.client.aql(
+                """
+                FOR chunk IN chunks
+                  LET score = APPROX_NEAR_COSINE(chunk.embedding, @query)
+                  SORT score DESC
+                  LIMIT @candidates
+                  RETURN { id: chunk._id, key: chunk._key, document_key: chunk.document_key, text: chunk.text, score: score }
+                """,
+                {"query": query_vector, "candidates": candidates_limit},
+            )
+        except ArangoError:
+            return None
+        if not candidates:
+            return None
+        deduped = _dedup_best_by_document(candidates)
+        # Enough distinct documents, or the index returned fewer rows than asked (exhausted).
+        if len(deduped) >= limit or len(candidates) < candidates_limit:
+            return deduped
+        candidates_limit *= 4
+    return deduped
 
 
 def _dedup_best_by_document(scored: list[dict[str, Any]]) -> list[dict[str, Any]]:
