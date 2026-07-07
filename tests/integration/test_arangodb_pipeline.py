@@ -1,3 +1,4 @@
+import itertools
 import os
 
 import pytest
@@ -57,6 +58,10 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert no_match["results"] == []
     # text and semantic each return at most one row per document (finding #14).
     assert _unique_document_keys(text["results"])
+    # Results are ranked by descending score, not merely present (finding #45).
+    assert _monotonic_non_increasing([result["score"] for result in text["results"]])
+    # The fixture document (source fixture-notebook) matches "systems thinking" and is ranked.
+    assert any(result["provenance"]["source_key"] == "fixture-notebook" for result in text["results"])
     _assert_provenance(text["results"])
     assert semantic["status"] in {"ok", "degraded"}
     assert _unique_document_keys(semantic["results"])
@@ -83,8 +88,9 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert hybrid["status"] in {"ok", "degraded"}
     assert hybrid["results"]
     assert {"bm25", "vector", "graph_boost"} <= set(hybrid["results"][0]["score_components"])
-    # One row per document (finding #14) and no negative fused scores (finding #16).
+    # One row per document (finding #14), descending scores, no negative fused scores (findings #45, #16).
     assert _unique_document_keys(hybrid["results"])
+    assert _monotonic_non_increasing([result["score"] for result in hybrid["results"]])
     assert all(result["score"] >= 0 for result in hybrid["results"])
     assert all(result["score_components"]["graph_boost"] is None for result in hybrid["results"])
     _assert_provenance(hybrid["results"])
@@ -155,6 +161,10 @@ def test_graph_source_filter_keeps_cross_source_shared_vertices() -> None:
 def _unique_document_keys(results: list[dict]) -> bool:
     keys = [result["document_key"] for result in results]
     return len(keys) == len(set(keys))
+
+
+def _monotonic_non_increasing(scores: list[float]) -> bool:
+    return all(earlier >= later for earlier, later in itertools.pairwise(scores))
 
 
 def _document_created_at(repository: KnowledgeRepository) -> dict[str, str]:

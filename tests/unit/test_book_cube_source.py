@@ -64,3 +64,15 @@ def test_live_fetch_unavailable_for_bad_url() -> None:
     payload = error.value.to_payload(DEFAULT_PUBLIC_URL)
     assert payload["error"] == "live_fetch_unavailable"
     assert payload["source_key"] == "book-cube"
+
+
+def test_parse_snapshot_html_without_messages_is_empty() -> None:
+    # An HTML page with no Telegram message widgets yields no items (finding #46).
+    parsed = parse_snapshot("<html><body><div>no telegram messages here</div></body></html>", media_type="text/html")
+    assert parsed.items == []
+
+
+def test_parse_snapshot_json_without_messages_key_is_empty() -> None:
+    parsed = parse_snapshot('{"name": "Книжный куб"}', media_type="application/json")
+    assert parsed.items == []
+    assert parsed.title == "Книжный куб"
