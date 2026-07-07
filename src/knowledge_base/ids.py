@@ -15,6 +15,24 @@ def slugify(value: str, *, fallback: str = "item") -> str:
     return slug or fallback
 
 
+def topic_key(label: str) -> str:
+    """Canonical, non-ASCII-safe topic key shared by every source adapter.
+
+    ASCII labels collapse to a readable slug ("Product Thinking" -> "product-thinking").
+    Non-ASCII (e.g. Cyrillic) or slug-empty labels get a stable, collision-free
+    hash-suffixed key ("машинное обучение" -> "topic-<digest>") instead of every
+    distinct label collapsing into a single "topic" bucket. A given label always
+    yields the same key regardless of which adapter produced it.
+    """
+    normalized = label.lstrip("#").strip().lower()
+    if not normalized:
+        return "topic"
+    slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9_-]+", "-", normalized)).strip("-_")
+    if slug and normalized.isascii():
+        return slug
+    return f"topic-{sha256_text(normalized)[:12]}"
+
+
 def stable_key(*parts: str, prefix: str | None = None, max_slug: int = 64) -> str:
     visible = slugify("-".join(part for part in parts if part), fallback=prefix or "item")[:max_slug]
     digest = sha256_text("|".join(parts))[:12]

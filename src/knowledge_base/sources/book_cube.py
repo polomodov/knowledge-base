@@ -14,7 +14,7 @@ from typing import Any
 from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
 from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
-from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key
+from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
@@ -454,15 +454,6 @@ def title_from_text(text: str, *, max_length: int = 80) -> str:
     if len(title) <= max_length:
         return title
     return title[: max_length - 3].rstrip() + "..."
-
-
-def topic_key(label: str) -> str:
-    normalized = label.lstrip("#").strip().lower()
-    if not normalized.isascii():
-        return stable_key(normalized, prefix="topic")
-    slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", normalized)
-    slug = re.sub(r"-{2,}", "-", slug).strip("-_")
-    return slug or "topic"
 
 
 def _parse_public_html(payload: str) -> ParsedSourceFeed:
