@@ -12,14 +12,14 @@ from knowledge_base.constants import (
 )
 
 
-def bootstrap_schema(client: ArangoClient) -> dict[str, Any]:
+def bootstrap_schema(client: ArangoClient, *, embedding_dimension: int = VECTOR_DIMENSION) -> dict[str, Any]:
     client.ensure_database()
     collections = [_safe(lambda name=name: client.ensure_collection(name), name) for name in DOCUMENT_COLLECTIONS]
     edges = [_safe(lambda name=name: client.ensure_collection(name, edge=True), name) for name in EDGE_COLLECTIONS]
     indexes = _ensure_persistent_indexes(client)
     view = _safe(lambda: client.ensure_view(_text_view_body()), TEXT_VIEW_NAME)
     graph = _safe(lambda: client.ensure_graph(_graph_body()), GRAPH_NAME)
-    vector = ensure_vector_index(client)
+    vector = ensure_vector_index(client, dimension=embedding_dimension)
     return {
         "collections": collections,
         "edge_collections": edges,
@@ -56,14 +56,14 @@ def health_report(client: ArangoClient) -> dict[str, Any]:
     }
 
 
-def ensure_vector_index(client: ArangoClient) -> dict[str, Any]:
+def ensure_vector_index(client: ArangoClient, *, dimension: int = VECTOR_DIMENSION) -> dict[str, Any]:
     body = {
         "type": "vector",
         "name": "idx_chunks_embedding_vector",
         "fields": ["embedding"],
         "params": {
             "metric": "cosine",
-            "dimension": VECTOR_DIMENSION,
+            "dimension": dimension,
             "nLists": 1,
         },
     }

@@ -16,7 +16,7 @@ FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "safe_knowledge_fixture.json"
 
 
 def ingest_fixture(repository: KnowledgeRepository, settings: Settings, fixture_path: Path = FIXTURE_PATH) -> dict[str, Any]:
-    bootstrap_schema(repository.client)
+    bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
     now = _now()
     import_run_key = stable_key("fixture", fixture_path.name, now[:10], prefix="import")

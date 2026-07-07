@@ -152,7 +152,7 @@ def ingest_book_cube(
         return error.to_payload(url)
 
     parsed = parse_snapshot(snapshot.payload, media_type=snapshot.media_type)
-    bootstrap_schema(repository.client)
+    bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
     now = _now()
     counts = _counts()
 
@@ -215,7 +215,7 @@ def ingest_book_cube_archive(
     except (json.JSONDecodeError, TypeError, ValueError) as error:
         return ArchiveReadError("invalid_telegram_export", archive_path, str(error)).to_payload()
 
-    bootstrap_schema(repository.client)
+    bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
     now = _now()
     counts = _counts()
 

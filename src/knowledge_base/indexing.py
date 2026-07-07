@@ -3,12 +3,18 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from knowledge_base.constants import VECTOR_DIMENSION
 from knowledge_base.ids import stable_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 
 
-def rebuild_indexes(repository: KnowledgeRepository, *, target: str = "all") -> dict[str, Any]:
+def rebuild_indexes(
+    repository: KnowledgeRepository,
+    *,
+    target: str = "all",
+    embedding_dimension: int = VECTOR_DIMENSION,
+) -> dict[str, Any]:
     if target not in {"all", "text", "vector", "graph"}:
         raise ValueError(f"Invalid index target: {target}")
 
@@ -24,7 +30,7 @@ def rebuild_indexes(repository: KnowledgeRepository, *, target: str = "all") -> 
         "error": None,
     }
     repository.upsert("index_runs", run)
-    bootstrap = bootstrap_schema(repository.client)
+    bootstrap = bootstrap_schema(repository.client, embedding_dimension=embedding_dimension)
     counts = {
         "documents": repository.count("documents"),
         "chunks": repository.count("chunks"),
