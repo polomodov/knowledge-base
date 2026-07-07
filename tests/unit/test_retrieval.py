@@ -1,4 +1,4 @@
-from knowledge_base.retrieval import _merge_hybrid
+from knowledge_base.retrieval import _dedup_best_by_document, _merge_hybrid, _vector_ranked
 
 
 def _text(document_key: str, bm25: float, *, chunk_key: str | None = None, snippet: str = "snippet") -> dict:
@@ -65,3 +65,61 @@ def test_merge_hybrid_respects_limit() -> None:
     results = _merge_hybrid(text, [], limit=2)
     assert len(results) == 2
     assert [result["document_key"] for result in results] == ["d4", "d3"]
+
+
+class _FakeClient:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.requested: list[int] = []
+
+    def aql(self, query: str, bind_vars: dict) -> list[dict]:
+        candidates = bind_vars["candidates"]
+        self.requested.append(candidates)
+        return [dict(row) for row in self.rows[:candidates]]
+
+
+class _FakeRepository:
+    def __init__(self, rows: list[dict]) -> None:
+        self.client = _FakeClient(rows)
+
+
+def test_vector_ranked_grows_window_until_limit_is_filled() -> None:
+    # One long document owns the 200 nearest chunks; 19 other documents sit just below.
+    # A fixed candidate cap would return only that one document, so the window must grow
+    # until `limit` distinct documents are collected (PR #8 review).
+    rows = [
+        {"id": f"d1-c{i}", "key": f"d1-c{i}", "document_key": "d1", "text": "t", "score": 1.0 - i * 1e-4}
+        for i in range(200)
+    ] + [
+        {"id": f"d{j}-c0", "key": f"d{j}-c0", "document_key": f"d{j}", "text": "t", "score": 0.5 - j * 1e-4}
+        for j in range(2, 21)
+    ]
+    repository = _FakeRepository(rows)
+    ranked = _vector_ranked(repository, [0.0] * 8, limit=10, dimension=8, source_key=None)
+
+    assert ranked is not None
+    document_keys = {item["document_key"] for item in ranked}
+    assert len(document_keys) >= 10  # not starved to a single document
+    assert {"d1", "d20"} <= document_keys
+    assert repository.client.requested[0] == 100  # started at max(limit*10, 50)
+    assert len(repository.client.requested) >= 2  # had to grow at least once
+
+
+def test_vector_ranked_skips_index_for_source_or_dimension() -> None:
+    repository = _FakeRepository([])
+    assert _vector_ranked(repository, [0.0] * 8, limit=10, dimension=8, source_key="src") is None
+    assert _vector_ranked(repository, [0.0] * 16, limit=10, dimension=16, source_key=None) is None
+    assert repository.client.requested == []  # never queried the index in these cases
+
+
+def test_dedup_best_by_document_keeps_first_per_document() -> None:
+    # Input is sorted by score descending; the first (best) chunk per document wins,
+    # and order is preserved (finding #14).
+    scored = [
+        {"id": "c1", "document_key": "d1", "score": 0.9},
+        {"id": "c2", "document_key": "d1", "score": 0.7},
+        {"id": "c3", "document_key": "d2", "score": 0.6},
+    ]
+    deduped = _dedup_best_by_document(scored)
+    assert [item["document_key"] for item in deduped] == ["d1", "d2"]
+    assert deduped[0]["id"] == "c1"  # best chunk of d1, not the 0.7 one
