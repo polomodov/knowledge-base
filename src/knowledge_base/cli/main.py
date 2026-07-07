@@ -138,7 +138,8 @@ def _platform_health(args: argparse.Namespace) -> int:
 
 def _platform_bootstrap(args: argparse.Namespace) -> int:
     settings = _settings(args)
-    return emit_json({"status": "ok", "bootstrap": bootstrap_schema(ArangoClient(settings))})
+    bootstrap = bootstrap_schema(ArangoClient(settings), embedding_dimension=settings.embedding_dimension)
+    return emit_json({"status": "ok", "bootstrap": bootstrap})
 
 
 def _ingest_fixture(args: argparse.Namespace) -> int:
@@ -178,7 +179,10 @@ def _ingest_medium_export(args: argparse.Namespace) -> int:
 
 
 def _index_rebuild(args: argparse.Namespace) -> int:
-    return emit_json(rebuild_indexes(_repo(args), target=args.target))
+    settings = _settings(args)
+    return emit_json(
+        rebuild_indexes(_repo(args), target=args.target, embedding_dimension=settings.embedding_dimension),
+    )
 
 
 def _search_text(args: argparse.Namespace) -> int:

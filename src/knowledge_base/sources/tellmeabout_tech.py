@@ -86,7 +86,7 @@ def ingest_tellmeabout_tech(
         return error.to_payload(feed_url)
 
     parsed = parse_feed(feed_payload.payload)
-    bootstrap_schema(repository.client)
+    bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
     now = _now()
     counts = _counts()
 

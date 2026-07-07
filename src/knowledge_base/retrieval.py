@@ -4,7 +4,6 @@ import math
 from typing import Any
 
 from knowledge_base.arango import ArangoError
-from knowledge_base.constants import VECTOR_DIMENSION
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.repository import KnowledgeRepository
 
@@ -84,7 +83,7 @@ def semantic_search(
     source_key: str | None = None,
 ) -> dict[str, Any]:
     query_vector = hash_embedding(query, dimension=dimension)
-    ranked = _vector_ranked(repository, query_vector, limit=limit, dimension=dimension, source_key=source_key)
+    ranked = _vector_ranked(repository, query_vector, limit=limit, source_key=source_key)
     if ranked is None:
         # Fallback: full-scan cosine in Python. Used when the ANN index is unavailable,
         # the embedding dimension differs from the index, or a source filter is set (the
@@ -157,17 +156,16 @@ def _vector_ranked(
     query_vector: list[float],
     *,
     limit: int,
-    dimension: int,
     source_key: str | None,
 ) -> list[dict[str, Any]] | None:
     """ANN ranking via the chunks vector index (findings #9, #12).
 
     Returns the best chunk per document ordered by cosine similarity, or None to signal
-    that the caller should fall back to the full-scan path. The vector index only serves
-    the default embedding dimension and cannot be combined with a source filter, so those
-    cases (and any index error) fall back.
+    that the caller should fall back to the full-scan path. The index is built for the
+    configured embedding dimension, so it serves any dimension; only a source filter (which
+    the index cannot be combined with) or an index error force the fallback.
     """
-    if source_key is not None or dimension != VECTOR_DIMENSION:
+    if source_key is not None:
         return None
     # Grow the ANN candidate window until we have `limit` distinct documents or the index
     # has returned everything it holds, so one long document contributing many near chunks

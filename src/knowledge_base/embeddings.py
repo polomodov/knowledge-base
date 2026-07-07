@@ -4,11 +4,13 @@ import hashlib
 import math
 import re
 
+from knowledge_base.constants import VECTOR_DIMENSION
+
 TOKEN_RE = re.compile(r"[a-zA-Zа-яА-Я0-9_-]+")
 HASH_EMBEDDING_MODEL = "hash-v1"
 
 
-def hash_embedding(text: str, *, dimension: int = 8) -> list[float]:
+def hash_embedding(text: str, *, dimension: int = VECTOR_DIMENSION) -> list[float]:
     """Deterministic local embedding for tests and local-only source slices.
 
     This is not a semantic model. It is intentionally small, private, and
@@ -34,11 +36,11 @@ def hash_embedding(text: str, *, dimension: int = 8) -> list[float]:
     return [round(value / norm, 6) for value in vector]
 
 
-def fixture_embedding(text: str, *, dimension: int = 8) -> list[float]:
+def fixture_embedding(text: str, *, dimension: int = VECTOR_DIMENSION) -> list[float]:
     return hash_embedding(text, dimension=dimension)
 
 
-def validate_vector(vector: list[float], *, dimension: int = 8) -> None:
+def validate_vector(vector: list[float], *, dimension: int = VECTOR_DIMENSION) -> None:
     if len(vector) != dimension:
         raise ValueError(f"Expected vector dimension {dimension}, got {len(vector)}")
     if any(not isinstance(value, int | float) for value in vector):

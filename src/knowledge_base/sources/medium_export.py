@@ -180,7 +180,7 @@ def ingest_medium_export(
     except (OSError, UnicodeDecodeError, ValueError, zipfile.BadZipFile) as error:
         return MediumArchiveReadError("invalid_medium_export", archive_path, str(error)).to_payload()
 
-    bootstrap_schema(repository.client)
+    bootstrap_schema(repository.client, embedding_dimension=settings.embedding_dimension)
     now = _now()
     counts = _counts()
 

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from knowledge_base.constants import VECTOR_DIMENSION
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
@@ -20,7 +22,7 @@ class Settings:
     arango_database: str = "knowledge_base"
     arango_user: str = "root"
     arango_password: str = "knowledge-base-dev"
-    embedding_dimension: int = 8
+    embedding_dimension: int = VECTOR_DIMENSION
     repo_root: Path = REPO_ROOT
 
 
