@@ -70,6 +70,16 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert {result["kind"] for result in topic_graph["results"]} & {"document", "chunk", "topic", "author", "work"}
     assert {result["kind"] for result in author_graph["results"]} & {"document", "topic", "work"}
     assert {result["kind"] for result in work_graph["results"]} & {"document", "topic", "author"}
+    # Each graph vertex is returned once (finding #13).
+    for graph_result in (topic_graph, author_graph, work_graph):
+        ids = [result["id"] for result in graph_result["results"]]
+        assert len(ids) == len(set(ids))
+    # Source filter stays consistent with the unfiltered branch and still dedups (finding #18).
+    filtered_topic = graph_neighbors(repository, topic="systems-thinking", source_key="fixture-notebook")
+    assert filtered_topic["status"] == "ok"
+    assert filtered_topic["results"]
+    assert len({result["id"] for result in filtered_topic["results"]}) == len(filtered_topic["results"])
+    assert all(result["provenance"]["source_key"] == "fixture-notebook" for result in filtered_topic["results"])
     _assert_provenance(topic_graph["results"])
     assert hybrid["status"] in {"ok", "degraded"}
     assert hybrid["results"]

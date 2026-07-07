@@ -205,13 +205,11 @@ def graph_neighbors(
     if documents_only:
         return _graph_document_neighbors(repository, start=start, limit=limit, source_key=source_key)
 
-    early_limit = "LIMIT @limit" if source_key is None else ""
-    filtered_limit = "" if source_key is None else "LIMIT @limit"
     query = """
         LET start = DOCUMENT(@start)
         FILTER start != null
         FOR vertex, edge, path IN 1..2 ANY start GRAPH "knowledge_graph"
-          __EARLY_LIMIT__
+          OPTIONS { order: "bfs", uniqueVertices: "global", uniqueEdges: "path" }
           LET kind = IS_SAME_COLLECTION("documents", vertex) ? "document" : (
             IS_SAME_COLLECTION("chunks", vertex) ? "chunk" : (
               IS_SAME_COLLECTION("topics", vertex) ? "topic" : (
@@ -232,7 +230,7 @@ def graph_neighbors(
           )
           FILTER doc != null
           FILTER @source_key == null OR doc.source_key == @source_key
-          __FILTERED_LIMIT__
+          LIMIT @limit
           LET anchor_chunk = IS_SAME_COLLECTION("chunks", vertex) ? vertex : path_chunk
           LET raw_edge = anchor_chunk ? FIRST(FOR e IN chunk_derived_from_raw FILTER e._from == anchor_chunk._id RETURN e) : (
             FIRST(
@@ -294,7 +292,7 @@ def graph_neighbors(
           }
         """
     rows = repository.client.aql(
-        query.replace("__EARLY_LIMIT__", early_limit).replace("__FILTERED_LIMIT__", filtered_limit),
+        query,
         {"start": start, "limit": limit, "source_key": source_key},
     )
     return {"query": start, "mode": "graph", "status": "ok", "results": rows}
