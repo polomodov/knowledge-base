@@ -37,7 +37,7 @@
 | 6 | Робастность парсеров источников | #4 #5 #6 #22 #23 #24 #25 #26 #38 | [#16](https://github.com/polomodov/knowledge-base/pull/16), [#17](https://github.com/polomodov/knowledge-base/pull/17), [#18](https://github.com/polomodov/knowledge-base/pull/18) | ✅ merged |
 | 7 | Конфиг, ошибки и документация | #10 #27 #28 #30 #31 #32 | [#19](https://github.com/polomodov/knowledge-base/pull/19), [#20](https://github.com/polomodov/knowledge-base/pull/20) | ✅ merged |
 
-Роадмап синхронизирован с планом в [#6](https://github.com/polomodov/knowledge-base/pull/6). Ниже — исходные формулировки шагов и полный перечень находок (сохранены для истории).
+`docs/roadmap.md` отражает завершение аудита; исходная синхронизация с планом — в [#6](https://github.com/polomodov/knowledge-base/pull/6). Ниже — исходные формулировки шагов и полный перечень находок (сохранены для истории).
 
 ### Шаг 1 — Единый topic_key — целостность тем
 
