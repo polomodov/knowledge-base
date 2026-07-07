@@ -12,7 +12,6 @@ from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_se
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.medium_export import ingest_medium_export
 
-
 pytestmark = pytest.mark.integration
 
 

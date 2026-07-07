@@ -57,7 +57,7 @@ class ArangoClient:
         if data is not None:
             request.add_header("Content-Type", "application/json")
         _warn_insecure_transport(self.settings.arango_url)
-        token = f"{self.settings.arango_user}:{self.settings.arango_password}".encode("utf-8")
+        token = f"{self.settings.arango_user}:{self.settings.arango_password}".encode()
         request.add_header("Authorization", f"Basic {base64.b64encode(token).decode('ascii')}")
 
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))

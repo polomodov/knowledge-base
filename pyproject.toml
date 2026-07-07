@@ -10,6 +10,11 @@ dependencies = []
 test = [
   "pytest>=8.0",
 ]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.14",
+]
 
 [project.scripts]
 kb = "knowledge_base.cli.main:main"
@@ -27,3 +32,17 @@ pythonpath = ["src"]
 markers = [
   "integration: tests that require a running ArangoDB service",
 ]
+
+[tool.ruff]
+# 130 keeps embedded AQL query strings and descriptive schema/index literals on single lines.
+line-length = 130
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM", "RUF"]
+# Ambiguous-unicode rules fire on intentional Cyrillic content (Russian is a first-class language here).
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.coverage.run]
+source = ["knowledge_base"]
+branch = true

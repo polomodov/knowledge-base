@@ -10,7 +10,6 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_search, text_search
 from knowledge_base.schema import bootstrap_schema
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -125,8 +124,10 @@ def test_graph_source_filter_keeps_cross_source_shared_vertices() -> None:
                 "created_at": now,
             },
         )
-        for collection, target in (("document_mentions_topic", f"topics/{topic}"),
-                                   ("document_mentions_author", f"authors/{author}")):
+        for collection, target in (
+            ("document_mentions_topic", f"topics/{topic}"),
+            ("document_mentions_author", f"authors/{author}"),
+        ):
             repository.upsert_edge(
                 collection,
                 {

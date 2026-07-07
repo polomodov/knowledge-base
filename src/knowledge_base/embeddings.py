@@ -4,7 +4,6 @@ import hashlib
 import math
 import re
 
-
 TOKEN_RE = re.compile(r"[a-zA-Zа-яА-Я0-9_-]+")
 HASH_EMBEDDING_MODEL = "hash-v1"
 

@@ -12,7 +12,6 @@ from knowledge_base.sources.tellmeabout_tech import (
     topic_key,
 )
 
-
 FIXTURE = Path("tests/fixtures/tellmeabout_tech_feed.xml")
 
 

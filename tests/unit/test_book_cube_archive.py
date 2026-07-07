@@ -8,7 +8,6 @@ from knowledge_base.sources.book_cube import (
     read_archive_payload,
 )
 
-
 ARCHIVE_DIR = Path("tests/fixtures/book_cube_owner_export")
 
 

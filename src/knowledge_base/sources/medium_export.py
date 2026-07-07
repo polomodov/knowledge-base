@@ -18,7 +18,6 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
 
-
 SOURCE_KEY = "medium-export"
 DISPLAY_NAME = "Medium Export"
 ARCHIVE_HINT = "Copy Medium export under data/raw/medium/ and rerun with --archive."

@@ -12,7 +12,6 @@ from knowledge_base.retrieval import graph_neighbors, hybrid_search, text_search
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.book_cube import ingest_book_cube_archive
 
-
 pytestmark = pytest.mark.integration
 
 
