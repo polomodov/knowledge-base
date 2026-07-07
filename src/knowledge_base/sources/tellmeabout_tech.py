@@ -230,12 +230,16 @@ def html_to_text(html: str) -> str:
 
 
 def canonical_id_from_url_or_guid(url: str | None, guid: str | None) -> str:
+    # Append a short hash of the exact source string so different URLs/guids that slugify to
+    # the same readable slug (e.g. /foo/bar vs /foo-bar) get distinct canonical ids and do not
+    # overwrite each other's document (finding #5).
     if url:
         parsed = urllib.parse.urlparse(url)
         path = parsed.path.strip("/")
         if path:
-            return slugify(path.replace("/", "-"), fallback="post")
-    return slugify(guid or "post", fallback="post")
+            return f"{slugify(path.replace('/', '-'), fallback='post')}-{sha256_text(path)[:8]}"
+    fallback = guid or "post"
+    return f"{slugify(fallback, fallback='post')}-{sha256_text(fallback)[:8]}"
 
 
 def detect_media_type(payload: str) -> str:

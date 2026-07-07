@@ -38,7 +38,7 @@ def test_parse_medium_like_rss_feed() -> None:
     first = parsed.items[0]
     assert first.title == "Systems For Better Technical Writing"
     assert first.url == "https://tellmeabout.tech/systems-for-better-technical-writing"
-    assert first.canonical_id == "systems-for-better-technical-writing"
+    assert first.canonical_id.startswith("systems-for-better-technical-writing-")  # readable slug + hash (#5)
     assert first.published_at == "2026-06-23T10:00:00Z"
     assert first.author == "Tell Me About Tech Author"
     assert first.tags == ["Product Thinking", "Writing Systems"]
@@ -52,8 +52,16 @@ def test_html_to_text_is_stable() -> None:
 
 
 def test_canonical_id_prefers_url_path_and_falls_back_to_guid() -> None:
-    assert canonical_id_from_url_or_guid("https://tellmeabout.tech/post-one?sk=abc", "ignored") == "post-one"
-    assert canonical_id_from_url_or_guid("", "medium-fixture-post-002") == "medium-fixture-post-002"
+    assert canonical_id_from_url_or_guid("https://tellmeabout.tech/post-one?sk=abc", "ignored").startswith("post-one-")
+    assert canonical_id_from_url_or_guid("", "medium-fixture-post-002").startswith("medium-fixture-post-002-")
+
+
+def test_canonical_id_disambiguates_slug_collisions() -> None:
+    # /foo/bar and /foo-bar slugify identically; the hash suffix keeps them distinct (finding #5).
+    first = canonical_id_from_url_or_guid("https://tellmeabout.tech/foo/bar", None)
+    second = canonical_id_from_url_or_guid("https://tellmeabout.tech/foo-bar", None)
+    assert first != second
+    assert first.startswith("foo-bar-") and second.startswith("foo-bar-")
 
 
 def test_topic_key_normalizes_tags() -> None:
@@ -85,7 +93,7 @@ def test_parse_rss_item_missing_link_and_title_falls_back() -> None:
     assert len(parsed.items) == 1
     item = parsed.items[0]
     assert item.title == "Untitled"
-    assert item.canonical_id == "post-42"  # derived from guid since there is no link
+    assert item.canonical_id.startswith("post-42-")  # derived from guid (+ hash) since there is no link
     assert item.url is None
 
 

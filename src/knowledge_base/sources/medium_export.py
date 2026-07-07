@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from knowledge_base.config import Settings
-from knowledge_base.ids import sha256_text, slugify, stable_key
+from knowledge_base.ids import sha256_file, sha256_stream, sha256_text, slugify, stable_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
@@ -308,13 +308,11 @@ def _read_archive_directory(path: Path) -> MediumArchivePayload:
     posts: list[MediumPostPayload] = []
     total_size = 0
     for file_path in files:
-        data = file_path.read_bytes()
         relative = file_path.relative_to(root).as_posix()
-        digest = sha256_text(data)
-        size = len(data)
-        total_size += size
-        entries.append({"path": relative, "size_bytes": size, "sha256": digest})
         if _is_post_path(relative):
+            data = file_path.read_bytes()
+            digest = sha256_text(data)
+            size = len(data)
             posts.append(
                 MediumPostPayload(
                     relative_path=relative,
@@ -323,6 +321,13 @@ def _read_archive_directory(path: Path) -> MediumArchivePayload:
                     size_bytes=size,
                 ),
             )
+        else:
+            # Only posts are decoded; stream-hash everything else so large media/pdf/video is
+            # never fully loaded into memory just to hash it (finding #26).
+            digest = sha256_file(file_path)
+            size = file_path.stat().st_size
+        total_size += size
+        entries.append({"path": relative, "size_bytes": size, "sha256": digest})
 
     if not posts:
         raise MediumArchiveReadError("posts_not_found", path, "No posts/*.html files were found")
@@ -354,12 +359,10 @@ def _read_archive_zip(path: Path) -> MediumArchivePayload:
                 relative = _zip_relative_name(info.filename, root_prefix)
                 if relative is None:
                     continue
-                data = archive.read(info.filename)
-                digest = sha256_text(data)
-                size = len(data)
-                total_size += size
-                entries.append({"path": relative, "size_bytes": size, "sha256": digest})
                 if _is_post_path(relative):
+                    data = archive.read(info.filename)
+                    digest = sha256_text(data)
+                    size = len(data)
                     posts.append(
                         MediumPostPayload(
                             relative_path=relative,
@@ -368,6 +371,12 @@ def _read_archive_zip(path: Path) -> MediumArchivePayload:
                             size_bytes=size,
                         ),
                     )
+                else:
+                    with archive.open(info) as handle:
+                        digest = sha256_stream(handle)
+                    size = info.file_size
+                total_size += size
+                entries.append({"path": relative, "size_bytes": size, "sha256": digest})
     except MediumArchiveReadError:
         raise
     except (OSError, zipfile.BadZipFile) as error:
