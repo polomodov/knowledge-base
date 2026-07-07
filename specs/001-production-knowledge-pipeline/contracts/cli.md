@@ -6,18 +6,21 @@ All commands are planned under the `kb` executable. Commands should accept `--co
 
 ### `kb platform up`
 
-Starts the local runtime or prints exact instructions when Docker/Colima is unavailable. The local compose runtime starts ArangoDB with the `--vector-index` server flag.
+Starts the local runtime or prints exact instructions when Docker/Colima is unavailable. The local compose runtime starts ArangoDB with the `--vector-index` server flag and binds the port to loopback.
 
-Expected output:
+`up` does not wait for or verify health — the container is reported as `starting`. Expected output on success:
 
 ```json
 {
   "status": "started",
-  "services": {
-    "arangodb": "healthy"
-  }
+  "services": {"arangodb": "starting"},
+  "command": "docker compose --env-file ... -f ... up -d",
+  "stdout": "...",
+  "stderr": "..."
 }
 ```
+
+`status` is `error` if the compose command exits non-zero, or `unavailable` (with `reason` and `instructions`) when no Docker/Compose is found. The process exits 0 only when `status` is `started`.
 
 ### `kb platform health`
 
@@ -30,13 +33,16 @@ Expected output:
   "status": "ok",
   "database": "knowledge_base",
   "checks": [
-    {"name": "arangodb", "status": "ok"},
-    {"name": "collections", "status": "ok"},
-    {"name": "arangosearch", "status": "ok"},
-    {"name": "vector_index", "status": "ok"}
+    {"name": "arangodb", "status": "ok", "version": "3.12"},
+    {"name": "collection:documents", "status": "ok"},
+    {"name": "arangosearch", "status": "ok", "view": "kb_text_view"},
+    {"name": "graph", "status": "ok", "graph": "knowledge_graph"},
+    {"name": "vector_index", "status": "ok", "index": "idx_chunks_embedding_vector"}
   ]
 }
 ```
+
+There is one `collection:<name>` check per collection. `status` is `degraded` when a component is missing (for example the vector index on a build without `--vector-index`) and `error` when ArangoDB is unreachable. The process exits non-zero when a core component (server, collection, view, or graph) is missing; a degraded-only vector index still exits 0 because semantic search falls back to a full scan.
 
 ## Ingest
 
