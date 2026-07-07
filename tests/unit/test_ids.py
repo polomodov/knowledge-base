@@ -1,5 +1,5 @@
 from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
-from knowledge_base.sources import book_cube, tellmeabout_tech
+from knowledge_base.sources import book_cube
 
 
 def test_stable_key_is_deterministic() -> None:
@@ -38,9 +38,11 @@ def test_topic_key_non_ascii_is_stable_and_collision_free() -> None:
 
 
 def test_topic_key_is_shared_across_adapters() -> None:
-    # One canonical implementation; the same label maps to the same key everywhere (finding #2).
+    # A single canonical implementation in ids is used everywhere via ingest_core (finding #2);
+    # adapters no longer define their own. book_cube re-exports the canonical one for hashtags.
+    assert book_cube.topic_key is topic_key
     for label in ("Books", "машинное обучение", "AI Tools"):
-        assert book_cube.topic_key(label) == tellmeabout_tech.topic_key(label) == topic_key(label)
+        assert book_cube.topic_key(label) == topic_key(label)
 
 
 def test_topic_key_empty_label_falls_back() -> None:
