@@ -7,7 +7,8 @@ services:
     environment:
       ARANGO_ROOT_PASSWORD: ${ARANGO_ROOT_PASSWORD:-knowledge-base-dev}
     ports:
-      - "${ARANGO_PORT:-8529}:8529"
+      # Bind to loopback only so the dev-default credentials are never exposed on the network.
+      - "127.0.0.1:${ARANGO_PORT:-8529}:8529"
     volumes:
       - arangodb-data:/var/lib/arangodb3
       - arangodb-apps:/var/lib/arangodb3-apps

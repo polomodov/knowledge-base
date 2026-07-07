@@ -36,7 +36,10 @@ def platform_down(settings: Settings) -> dict[str, Any]:
 
 def _compose_command(settings: Settings, *args: str) -> list[str] | None:
     compose_file = settings.repo_root / "compose" / "arangodb.compose.yml"
-    env_file = settings.repo_root / "config" / "arangodb.env.example"
+    # Prefer a gitignored config/arangodb.env with a real secret; fall back to the tracked
+    # example (dev-only default) so zero-config local runs still work (finding #20).
+    env_override = settings.repo_root / "config" / "arangodb.env"
+    env_file = env_override if env_override.exists() else settings.repo_root / "config" / "arangodb.env.example"
     compose_args = ["--env-file", str(env_file), "-f", str(compose_file), *args]
     docker = shutil.which("docker")
     if docker is not None:
