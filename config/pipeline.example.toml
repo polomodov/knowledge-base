@@ -1,3 +1,6 @@
+# Optional TOML config passed via `kb --config <path>`. Only the keys below are read.
+# Retrieval limits are CLI flags (e.g. `kb search text <q> --limit 20`), not config, and the
+# v1 embedding is the built-in deterministic fixture hash model (no provider to select).
 [arangodb]
 url = "http://127.0.0.1:8529"
 database = "knowledge_base"
@@ -5,10 +8,4 @@ user = "root"
 password_env = "KB_ARANGO_PASSWORD"
 
 [embedding]
-provider = "fixture"
 dimension = 8
-
-[retrieval]
-text_limit = 10
-semantic_limit = 10
-hybrid_limit = 10
