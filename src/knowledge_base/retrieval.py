@@ -7,6 +7,12 @@ from knowledge_base.arango import ArangoError
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.repository import KnowledgeRepository
 
+# GR-1: hybrid folds a bounded graph signal into ranking. Seeds are the strongest fused
+# candidates; a document that shares topics/authors/works with them is boosted up to the cap,
+# so the graph reinforces the lexical/semantic score without ever dominating it.
+_HYBRID_SEED_COUNT = 5
+_GRAPH_BOOST_CAP = 0.5
+
 
 def text_search(
     repository: KnowledgeRepository,
@@ -469,32 +475,74 @@ def hybrid_search(
     if semantic["status"] == "degraded":
         degraded_components.append("vector")
 
-    results = _merge_hybrid(text_results, semantic["results"], limit=limit)
+    # Fuse text+vector, then fold a graph signal into the score of every retrieved candidate
+    # before truncating to `limit` (GR-1). This re-ranks and boosts the retrieved pool; it does
+    # not pull in graph-only neighbours that had no text/vector hit. That candidate expansion is
+    # deferred to GR-3, where real entity/relationship edges make it precise and relevance-gated
+    # (semantic_search already fills `limit` by raw cosine, so tag-graph expansion here would add
+    # noise for little recall gain — see docs/graphrag-plan.md).
+    fused = _fuse_by_document(text_results, semantic["results"])
+
+    if fused:
+        try:
+            entity_sets = _document_entity_sets(repository, [row["document_key"] for row in fused])
+        except ArangoError:
+            degraded_components.append("graph")
+        else:
+            boosts = _graph_boosts(fused, entity_sets)
+            for row in fused:
+                boost = boosts.get(row["document_key"], 0.0)
+                row["score_components"]["graph_boost"] = boost
+                row["score"] = round(float(row["score"]) + boost, 6)
+            fused.sort(key=lambda item: item["score"], reverse=True)
+    # When the graph lookup degrades, graph_boost is left null (from _fuse_by_document) and the
+    # ranking falls back to the text+vector order rather than a fabricated signal.
+
     return {
         "query": query,
         "mode": "hybrid",
         "status": "degraded" if degraded_components else "ok",
         "degraded_components": degraded_components,
-        "results": results,
+        "results": fused[:limit],
     }
 
 
-def _merge_hybrid(
+def _fuse_by_document(
     text_results: list[dict[str, Any]],
     semantic_results: list[dict[str, Any]],
-    *,
-    limit: int,
 ) -> list[dict[str, Any]]:
-    """Fuse text (BM25) and semantic (cosine) hits into one ranked list.
+    """Fuse text (BM25) and semantic (cosine) hits into one ranked list, one row per document.
 
     Aggregates by document_key so a single document never occupies several slots
     and its text/semantic hits combine instead of competing (finding #14). BM25 is
     min-max normalized to [0, 1] over the result set and cosine is clamped to [0, 1],
     so a negative cosine contributes 0 rather than dragging the combined score below
-    text-only hits (finding #16). Hybrid does not traverse the graph, so graph_boost
-    is left null instead of a misleading lexical substring signal (finding #15).
+    text-only hits (finding #16). graph_boost is left null here; the graph signal is
+    applied downstream by hybrid_search over the full candidate pool (GR-1).
     """
     records: dict[str, dict[str, Any]] = {}
+    _index_text_hits(records, text_results)
+    _index_semantic_hits(records, semantic_results)
+
+    bm25_values = [record["bm25"] for record in records.values() if record["bm25"] is not None]
+    low = min(bm25_values) if bm25_values else 0.0
+    high = max(bm25_values) if bm25_values else 0.0
+
+    fused: list[dict[str, Any]] = []
+    for document_key_value, record in records.items():
+        norm_vector = max(0.0, record["vector"]) if record["vector"] is not None else 0.0
+        row = dict(record["row"])
+        row["document_key"] = document_key_value
+        row["score_components"] = {"bm25": record["bm25"], "vector": record["vector"], "graph_boost": None}
+        row["score"] = round(_normalized_text(record["bm25"], low, high) + norm_vector, 6)
+        fused.append(row)
+
+    fused.sort(key=lambda item: item["score"], reverse=True)
+    return fused
+
+
+def _index_text_hits(records: dict[str, dict[str, Any]], text_results: list[dict[str, Any]]) -> None:
+    """Fold BM25 hits into per-document records, keeping the highest-BM25 representative row."""
     for result in text_results:
         document_key_value = result["document_key"]
         raw = result["score_components"].get("bm25")
@@ -503,39 +551,112 @@ def _merge_hybrid(
         if record["bm25"] is None or bm25 > record["bm25"]:
             record["bm25"] = bm25
             record["row"] = result
+
+
+def _index_semantic_hits(records: dict[str, dict[str, Any]], semantic_results: list[dict[str, Any]]) -> None:
+    """Fold cosine hits into per-document records; a document with a text hit keeps that row."""
     for result in semantic_results:
         document_key_value = result["document_key"]
         raw = result["score_components"].get("vector")
         vector = float(raw) if raw is not None else float(result["score"])
-        existing = records.get(document_key_value)
-        if existing is None:
-            existing = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
-        if existing["vector"] is None or vector > existing["vector"]:
-            existing["vector"] = vector
-            if existing["bm25"] is None:
-                existing["row"] = result
+        record = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
+        if record["vector"] is None or vector > record["vector"]:
+            record["vector"] = vector
+            if record["bm25"] is None:
+                record["row"] = result
 
-    bm25_values = [record["bm25"] for record in records.values() if record["bm25"] is not None]
-    low = min(bm25_values) if bm25_values else 0.0
-    high = max(bm25_values) if bm25_values else 0.0
 
-    fused: list[dict[str, Any]] = []
-    for document_key_value, record in records.items():
-        if record["bm25"] is None:
-            norm_text = 0.0
-        elif high <= low:
-            norm_text = 1.0
-        else:
-            norm_text = (record["bm25"] - low) / (high - low)
-        norm_vector = max(0.0, record["vector"]) if record["vector"] is not None else 0.0
-        row = dict(record["row"])
-        row["document_key"] = document_key_value
-        row["score_components"] = {"bm25": record["bm25"], "vector": record["vector"], "graph_boost": None}
-        row["score"] = round(norm_text + norm_vector, 6)
-        fused.append(row)
+def _normalized_text(bm25: float | None, low: float, high: float) -> float:
+    """Min-max normalize BM25 into [0, 1]; a document without a text hit contributes 0."""
+    if bm25 is None:
+        return 0.0
+    if high <= low:
+        return 1.0
+    return (bm25 - low) / (high - low)
 
-    fused.sort(key=lambda item: item["score"], reverse=True)
-    return fused[:limit]
+
+def _merge_hybrid(
+    text_results: list[dict[str, Any]],
+    semantic_results: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fuse text (BM25) and semantic (cosine) hits and truncate to `limit`.
+
+    Pure text+vector path with no graph signal (graph_boost stays null); hybrid_search
+    layers the graph boost on top before truncating (GR-1).
+    """
+    return _fuse_by_document(text_results, semantic_results)[:limit]
+
+
+def _document_entity_sets(
+    repository: KnowledgeRepository,
+    document_keys: list[str],
+) -> dict[str, set[str]]:
+    """Entities (topics/authors/works) linked to each document or its chunks (GR-1).
+
+    One AQL over the mention/reference edge collections, matching edges that originate from
+    the document node or any of its chunks. Used to boost documents that share entities with
+    the strongest candidates of a query.
+    """
+    unique_keys = list(dict.fromkeys(document_keys))
+    if not unique_keys:
+        return {}
+    rows = repository.client.aql(
+        """
+        FOR doc_key IN @document_keys
+          LET from_ids = PUSH(
+            (FOR c IN chunks FILTER c.document_key == doc_key RETURN c._id),
+            CONCAT("documents/", doc_key)
+          )
+          LET topics = (FOR e IN document_mentions_topic FILTER e._from IN from_ids RETURN e._to)
+          LET authors = (FOR e IN document_mentions_author FILTER e._from IN from_ids RETURN e._to)
+          LET works = (FOR e IN document_references_work FILTER e._from IN from_ids RETURN e._to)
+          RETURN { document_key: doc_key, entities: UNION_DISTINCT(topics, authors, works) }
+        """,
+        {"document_keys": unique_keys},
+    )
+    return {row["document_key"]: set(row["entities"]) for row in rows}
+
+
+def _graph_boosts(
+    fused: list[dict[str, Any]],
+    entity_sets: dict[str, set[str]],
+    *,
+    seed_count: int = _HYBRID_SEED_COUNT,
+    cap: float = _GRAPH_BOOST_CAP,
+) -> dict[str, float]:
+    """Boost documents that share graph entities with the query's strongest candidates (GR-1).
+
+    Seeds are the top `seed_count` documents by fused (text+vector) score. A candidate's raw
+    boost is the sum over the OTHER seeds of ``seed_score * |shared entities|``, so sharing a
+    topic/author/work with a strong result lifts a document (a two-hop graph neighbourhood via
+    shared entity nodes). Raw boosts are min-max scaled to [0, cap] so the graph signal
+    reinforces but never dominates the lexical/semantic score; a document with no shared
+    entity gets exactly 0.
+    """
+    base = {row["document_key"]: float(row["score"]) for row in fused}
+    if not base:
+        return {}
+    seeds = sorted(base, key=lambda key: base[key], reverse=True)[:seed_count]
+    raw: dict[str, float] = {}
+    for document_key_value in base:
+        entities = entity_sets.get(document_key_value)
+        if not entities:
+            raw[document_key_value] = 0.0
+            continue
+        total = 0.0
+        for seed in seeds:
+            if seed == document_key_value:
+                continue
+            shared = entities & entity_sets.get(seed, frozenset())
+            if shared:
+                total += base[seed] * len(shared)
+        raw[document_key_value] = total
+    highest = max(raw.values())
+    if highest <= 0.0:
+        return dict.fromkeys(base, 0.0)
+    return {key: round(cap * value / highest, 6) for key, value in raw.items()}
 
 
 def _start_vertex(

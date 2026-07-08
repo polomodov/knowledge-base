@@ -5,6 +5,7 @@ import pytest
 
 from knowledge_base.arango import ArangoClient
 from knowledge_base.config import load_settings
+from knowledge_base.embeddings import hash_embedding
 from knowledge_base.fixture import ingest_fixture
 from knowledge_base.indexing import rebuild_indexes
 from knowledge_base.repository import KnowledgeRepository
@@ -92,7 +93,16 @@ def test_fixture_pipeline_end_to_end() -> None:
     assert _unique_document_keys(hybrid["results"])
     assert _monotonic_non_increasing([result["score"] for result in hybrid["results"]])
     assert all(result["score"] >= 0 for result in hybrid["results"])
-    assert all(result["score_components"]["graph_boost"] is None for result in hybrid["results"])
+    # graph_boost is now a real, bounded graph signal (GR-1): a number in [0, cap] when the
+    # graph component is healthy, and null only if the graph lookup degraded.
+    graph_degraded = "graph" in hybrid.get("degraded_components", [])
+    for result in hybrid["results"]:
+        boost = result["score_components"]["graph_boost"]
+        if graph_degraded:
+            assert boost is None
+        else:
+            assert isinstance(boost, (int, float))
+            assert 0.0 <= boost <= 0.5
     _assert_provenance(hybrid["results"])
 
 
@@ -156,6 +166,75 @@ def test_graph_source_filter_keeps_cross_source_shared_vertices() -> None:
         assert all(row["provenance"]["source_key"] == source_key for row in result["results"])
         ids = [row["id"] for row in result["results"]]
         assert len(ids) == len(set(ids))
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_hybrid_graph_boost_rewards_shared_entities() -> None:
+    # GR-1: hybrid ranking folds in a graph signal. Three documents match the query equally by
+    # text/vector; two of them share a topic and reinforce each other, while the isolated one
+    # shares nothing and gets no boost, so it ranks last.
+    settings = load_settings()
+    repository = KnowledgeRepository(ArangoClient(settings))
+    bootstrap_schema(repository.client)
+
+    now = "2026-07-08T00:00:00Z"
+    source_key = "gb-src"
+    topic = "graphrag-shared-topic"
+    body = "graphrag retrieval quality and ranking"
+    repository.upsert("sources", {"_key": source_key, "type": "test", "display_name": source_key, "created_at": now})
+    repository.upsert("topics", {"_key": topic, "label": "GraphRAG Shared Topic"})
+
+    for document_key_value, shares_topic in (("gb-seed", True), ("gb-connected", True), ("gb-isolated", False)):
+        repository.upsert(
+            "documents",
+            {
+                "_key": document_key_value,
+                "source_key": source_key,
+                "canonical_id": document_key_value,
+                "title": document_key_value,
+                "text": body,
+                "url": None,
+                "created_at": now,
+            },
+        )
+        chunk_key_value = f"{document_key_value}-c0"
+        repository.upsert(
+            "chunks",
+            {
+                "_key": chunk_key_value,
+                "document_key": document_key_value,
+                "ordinal": 0,
+                "text": body,
+                "embedding": hash_embedding(body, dimension=settings.embedding_dimension),
+            },
+        )
+        repository.upsert_edge(
+            "chunk_of_document",
+            {"_key": f"edge-{chunk_key_value}", "_from": f"chunks/{chunk_key_value}", "_to": f"documents/{document_key_value}"},
+        )
+        if shares_topic:
+            repository.upsert_edge(
+                "document_mentions_topic",
+                {
+                    "_key": f"edge-{document_key_value}-topic",
+                    "_from": f"documents/{document_key_value}",
+                    "_to": f"topics/{topic}",
+                    "import_run_key": "gb",
+                    "method": "test",
+                    "evidence": topic,
+                },
+            )
+
+    rebuild_indexes(repository, target="all")
+    hybrid = hybrid_search(repository, "graphrag retrieval quality", dimension=settings.embedding_dimension)
+
+    boosts = {row["document_key"]: row["score_components"]["graph_boost"] for row in hybrid["results"]}
+    assert {"gb-seed", "gb-connected", "gb-isolated"} <= set(boosts)
+    assert boosts["gb-seed"] > 0  # reinforced by the topic it shares with gb-connected
+    assert boosts["gb-connected"] > 0  # reinforced by the topic it shares with gb-seed
+    assert boosts["gb-isolated"] == 0  # shares no entity -> no graph boost
+    order = [row["document_key"] for row in hybrid["results"]]
+    assert order.index("gb-connected") < order.index("gb-isolated")
 
 
 def _unique_document_keys(results: list[dict]) -> bool:
