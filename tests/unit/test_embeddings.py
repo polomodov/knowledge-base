@@ -71,13 +71,15 @@ def test_build_embedding_provider_defaults_to_hash() -> None:
 
 
 def test_build_embedding_provider_rejects_unknown_provider() -> None:
+    settings = Settings(embedding_provider="bogus")
     with pytest.raises(EmbeddingProviderError, match="Unknown embedding provider"):
-        build_embedding_provider(Settings(embedding_provider="bogus"))
+        build_embedding_provider(settings)
 
 
 def test_local_provider_reports_missing_optional_dependency() -> None:
     if importlib.util.find_spec("sentence_transformers") is not None:
         pytest.skip("sentence-transformers is installed; the missing-dependency path is not exercised")
+    settings = Settings(embedding_provider="local")
     build_embedding_provider.cache_clear()
     with pytest.raises(EmbeddingProviderError, match="sentence-transformers"):
-        build_embedding_provider(Settings(embedding_provider="local"))
+        build_embedding_provider(settings)
