@@ -475,8 +475,12 @@ def hybrid_search(
     if semantic["status"] == "degraded":
         degraded_components.append("vector")
 
-    # Fuse text+vector first, then fold in a graph signal over the whole candidate pool so a
-    # graph-connected document can climb into the top `limit`, not just reorder within it (GR-1).
+    # Fuse text+vector, then fold a graph signal into the score of every retrieved candidate
+    # before truncating to `limit` (GR-1). This re-ranks and boosts the retrieved pool; it does
+    # not pull in graph-only neighbours that had no text/vector hit. That candidate expansion is
+    # deferred to GR-3, where real entity/relationship edges make it precise and relevance-gated
+    # (semantic_search already fills `limit` by raw cosine, so tag-graph expansion here would add
+    # noise for little recall gain — see docs/graphrag-plan.md).
     fused = _fuse_by_document(text_results, semantic["results"])
 
     if fused:
@@ -517,6 +521,28 @@ def _fuse_by_document(
     applied downstream by hybrid_search over the full candidate pool (GR-1).
     """
     records: dict[str, dict[str, Any]] = {}
+    _index_text_hits(records, text_results)
+    _index_semantic_hits(records, semantic_results)
+
+    bm25_values = [record["bm25"] for record in records.values() if record["bm25"] is not None]
+    low = min(bm25_values) if bm25_values else 0.0
+    high = max(bm25_values) if bm25_values else 0.0
+
+    fused: list[dict[str, Any]] = []
+    for document_key_value, record in records.items():
+        norm_vector = max(0.0, record["vector"]) if record["vector"] is not None else 0.0
+        row = dict(record["row"])
+        row["document_key"] = document_key_value
+        row["score_components"] = {"bm25": record["bm25"], "vector": record["vector"], "graph_boost": None}
+        row["score"] = round(_normalized_text(record["bm25"], low, high) + norm_vector, 6)
+        fused.append(row)
+
+    fused.sort(key=lambda item: item["score"], reverse=True)
+    return fused
+
+
+def _index_text_hits(records: dict[str, dict[str, Any]], text_results: list[dict[str, Any]]) -> None:
+    """Fold BM25 hits into per-document records, keeping the highest-BM25 representative row."""
     for result in text_results:
         document_key_value = result["document_key"]
         raw = result["score_components"].get("bm25")
@@ -525,39 +551,28 @@ def _fuse_by_document(
         if record["bm25"] is None or bm25 > record["bm25"]:
             record["bm25"] = bm25
             record["row"] = result
+
+
+def _index_semantic_hits(records: dict[str, dict[str, Any]], semantic_results: list[dict[str, Any]]) -> None:
+    """Fold cosine hits into per-document records; a document with a text hit keeps that row."""
     for result in semantic_results:
         document_key_value = result["document_key"]
         raw = result["score_components"].get("vector")
         vector = float(raw) if raw is not None else float(result["score"])
-        existing = records.get(document_key_value)
-        if existing is None:
-            existing = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
-        if existing["vector"] is None or vector > existing["vector"]:
-            existing["vector"] = vector
-            if existing["bm25"] is None:
-                existing["row"] = result
+        record = records.setdefault(document_key_value, {"row": result, "bm25": None, "vector": None})
+        if record["vector"] is None or vector > record["vector"]:
+            record["vector"] = vector
+            if record["bm25"] is None:
+                record["row"] = result
 
-    bm25_values = [record["bm25"] for record in records.values() if record["bm25"] is not None]
-    low = min(bm25_values) if bm25_values else 0.0
-    high = max(bm25_values) if bm25_values else 0.0
 
-    fused: list[dict[str, Any]] = []
-    for document_key_value, record in records.items():
-        if record["bm25"] is None:
-            norm_text = 0.0
-        elif high <= low:
-            norm_text = 1.0
-        else:
-            norm_text = (record["bm25"] - low) / (high - low)
-        norm_vector = max(0.0, record["vector"]) if record["vector"] is not None else 0.0
-        row = dict(record["row"])
-        row["document_key"] = document_key_value
-        row["score_components"] = {"bm25": record["bm25"], "vector": record["vector"], "graph_boost": None}
-        row["score"] = round(norm_text + norm_vector, 6)
-        fused.append(row)
-
-    fused.sort(key=lambda item: item["score"], reverse=True)
-    return fused
+def _normalized_text(bm25: float | None, low: float, high: float) -> float:
+    """Min-max normalize BM25 into [0, 1]; a document without a text hit contributes 0."""
+    if bm25 is None:
+        return 0.0
+    if high <= low:
+        return 1.0
+    return (bm25 - low) / (high - low)
 
 
 def _merge_hybrid(

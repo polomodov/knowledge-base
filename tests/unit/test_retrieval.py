@@ -1,3 +1,5 @@
+import pytest
+
 from knowledge_base.retrieval import (
     _cosine,
     _dedup_best_by_document,
@@ -103,9 +105,9 @@ def test_graph_boosts_reward_sharing_entities_with_strong_seeds() -> None:
     fused = [_fused("d1", 1.0), _fused("d2", 0.4), _fused("d3", 0.4)]
     entity_sets = {"d1": {"topics/t1"}, "d2": {"topics/t1"}, "d3": {"topics/t9"}}
     boosts = _graph_boosts(fused, entity_sets, seed_count=5, cap=0.5)
-    assert boosts["d2"] == 0.5  # shares with the strongest seed -> top raw boost -> hits the cap
-    assert boosts["d1"] == 0.2  # only reinforced by the weaker seed d2
-    assert boosts["d3"] == 0.0  # shares no entity with any other seed
+    assert boosts["d2"] == pytest.approx(0.5)  # shares with the strongest seed -> top raw boost -> hits the cap
+    assert boosts["d1"] == pytest.approx(0.2)  # only reinforced by the weaker seed d2
+    assert boosts["d3"] == pytest.approx(0.0)  # shares no entity with any other seed
     assert all(0.0 <= value <= 0.5 for value in boosts.values())
 
 
