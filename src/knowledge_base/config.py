@@ -23,6 +23,8 @@ class Settings:
     arango_user: str = "root"
     arango_password: str = "knowledge-base-dev"
     embedding_dimension: int = VECTOR_DIMENSION
+    embedding_provider: str = "hash"
+    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     repo_root: Path = REPO_ROOT
 
 
@@ -86,5 +88,7 @@ def load_settings(config_path: str | None = None) -> Settings:
         arango_user=resolve("KB_ARANGO_USER", arango.get("user"), Settings.arango_user),
         arango_password=password,
         embedding_dimension=int(resolve("KB_EMBEDDING_DIMENSION", embedding.get("dimension"), Settings.embedding_dimension)),
+        embedding_provider=resolve("KB_EMBEDDING_PROVIDER", embedding.get("provider"), Settings.embedding_provider),
+        embedding_model=resolve("KB_EMBEDDING_MODEL", embedding.get("model"), Settings.embedding_model),
         repo_root=REPO_ROOT,
     )

@@ -15,7 +15,7 @@ from typing import Any
 
 from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
-from knowledge_base.embeddings import HASH_EMBEDDING_MODEL, hash_embedding
+from knowledge_base.embeddings import build_embedding_provider
 from knowledge_base.ids import chunk_key, document_key, slugify, stable_key, topic_key
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.sources.contracts import NormalizedSourceItem
@@ -202,6 +202,7 @@ def upsert_chunks(
     topic_evidence: Callable[[str], str] = lambda tag: tag,
     provenance: dict[str, Any] | None = None,
 ) -> None:
+    provider = build_embedding_provider(settings)
     for chunk in split_text(item.text):
         c_key = chunk_key(doc_key, chunk.ordinal, chunk.text)
         counts["chunks"] += int(
@@ -215,8 +216,8 @@ def upsert_chunks(
                     "token_count": chunk.token_count,
                     "char_start": chunk.char_start,
                     "char_end": chunk.char_end,
-                    "embedding": hash_embedding(chunk.text, dimension=settings.embedding_dimension),
-                    "embedding_model": HASH_EMBEDDING_MODEL,
+                    "embedding": provider.embed(chunk.text),
+                    "embedding_model": provider.model,
                     "metadata": chunk_metadata,
                 },
             )["created"],

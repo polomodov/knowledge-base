@@ -4,7 +4,8 @@ import math
 from typing import Any
 
 from knowledge_base.arango import ArangoError
-from knowledge_base.embeddings import hash_embedding
+from knowledge_base.constants import VECTOR_DIMENSION
+from knowledge_base.embeddings import EmbeddingProvider, HashEmbeddingProvider
 from knowledge_base.repository import KnowledgeRepository
 
 # GR-1: hybrid folds a bounded graph signal into ranking. Seeds are the strongest fused
@@ -85,16 +86,22 @@ def semantic_search(
     query: str,
     *,
     limit: int = 10,
-    dimension: int = 8,
+    dimension: int = VECTOR_DIMENSION,
     source_key: str | None = None,
+    provider: EmbeddingProvider | None = None,
 ) -> dict[str, Any]:
-    query_vector = hash_embedding(query, dimension=dimension)
+    # The query is embedded by the same provider that produced the stored chunk vectors, so both
+    # live in one space (GR-2). Without an explicit provider we default to the hash embedder at
+    # the requested dimension, preserving the original offline behaviour.
+    embedder = provider if provider is not None else HashEmbeddingProvider(dimension=dimension)
+    query_vector = embedder.embed(query)
+    effective_dimension = embedder.dimension
     ranked = _vector_ranked(repository, query_vector, limit=limit, source_key=source_key)
     if ranked is None:
         # Fallback: full-scan cosine in Python. Used when the ANN index is unavailable,
         # the embedding dimension differs from the index, or a source filter is set (the
         # vector index cannot be combined with a filter).
-        chunks = _semantic_candidate_chunks(repository, dimension=dimension, source_key=source_key)
+        chunks = _semantic_candidate_chunks(repository, dimension=effective_dimension, source_key=source_key)
         if not chunks:
             if source_key is not None:
                 return {"query": query, "mode": "semantic", "status": "ok", "results": []}
@@ -461,8 +468,9 @@ def hybrid_search(
     query: str,
     *,
     limit: int = 10,
-    dimension: int = 8,
+    dimension: int = VECTOR_DIMENSION,
     source_key: str | None = None,
+    provider: EmbeddingProvider | None = None,
 ) -> dict[str, Any]:
     degraded_components: list[str] = []
     try:
@@ -471,7 +479,7 @@ def hybrid_search(
         text_results = []
         degraded_components.append("text")
 
-    semantic = semantic_search(repository, query, limit=limit, dimension=dimension, source_key=source_key)
+    semantic = semantic_search(repository, query, limit=limit, dimension=dimension, source_key=source_key, provider=provider)
     if semantic["status"] == "degraded":
         degraded_components.append("vector")
 
