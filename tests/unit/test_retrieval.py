@@ -1,6 +1,7 @@
 from knowledge_base.retrieval import (
     _cosine,
     _dedup_best_by_document,
+    _graph_boosts,
     _merge_hybrid,
     _start_vertex,
     _vector_ranked,
@@ -87,6 +88,34 @@ def test_merge_hybrid_respects_limit() -> None:
     results = _merge_hybrid(text, [], limit=2)
     assert len(results) == 2
     assert [result["document_key"] for result in results] == ["d4", "d3"]
+
+
+def _fused(document_key: str, score: float) -> dict:
+    return {
+        "document_key": document_key,
+        "score": score,
+        "score_components": {"bm25": None, "vector": None, "graph_boost": None},
+    }
+
+
+def test_graph_boosts_reward_sharing_entities_with_strong_seeds() -> None:
+    # d2 shares a topic with the strongest seed d1 and is boosted; d3 shares nothing (GR-1).
+    fused = [_fused("d1", 1.0), _fused("d2", 0.4), _fused("d3", 0.4)]
+    entity_sets = {"d1": {"topics/t1"}, "d2": {"topics/t1"}, "d3": {"topics/t9"}}
+    boosts = _graph_boosts(fused, entity_sets, seed_count=5, cap=0.5)
+    assert boosts["d2"] == 0.5  # shares with the strongest seed -> top raw boost -> hits the cap
+    assert boosts["d1"] == 0.2  # only reinforced by the weaker seed d2
+    assert boosts["d3"] == 0.0  # shares no entity with any other seed
+    assert all(0.0 <= value <= 0.5 for value in boosts.values())
+
+
+def test_graph_boosts_exclude_self_and_missing_entities() -> None:
+    # A single candidate has no other seed to share with -> no self-boost.
+    assert _graph_boosts([_fused("d1", 1.0)], {"d1": {"topics/t1"}}) == {"d1": 0.0}
+    # No entities anywhere -> every boost is zero, never negative.
+    assert _graph_boosts([_fused("d1", 1.0), _fused("d2", 0.5)], {}) == {"d1": 0.0, "d2": 0.0}
+    # Empty candidate set -> empty mapping.
+    assert _graph_boosts([], {}) == {}
 
 
 class _FakeClient:
