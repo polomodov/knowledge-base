@@ -54,6 +54,7 @@ sources -> ingest -> normalize -> store -> index/search -> visualize/write
 - `kb ingest book-cube-archive` загружает полный владельческий Telegram Desktop JSON archive из directory или `.zip`, создавая documents/chunks/topics и сохраняя media/file attachments только как local raw references.
 - `kb index rebuild --target all` идемпотентно проверяет derived search/vector/graph слой.
 - `kb search text`, `kb search semantic`, `kb graph neighbors` и `kb search hybrid` возвращают результаты с provenance; retrieval-команды поддерживают optional source filter для исследования одного источника.
+  - Примечание: на текущем срезе `kb graph neighbors` — отдельный обход графа, а `kb search hybrid` сливает только полнотекст (BM25) и вектор; граф пока **не влияет на ранжирование** (`score_components.graph_boost` не заполняется). Переход к graph-aware ранжированию и полноценному GraphRAG (граф-neighborhood boosts, извлечение сущностей/связей, сообщества) запланирован на v3 — см. [docs/graphrag-plan.md](graphrag-plan.md).
 - `kb export jsonl` пишет generated exports в gitignored data zone.
 
 ### Visualization
