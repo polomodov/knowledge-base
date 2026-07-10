@@ -1,5 +1,6 @@
 import itertools
 import os
+import time
 
 import pytest
 
@@ -319,6 +320,93 @@ def test_related_edges_link_similar_cross_document_chunks() -> None:
         {"a": "chunks/rel-doc-a-c0", "b": "chunks/rel-doc-b-c0"},
     )
     assert len(related_again) == len(related)  # still one a<->b edge, no duplication
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_related_edges_boost_hybrid_ranking() -> None:
+    # GR-3b: an item_related_to_item link to a strong candidate lifts a document in hybrid ranking,
+    # the same way a shared topic does (GR-1). Three documents match the query equally; two are
+    # similarity-linked and reinforce each other, the isolated one is not and ranks last.
+    settings = load_settings()
+    repository = KnowledgeRepository(ArangoClient(settings))
+    bootstrap_schema(repository.client)
+
+    now = "2026-07-10T00:00:00Z"
+    source_key = "rr-src"
+    body = "graphrag related-ranking probeword consensus"  # rare 'probeword' keeps these docs in the pool
+    repository.upsert("sources", {"_key": source_key, "type": "test", "display_name": source_key, "created_at": now})
+    for document_key_value in ("rr-seed", "rr-related", "rr-isolated"):
+        repository.upsert(
+            "documents",
+            {
+                "_key": document_key_value,
+                "source_key": source_key,
+                "canonical_id": document_key_value,
+                "title": document_key_value,
+                "text": body,
+                "url": None,
+                "created_at": now,
+            },
+        )
+        chunk_key_value = f"{document_key_value}-c0"
+        repository.upsert(
+            "chunks",
+            {
+                "_key": chunk_key_value,
+                "document_key": document_key_value,
+                "ordinal": 0,
+                "text": body,
+                "embedding": hash_embedding(body, dimension=settings.embedding_dimension),
+                "embedding_model": "hash-v1",
+            },
+        )
+        repository.upsert_edge(
+            "chunk_of_document",
+            {
+                "_key": f"rr-edge-{chunk_key_value}",
+                "_from": f"chunks/{chunk_key_value}",
+                "_to": f"documents/{document_key_value}",
+            },
+        )
+    # Similarity link between seed and related only (no topics anywhere, so the boost is purely
+    # the item_related_to_item signal).
+    repository.upsert_edge(
+        "item_related_to_item",
+        {
+            "_key": "rel-rr-seed-related",
+            "_from": "chunks/rr-seed-c0",
+            "_to": "chunks/rr-related-c0",
+            "weight": 0.9,
+            "method": "embedding-similarity",
+            "created_at": now,
+        },
+    )
+
+    hybrid = _hybrid_until_indexed(
+        repository,
+        "graphrag related-ranking probeword",
+        dimension=settings.embedding_dimension,
+        required={"rr-seed", "rr-related", "rr-isolated"},
+    )
+    boosts = {row["document_key"]: row["score_components"]["graph_boost"] for row in hybrid["results"]}
+    assert {"rr-seed", "rr-related", "rr-isolated"} <= set(boosts)
+    assert boosts["rr-seed"] > 0  # linked to rr-related
+    assert boosts["rr-related"] > 0  # linked to rr-seed
+    assert boosts["rr-isolated"] == 0  # no similarity link and no shared entity
+    order = [row["document_key"] for row in hybrid["results"]]
+    assert order.index("rr-related") < order.index("rr-isolated")
+
+
+def _hybrid_until_indexed(repository, query: str, *, dimension: int, required: set[str]) -> dict:
+    # ArangoSearch and the vector index are eventually consistent, so freshly-inserted documents
+    # may not appear in the pool on the first query. Retry (bounded) until they are indexed.
+    hybrid = hybrid_search(repository, query, dimension=dimension)
+    for _ in range(20):
+        if required <= {row["document_key"] for row in hybrid["results"]}:
+            return hybrid
+        time.sleep(0.25)
+        hybrid = hybrid_search(repository, query, dimension=dimension)
+    return hybrid
 
 
 def _unique_document_keys(results: list[dict]) -> bool:

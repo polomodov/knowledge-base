@@ -497,21 +497,22 @@ def hybrid_search(
     if semantic["status"] == "degraded":
         degraded_components.append("vector")
 
-    # Fuse text+vector, then fold a graph signal into the score of every retrieved candidate
-    # before truncating to `limit` (GR-1). This re-ranks and boosts the retrieved pool; it does
-    # not pull in graph-only neighbours that had no text/vector hit. That candidate expansion is
-    # deferred to GR-3, where real entity/relationship edges make it precise and relevance-gated
-    # (semantic_search already fills `limit` by raw cosine, so tag-graph expansion here would add
-    # noise for little recall gain — see docs/graphrag-plan.md).
+    # Fuse text+vector, then fold a graph signal into the score of every retrieved candidate before
+    # truncating to `limit`. The signal combines shared topic/author/work entities (GR-1) and direct
+    # item_related_to_item similarity links (GR-3b). It re-ranks and boosts the retrieved pool; it
+    # does not yet pull in graph-only neighbours that had no text/vector hit — that candidate
+    # expansion is the next step, GR-3c (see docs/graphrag-plan.md).
     fused = _fuse_by_document(text_results, semantic["results"])
 
     if fused:
         try:
-            entity_sets = _document_entity_sets(repository, [row["document_key"] for row in fused])
+            document_keys = [row["document_key"] for row in fused]
+            entity_sets = _document_entity_sets(repository, document_keys)
+            related = _document_related(repository, document_keys)
         except ArangoError:
             degraded_components.append("graph")
         else:
-            boosts = _graph_boosts(fused, entity_sets)
+            boosts = _graph_boosts(fused, entity_sets, related=related)
             for row in fused:
                 boost = boosts.get(row["document_key"], 0.0)
                 row["score_components"]["graph_boost"] = boost
@@ -641,39 +642,82 @@ def _document_entity_sets(
     return {row["document_key"]: set(row["entities"]) for row in rows}
 
 
+def _document_related(
+    repository: KnowledgeRepository,
+    document_keys: list[str],
+) -> dict[str, dict[str, float]]:
+    """Documents each document is similarity-linked to via item_related_to_item (GR-3b).
+
+    The edges are chunk↔chunk (built by GR-3); this resolves them to the document level and keeps
+    the strongest weight per related document, so a similarity link to a strong candidate can lift
+    a document in `graph_boost` the same way a shared entity does.
+    """
+    unique_keys = list(dict.fromkeys(document_keys))
+    if not unique_keys:
+        return {}
+    rows = repository.client.aql(
+        """
+        FOR doc_key IN @document_keys
+          LET chunk_ids = (FOR c IN chunks FILTER c.document_key == doc_key RETURN c._id)
+          LET links = (
+            FOR e IN item_related_to_item
+              FILTER e._from IN chunk_ids OR e._to IN chunk_ids
+              LET other = DOCUMENT(e._from IN chunk_ids ? e._to : e._from)
+              FILTER other != null AND other.document_key != doc_key
+              RETURN { doc: other.document_key, weight: e.weight }
+          )
+          RETURN { document_key: doc_key, links: links }
+        """,
+        {"document_keys": unique_keys},
+    )
+    related: dict[str, dict[str, float]] = {}
+    for row in rows:
+        best: dict[str, float] = {}
+        for link in row["links"]:
+            other_doc = link["doc"]
+            weight = float(link["weight"])
+            if other_doc not in best or weight > best[other_doc]:
+                best[other_doc] = weight
+        related[row["document_key"]] = best
+    return related
+
+
 def _graph_boosts(
     fused: list[dict[str, Any]],
     entity_sets: dict[str, set[str]],
     *,
+    related: dict[str, dict[str, float]] | None = None,
     seed_count: int = _HYBRID_SEED_COUNT,
     cap: float = _GRAPH_BOOST_CAP,
 ) -> dict[str, float]:
-    """Boost documents that share graph entities with the query's strongest candidates (GR-1).
+    """Boost documents connected to the query's strongest candidates in the graph (GR-1, GR-3b).
 
-    Seeds are the top `seed_count` documents by fused (text+vector) score. A candidate's raw
-    boost is the sum over the OTHER seeds of ``seed_score * |shared entities|``, so sharing a
-    topic/author/work with a strong result lifts a document (a two-hop graph neighbourhood via
-    shared entity nodes). Raw boosts are min-max scaled to [0, cap] so the graph signal
-    reinforces but never dominates the lexical/semantic score; a document with no shared
-    entity gets exactly 0.
+    Seeds are the top `seed_count` documents by fused (text+vector) score. A candidate's raw boost
+    sums, over the OTHER seeds, two connection signals: ``seed_score * |shared entities|`` (shared
+    topic/author/work — a two-hop neighbourhood) and ``seed_score * similarity_weight`` (a direct
+    item_related_to_item link, GR-3b). Raw boosts are min-max scaled to [0, cap] so the graph
+    signal reinforces but never dominates the lexical/semantic score; a document with no graph
+    connection to any seed gets exactly 0.
     """
+    related = related or {}
     base = {row["document_key"]: float(row["score"]) for row in fused}
     if not base:
         return {}
     seeds = sorted(base, key=lambda key: base[key], reverse=True)[:seed_count]
     raw: dict[str, float] = {}
     for document_key_value in base:
-        entities = entity_sets.get(document_key_value)
-        if not entities:
-            raw[document_key_value] = 0.0
-            continue
+        entities: set[str] | frozenset[str] = entity_sets.get(document_key_value) or frozenset()
+        links: dict[str, float] = related.get(document_key_value) or {}
         total = 0.0
         for seed in seeds:
             if seed == document_key_value:
                 continue
-            shared = entities & entity_sets.get(seed, frozenset())
+            shared = entities & (entity_sets.get(seed) or frozenset())
             if shared:
                 total += base[seed] * len(shared)
+            link_weight = links.get(seed)
+            if link_weight:
+                total += base[seed] * link_weight
         raw[document_key_value] = total
     highest = max(raw.values())
     if highest <= 0.0:
