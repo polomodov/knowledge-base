@@ -35,8 +35,9 @@
 | GR-0 | `docs/graphrag-plan` | GR-6 (доки) | — | ✅ merged ([#22](https://github.com/polomodov/knowledge-base/pull/22)) |
 | GR-1 | `feat/graph-aware-hybrid` | GR-1 | GR-0 | ✅ merged ([#23](https://github.com/polomodov/knowledge-base/pull/23)) |
 | GR-2 | `feat/pluggable-embeddings` | GR-2 | — | ✅ merged ([#24](https://github.com/polomodov/knowledge-base/pull/24)) |
-| GR-3 | `feat/related-edges` | GR-3 | GR-2 | 🟡 на ревью |
-| GR-3b | `feat/related-in-ranking` | GR-3 (retrieval) | GR-3 | ☐ не начат |
+| GR-3 | `feat/related-edges` | GR-3 | GR-2 | ✅ merged ([#25](https://github.com/polomodov/knowledge-base/pull/25)) |
+| GR-3b | `feat/related-in-ranking` | GR-3 (ранжирование) | GR-3 | 🟡 на ревью |
+| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3b | ☐ не начат |
 | GR-4 | `feat/graph-communities` | GR-4 | GR-3 | ☐ не начат |
 | GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | ☐ не начат |
 | GR-6 | `chore/retrieval-view-granularity` | GR-7 | — | ☐ не начат |
@@ -98,12 +99,21 @@
 |--:|----------|-------------|----------|---------|
 | GR-3 | высокий | `src/knowledge_base/sources/ingest_core.py`, `src/knowledge_base/schema.py:145` | `topic/author/work` — теги из источника, не извлечённые сущности; `item_related_to_item` объявлен, но не пишется → нет inter-entity связей | Извлекать сущности/связи на ingest, заполнять взвешенные рёбра. |
 
-### GR-3b — Связи в ранжировании и расширение кандидатов
+### GR-3b — Связи в ранжировании (`graph_boost`)
 
 **Ветка / PR:** `feat/related-in-ranking`
-**Проблемы:** GR-3 (retrieval-часть)
-**Задача:** Задействовать построенные в GR-3 рёбра `item_related_to_item` в поиске: (1) учитывать связанные документы в `graph_boost` (`hybrid`), (2) расширять кандидатов `hybrid` graph-only соседями (перенос из GR-1) с relevance-гейтом. Теперь это осмысленно — есть реальные взвешенные рёбра, а не только массовые теги.
-**Критерии приёмки:** документ, связанный `item_related_to_item` с сильным кандидатом, получает буст; graph-only сосед может войти в top-`limit` при разреженном lexical/semantic recall; unit- и интеграционные тесты.
+**Проблемы:** GR-3 (ранжирование)
+**Задача:** Задействовать рёбра `item_related_to_item` (GR-3) в `graph_boost` (`hybrid`): документ, напрямую связанный similarity-ребром с сильным кандидатом (seed), получает буст — так же, как за общий topic/author/work.
+**Критерии приёмки:** документ, связанный `item_related_to_item` с сильным кандидатом, получает буст; изолированный (без связи и общих сущностей) — `0`; unit- и интеграционный тесты.
+
+**Реализация (принято):** `_document_related` резолвит chunk↔chunk рёбра до уровня документов (макс. вес на связанный документ). `_graph_boosts` теперь суммирует два сигнала связности с seed'ами: `seed_score × |общие сущности|` (GR-1) и `seed_score × similarity_weight` (GR-3b), затем min-max в `[0, 0.5]`. `_cosine`/сигнатуры не тронуты; чистая логика покрыта unit-тестами, end-to-end — интеграционным (буст только за related-ребро, без топиков). Расширение кандидатов вынесено в **GR-3c**, чтобы PR остался обозримым.
+
+### GR-3c — Расширение кандидатов графом (recall)
+
+**Ветка / PR:** `feat/graph-candidate-expansion`
+**Проблемы:** GR-3 (recall), перенос из GR-1
+**Задача:** Подтягивать в `hybrid` graph-only соседей — документы, связанные `item_related_to_item` с seed'ами, у которых не было text/vector хита, с relevance-гейтом по весу ребра; гидрация с provenance, вход с base=0 (не перевешивают реальные хиты, заполняют разрежённый recall).
+**Критерии приёмки:** связанный документ без lexical/semantic хита может войти в top-`limit`; provenance корректен; unit- и интеграционные тесты; отсутствие деградации precision при плотном recall.
 
 ### GR-4 — Сообщества графа и их summaries
 

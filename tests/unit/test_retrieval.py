@@ -114,6 +114,17 @@ def test_graph_boosts_reward_sharing_entities_with_strong_seeds() -> None:
     assert all(0.0 <= value <= 0.5 for value in boosts.values())
 
 
+def test_graph_boosts_reward_similarity_links() -> None:
+    # A document with no shared entity but a strong item_related_to_item link to the top seed is
+    # boosted just like a shared-entity neighbour (GR-3b).
+    fused = [_fused("d1", 1.0), _fused("d2", 0.4), _fused("d3", 0.4)]
+    related = {"d1": {"d2": 0.8}, "d2": {"d1": 0.8}}  # d3 is linked to nobody
+    boosts = _graph_boosts(fused, {}, related=related, seed_count=5, cap=0.5)
+    assert boosts["d2"] == pytest.approx(0.5)  # linked to the strongest seed -> top raw -> cap
+    assert boosts["d1"] == pytest.approx(0.2)  # linked only to the weaker seed d2
+    assert boosts["d3"] == pytest.approx(0.0)  # no graph connection to any seed
+
+
 def test_graph_boosts_exclude_self_and_missing_entities() -> None:
     # A single candidate has no other seed to share with -> no self-boost.
     assert _graph_boosts([_fused("d1", 1.0)], {"d1": {"topics/t1"}}) == {"d1": 0.0}

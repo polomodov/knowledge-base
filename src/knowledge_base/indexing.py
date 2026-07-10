@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from knowledge_base.constants import RELATED_MIN_SCORE, RELATED_TOP_K, VECTOR_DIMENSION
+from knowledge_base.constants import RELATED_EDGE_METHOD, RELATED_MIN_SCORE, RELATED_TOP_K, VECTOR_DIMENSION
 from knowledge_base.embeddings import cosine_similarity
 from knowledge_base.ids import stable_key
 from knowledge_base.repository import KnowledgeRepository
@@ -101,7 +101,7 @@ def build_related_edges(
             "_from": from_id,
             "_to": to_id,
             "weight": weight,
-            "method": "embedding-similarity",
+            "method": RELATED_EDGE_METHOD,
             "created_at": now,
         }
         for (from_id, to_id), weight in sorted(pairs.items())
@@ -150,12 +150,12 @@ def _clear_related_edges(repository: KnowledgeRepository, chunk_ids: list[str], 
                 """
                 RETURN LENGTH(
                   FOR e IN item_related_to_item
-                    FILTER e.method == "embedding-similarity" AND e._from IN @ids AND e._to IN @ids
+                    FILTER e.method == @method AND e._from IN @ids AND e._to IN @ids
                     REMOVE e IN item_related_to_item
                     RETURN 1
                 )
                 """,
-                {"ids": chunk_ids},
+                {"ids": chunk_ids, "method": RELATED_EDGE_METHOD},
             )[0]
         )
     return int(
@@ -163,11 +163,12 @@ def _clear_related_edges(repository: KnowledgeRepository, chunk_ids: list[str], 
             """
             RETURN LENGTH(
               FOR e IN item_related_to_item
-                FILTER e.method == "embedding-similarity"
+                FILTER e.method == @method
                 REMOVE e IN item_related_to_item
                 RETURN 1
             )
-            """
+            """,
+            {"method": RELATED_EDGE_METHOD},
         )[0]
     )
 
