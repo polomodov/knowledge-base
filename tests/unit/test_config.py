@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 import knowledge_base.config as config
 from knowledge_base.config import _load_env_file, load_settings
 
@@ -58,6 +60,6 @@ def test_env_var_overrides_env_file(tmp_path: Path, monkeypatch) -> None:
 
 def test_retrieval_min_similarity_defaults_and_env_override(monkeypatch) -> None:
     monkeypatch.delenv("KB_RETRIEVAL_MIN_SIMILARITY", raising=False)
-    assert load_settings().retrieval_min_similarity == 0.0  # conservative default
+    assert load_settings().retrieval_min_similarity == pytest.approx(0.0)  # conservative default
     monkeypatch.setenv("KB_RETRIEVAL_MIN_SIMILARITY", "0.35")
-    assert load_settings().retrieval_min_similarity == 0.35
+    assert load_settings().retrieval_min_similarity == pytest.approx(0.35)
