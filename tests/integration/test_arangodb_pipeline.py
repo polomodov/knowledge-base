@@ -388,11 +388,19 @@ def test_related_edges_boost_hybrid_ranking() -> None:
         {"_key": "manual-rr-isolated-seed", "_from": "chunks/rr-isolated-c0", "_to": "chunks/rr-seed-c0", "method": "manual"},
     )
 
+    def _boosts_applied(hybrid: dict) -> bool:
+        # Wait until BM25 scores stabilize enough for rr-seed/rr-related to be seeds and get boosted.
+        graph_boost = {row["document_key"]: row["score_components"]["graph_boost"] for row in hybrid["results"]}
+        return {"rr-seed", "rr-related", "rr-isolated"} <= set(graph_boost) and min(
+            graph_boost.get("rr-seed", 0.0), graph_boost.get("rr-related", 0.0)
+        ) > 0
+
     hybrid = _hybrid_until_indexed(
         repository,
         "graphrag related-ranking probeword",
         dimension=settings.embedding_dimension,
         required={"rr-seed", "rr-related", "rr-isolated"},
+        ready=_boosts_applied,
     )
     boosts = {row["document_key"]: row["score_components"]["graph_boost"] for row in hybrid["results"]}
     assert {"rr-seed", "rr-related", "rr-isolated"} <= set(boosts)
@@ -403,12 +411,18 @@ def test_related_edges_boost_hybrid_ranking() -> None:
     assert order.index("rr-related") < order.index("rr-isolated")
 
 
-def _hybrid_until_indexed(repository, query: str, *, dimension: int, required: set[str]) -> dict:
+def _hybrid_until_indexed(repository, query: str, *, dimension: int, required: set[str], ready=None) -> dict:
     # ArangoSearch and the vector index are eventually consistent, so freshly-inserted documents
-    # may not appear in the pool on the first query. Retry (bounded) until they are indexed.
+    # may be absent — or present but with not-yet-stable BM25 scores — on the first query. Retry
+    # (bounded) until `ready` holds; by default that is just presence of the `required` documents,
+    # but a caller can require a stronger condition (e.g. the graph boost being applied).
+    def _present(hybrid: dict) -> bool:
+        return required <= {row["document_key"] for row in hybrid["results"]}
+
+    ready = ready or _present
     hybrid = hybrid_search(repository, query, dimension=dimension)
     for _ in range(20):
-        if required <= {row["document_key"] for row in hybrid["results"]}:
+        if ready(hybrid):
             return hybrid
         time.sleep(0.25)
         hybrid = hybrid_search(repository, query, dimension=dimension)
