@@ -2,6 +2,11 @@ GRAPH_NAME = "knowledge_graph"
 TEXT_VIEW_NAME = "kb_text_view"
 VECTOR_DIMENSION = 8
 
+# GR-3: cross-document similarity edges (item_related_to_item). Each chunk links to at most
+# RELATED_TOP_K most-similar chunks from other documents whose cosine is at least RELATED_MIN_SCORE.
+RELATED_TOP_K = 5
+RELATED_MIN_SCORE = 0.5
+
 DOCUMENT_COLLECTIONS = [
     "sources",
     "raw_snapshots",

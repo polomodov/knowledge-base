@@ -77,7 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
     index = subcommands.add_parser("index", help="Manage derived indexes")
     index_sub = index.add_subparsers(dest="index_command")
     rebuild = index_sub.add_parser("rebuild", help="Rebuild/check derived indexes")
-    rebuild.add_argument("--target", default="all", choices=["all", "text", "vector", "graph"])
+    rebuild.add_argument("--target", default="all", choices=["all", "text", "vector", "graph", "related"])
     rebuild.set_defaults(handler=_index_rebuild)
 
     search = subcommands.add_parser("search", help="Run retrieval queries")

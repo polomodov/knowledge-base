@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from knowledge_base.arango import ArangoError
 from knowledge_base.constants import VECTOR_DIMENSION
-from knowledge_base.embeddings import EmbeddingProvider, HashEmbeddingProvider
+from knowledge_base.embeddings import EmbeddingProvider, HashEmbeddingProvider, cosine_similarity
 from knowledge_base.repository import KnowledgeRepository
 
 # GR-1: hybrid folds a bounded graph signal into ranking. Seeds are the strongest fused
@@ -703,8 +702,6 @@ def _start_vertex(
     return None
 
 
-def _cosine(left: list[float], right: list[float]) -> float:
-    denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
-    if denominator == 0:
-        return 0.0
-    return round(sum(a * b for a, b in zip(left, right, strict=False)) / denominator, 6)
+# Kept as a module-level name for internal use and the existing unit tests; the implementation
+# now lives in embeddings so the similarity-edge builder (GR-3) can share it.
+_cosine = cosine_similarity

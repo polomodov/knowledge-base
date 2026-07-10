@@ -71,6 +71,14 @@ def validate_vector(vector: list[float], *, dimension: int = VECTOR_DIMENSION) -
         raise ValueError("Embedding vector must contain only numbers")
 
 
+def cosine_similarity(left: list[float], right: list[float]) -> float:
+    """Cosine similarity of two vectors, rounded to 6 dp; 0.0 if either is a zero vector."""
+    denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(sum(value * value for value in right))
+    if denominator == 0:
+        return 0.0
+    return round(sum(a * b for a, b in zip(left, right, strict=False)) / denominator, 6)
+
+
 class HashEmbeddingProvider:
     """Default provider: deterministic, offline, zero-dependency (wraps `hash_embedding`)."""
 

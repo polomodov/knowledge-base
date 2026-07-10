@@ -7,7 +7,7 @@ from knowledge_base.arango import ArangoClient
 from knowledge_base.config import load_settings
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.fixture import ingest_fixture
-from knowledge_base.indexing import rebuild_indexes
+from knowledge_base.indexing import build_related_edges, rebuild_indexes
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_search, text_search
 from knowledge_base.schema import bootstrap_schema
@@ -235,6 +235,90 @@ def test_hybrid_graph_boost_rewards_shared_entities() -> None:
     assert boosts["gb-isolated"] == 0  # shares no entity -> no graph boost
     order = [row["document_key"] for row in hybrid["results"]]
     assert order.index("gb-connected") < order.index("gb-isolated")
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_related_edges_link_similar_cross_document_chunks() -> None:
+    # GR-3: build_related_edges populates item_related_to_item with cross-document similarity
+    # edges, turning the provenance tree into a knowledge graph. Two documents with identical text
+    # get identical chunk embeddings (cosine 1.0), so an undirected edge links them and graph
+    # neighbours of one document surface the other.
+    settings = load_settings()
+    repository = KnowledgeRepository(ArangoClient(settings))
+    bootstrap_schema(repository.client)
+
+    now = "2026-07-08T00:00:00Z"
+    source_key = "rel-src"
+    body = "distributed systems consensus and replication"
+    repository.upsert("sources", {"_key": source_key, "type": "test", "display_name": source_key, "created_at": now})
+    for document_key_value in ("rel-doc-a", "rel-doc-b"):
+        repository.upsert(
+            "documents",
+            {
+                "_key": document_key_value,
+                "source_key": source_key,
+                "canonical_id": document_key_value,
+                "title": document_key_value,
+                "text": body,
+                "url": None,
+                "created_at": now,
+            },
+        )
+        chunk_key_value = f"{document_key_value}-c0"
+        repository.upsert(
+            "chunks",
+            {
+                "_key": chunk_key_value,
+                "document_key": document_key_value,
+                "ordinal": 0,
+                "text": body,
+                "embedding": hash_embedding(body, dimension=settings.embedding_dimension),
+                "embedding_model": "hash-v1",
+            },
+        )
+        repository.upsert_edge(
+            "chunk_of_document",
+            {
+                "_key": f"rel-edge-{chunk_key_value}",
+                "_from": f"chunks/{chunk_key_value}",
+                "_to": f"documents/{document_key_value}",
+            },
+        )
+
+    # Scope to this test's source so the build stays isolated from the rest of the corpus.
+    result = build_related_edges(repository, top_k=5, min_score=0.5, source_key=source_key)
+    assert result["created"] >= 1  # at least the a<->b cross-document pair
+
+    related = repository.client.aql(
+        """
+        FOR e IN item_related_to_item
+          FILTER e._from IN [@a, @b] AND e._to IN [@a, @b]
+          RETURN e
+        """,
+        {"a": "chunks/rel-doc-a-c0", "b": "chunks/rel-doc-b-c0"},
+    )
+    assert related
+    assert related[0]["method"] == "embedding-similarity"
+    assert related[0]["weight"] >= 0.5
+
+    # Graph neighbours of document A now surface document B via the similarity edge.
+    neighbours = graph_neighbors(repository, document="rel-doc-a", documents_only=True)
+    assert neighbours["status"] == "ok"
+    assert "rel-doc-b" in {row["document_key"] for row in neighbours["results"]}
+
+    # Rebuild is a full refresh (clear-then-insert): the edge set is stable, not duplicated.
+    second = build_related_edges(repository, top_k=5, min_score=0.5, source_key=source_key)
+    assert second["created"] == result["created"]
+    assert second["removed"] == result["created"]  # cleared exactly what the previous build owned
+    related_again = repository.client.aql(
+        """
+        FOR e IN item_related_to_item
+          FILTER e._from IN [@a, @b] AND e._to IN [@a, @b]
+          RETURN e
+        """,
+        {"a": "chunks/rel-doc-a-c0", "b": "chunks/rel-doc-b-c0"},
+    )
+    assert len(related_again) == len(related)  # still one a<->b edge, no duplication
 
 
 def _unique_document_keys(results: list[dict]) -> bool:
