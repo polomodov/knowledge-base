@@ -16,3 +16,9 @@ dimension = 8
 # provider = "local"
 # model = "sentence-transformers/all-MiniLM-L6-v2"
 # dimension = 384
+
+[retrieval]
+# min_similarity: relevance floor for semantic hits (cosine). 0.0 (default) only drops
+# anti-correlated hits; raise it (e.g. 0.35) with a real embedding model to keep the pool
+# precise. Also overridable per query with `kb search semantic|hybrid --min-similarity`.
+min_similarity = 0.0

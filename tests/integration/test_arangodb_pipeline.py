@@ -415,6 +415,51 @@ def _hybrid_until_indexed(repository, query: str, *, dimension: int, required: s
     return hybrid
 
 
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_semantic_search_relevance_gate() -> None:
+    # Relevance-gated recall: a semantic hit below the floor is dropped. rg-doc's chunk text equals
+    # the query, so its cosine is 1.0 — kept at a 0.99 floor, dropped at a 1.01 floor. Source-scoped
+    # semantic uses a direct chunk scan (no index-freshness lag), so this is deterministic.
+    settings = load_settings()
+    repository = KnowledgeRepository(ArangoClient(settings))
+    bootstrap_schema(repository.client)
+
+    now = "2026-07-10T00:00:00Z"
+    source_key = "rg-src"
+    body = "relevancegate marker unique phrase"
+    repository.upsert("sources", {"_key": source_key, "type": "test", "display_name": source_key, "created_at": now})
+    repository.upsert(
+        "documents",
+        {
+            "_key": "rg-doc",
+            "source_key": source_key,
+            "canonical_id": "rg-doc",
+            "title": "rg",
+            "text": body,
+            "url": None,
+            "created_at": now,
+        },
+    )
+    repository.upsert(
+        "chunks",
+        {
+            "_key": "rg-doc-c0",
+            "document_key": "rg-doc",
+            "ordinal": 0,
+            "text": body,
+            "embedding": hash_embedding(body, dimension=settings.embedding_dimension),
+            "embedding_model": "hash-v1",
+        },
+    )
+
+    kept = semantic_search(repository, body, source_key=source_key, dimension=settings.embedding_dimension, min_similarity=0.99)
+    assert "rg-doc" in {row["document_key"] for row in kept["results"]}  # cosine ~1.0 clears a 0.99 floor
+    dropped = semantic_search(
+        repository, body, source_key=source_key, dimension=settings.embedding_dimension, min_similarity=1.01
+    )
+    assert "rg-doc" not in {row["document_key"] for row in dropped["results"]}  # nothing clears a 1.01 floor
+
+
 def _unique_document_keys(results: list[dict]) -> bool:
     keys = [result["document_key"] for result in results]
     return len(keys) == len(set(keys))

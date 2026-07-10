@@ -88,6 +88,7 @@ def semantic_search(
     dimension: int = VECTOR_DIMENSION,
     source_key: str | None = None,
     provider: EmbeddingProvider | None = None,
+    min_similarity: float = 0.0,
 ) -> dict[str, Any]:
     # The query is embedded by the same provider that produced the stored chunk vectors, so both
     # live in one space (GR-2). Without an explicit provider we default to the hash embedder at
@@ -125,7 +126,18 @@ def semantic_search(
         scored.sort(key=lambda item: item["score"], reverse=True)
         ranked = _dedup_best_by_document(scored)
 
-    return {"query": query, "mode": "semantic", "status": "ok", "results": _hydrate_semantic(repository, ranked[:limit])}
+    gated = _gate_by_similarity(ranked, min_similarity)
+    return {"query": query, "mode": "semantic", "status": "ok", "results": _hydrate_semantic(repository, gated[:limit])}
+
+
+def _gate_by_similarity(ranked: list[dict[str, Any]], min_similarity: float) -> list[dict[str, Any]]:
+    """Drop hits whose cosine is below the relevance floor (relevance-gated recall).
+
+    Keeps ranked retrieval from padding the pool with barely-related documents. The default floor
+    of 0.0 only removes anti-correlated (negative-cosine) hits, which contribute nothing to a hybrid
+    score anyway; a real embedding model can raise the floor for a stricter, higher-precision pool.
+    """
+    return [item for item in ranked if item["score"] >= min_similarity]
 
 
 def _semantic_candidate_chunks(
@@ -485,6 +497,7 @@ def hybrid_search(
     dimension: int = VECTOR_DIMENSION,
     source_key: str | None = None,
     provider: EmbeddingProvider | None = None,
+    min_similarity: float = 0.0,
 ) -> dict[str, Any]:
     degraded_components: list[str] = []
     try:
@@ -493,7 +506,15 @@ def hybrid_search(
         text_results = []
         degraded_components.append("text")
 
-    semantic = semantic_search(repository, query, limit=limit, dimension=dimension, source_key=source_key, provider=provider)
+    semantic = semantic_search(
+        repository,
+        query,
+        limit=limit,
+        dimension=dimension,
+        source_key=source_key,
+        provider=provider,
+        min_similarity=min_similarity,
+    )
     if semantic["status"] == "degraded":
         degraded_components.append("vector")
 
