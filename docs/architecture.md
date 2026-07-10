@@ -44,6 +44,8 @@ sources -> ingest -> normalize -> store -> index/search -> visualize/write
 
 Первый production-like pipeline проектируется вокруг ArangoDB: documents/chunks, graph edges, ArangoSearch full-text и vector indexes живут в одном multi-model ядре. Это снижает количество движущихся частей в v1, но сохраняет явные границы storage/search/vector/graph, чтобы позже вынести отдельный движок при bottleneck.
 
+Эмбеддинги подключаемы через `EmbeddingProvider` (`embedding.provider`): дефолт `hash` — детерминированный, offline, без зависимостей (ingest и запрос используют один провайдер, поэтому векторы в одном пространстве). Провайдер `local` даёт реальные семантические эмбеддинги через `sentence-transformers` (ставится вручную, вне locked-зависимостей). `embedding.dimension` — единый источник размерности для vector index. См. [docs/graphrag-plan.md](graphrag-plan.md) (GR-2).
+
 Текущий v1 fixture slice реализует этот контур через Python CLI `kb`:
 
 - `kb platform bootstrap` создает коллекции, edge collections, ArangoSearch View, graph definition и vector index.

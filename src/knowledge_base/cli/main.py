@@ -8,6 +8,7 @@ from pathlib import Path
 
 from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import load_settings
+from knowledge_base.embeddings import build_embedding_provider
 from knowledge_base.exporting import export_jsonl
 from knowledge_base.fixture import ingest_fixture
 from knowledge_base.indexing import rebuild_indexes
@@ -211,8 +212,8 @@ def _search_semantic(args: argparse.Namespace) -> int:
             _repo(args),
             args.query,
             limit=args.limit,
-            dimension=settings.embedding_dimension,
             source_key=args.source,
+            provider=build_embedding_provider(settings),
         ),
     )
 
@@ -224,8 +225,8 @@ def _search_hybrid(args: argparse.Namespace) -> int:
             _repo(args),
             args.query,
             limit=args.limit,
-            dimension=settings.embedding_dimension,
             source_key=args.source,
+            provider=build_embedding_provider(settings),
         ),
     )
 

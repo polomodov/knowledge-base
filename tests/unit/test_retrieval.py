@@ -1,5 +1,8 @@
+from typing import cast
+
 import pytest
 
+from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import (
     _cosine,
     _dedup_best_by_document,
@@ -141,12 +144,28 @@ def test_vector_ranked_grows_window_until_limit_is_filled() -> None:
     # A fixed candidate cap would return only that one document, so the window must grow
     # until `limit` distinct documents are collected (PR #8 review).
     rows = [
-        {"id": f"d1-c{i}", "key": f"d1-c{i}", "document_key": "d1", "text": "t", "score": 1.0 - i * 1e-4} for i in range(200)
+        {
+            "id": f"d1-c{i}",
+            "key": f"d1-c{i}",
+            "document_key": "d1",
+            "text": "t",
+            "score": 1.0 - i * 1e-4,
+            "embedding_model": "hash-v1",
+        }
+        for i in range(200)
     ] + [
-        {"id": f"d{j}-c0", "key": f"d{j}-c0", "document_key": f"d{j}", "text": "t", "score": 0.5 - j * 1e-4} for j in range(2, 21)
+        {
+            "id": f"d{j}-c0",
+            "key": f"d{j}-c0",
+            "document_key": f"d{j}",
+            "text": "t",
+            "score": 0.5 - j * 1e-4,
+            "embedding_model": "hash-v1",
+        }
+        for j in range(2, 21)
     ]
     repository = _FakeRepository(rows)
-    ranked = _vector_ranked(repository, [0.0] * 8, limit=10, source_key=None)
+    ranked = _vector_ranked(cast(KnowledgeRepository, repository), [0.0] * 8, limit=10, source_key=None, model="hash-v1")
 
     assert ranked is not None
     document_keys = {item["document_key"] for item in ranked}
@@ -160,8 +179,23 @@ def test_vector_ranked_skips_index_for_source_filter() -> None:
     # The ANN index cannot be combined with a source filter, so that case falls back without
     # querying the index. Non-default dimensions are served by the index itself (finding #33).
     repository = _FakeRepository([])
-    assert _vector_ranked(repository, [0.0] * 8, limit=10, source_key="src") is None
+    assert _vector_ranked(cast(KnowledgeRepository, repository), [0.0] * 8, limit=10, source_key="src", model="hash-v1") is None
     assert repository.client.requested == []  # never queried the index for a source-filtered request
+
+
+def test_vector_ranked_filters_out_incompatible_embedding_models() -> None:
+    # The vector index mixes every same-dimension model; a chunk from another provider/model must
+    # not leak into results even though it is dimensionally scored by APPROX_NEAR_COSINE (GR-2 review).
+    rows = [
+        {"id": "a-c0", "key": "a-c0", "document_key": "a", "text": "t", "score": 0.9, "embedding_model": "model-x"},
+        {"id": "b-c0", "key": "b-c0", "document_key": "b", "text": "t", "score": 0.8, "embedding_model": "model-y"},
+        {"id": "c-c0", "key": "c-c0", "document_key": "c", "text": "t", "score": 0.7, "embedding_model": "model-x"},
+    ]
+    repository = _FakeRepository(rows)
+    ranked = _vector_ranked(cast(KnowledgeRepository, repository), [0.0] * 8, limit=10, source_key=None, model="model-x")
+
+    assert ranked is not None
+    assert {item["document_key"] for item in ranked} == {"a", "c"}  # the model-y chunk is excluded
 
 
 def test_dedup_best_by_document_keeps_first_per_document() -> None:

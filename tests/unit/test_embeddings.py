@@ -1,8 +1,18 @@
+import importlib.util
 import math
 
 import pytest
 
-from knowledge_base.embeddings import fixture_embedding, hash_embedding, validate_vector
+from knowledge_base.config import Settings
+from knowledge_base.embeddings import (
+    HASH_EMBEDDING_MODEL,
+    EmbeddingProviderError,
+    HashEmbeddingProvider,
+    build_embedding_provider,
+    fixture_embedding,
+    hash_embedding,
+    validate_vector,
+)
 
 
 def test_fixture_embedding_is_deterministic_and_normalized() -> None:
@@ -42,3 +52,34 @@ def test_validate_vector_dimension() -> None:
 def test_validate_vector_rejects_non_numbers() -> None:
     with pytest.raises(ValueError):
         validate_vector([0.0, "x", 1.0], dimension=3)  # type: ignore[list-item]
+
+
+def test_hash_embedding_provider_wraps_hash_embedding() -> None:
+    provider = HashEmbeddingProvider(dimension=8)
+    assert provider.model == HASH_EMBEDDING_MODEL
+    assert provider.dimension == 8
+    assert provider.embed("systems thinking") == hash_embedding("systems thinking", dimension=8)
+
+
+def test_build_embedding_provider_defaults_to_hash() -> None:
+    provider = build_embedding_provider(Settings())
+    assert isinstance(provider, HashEmbeddingProvider)
+    assert provider.model == HASH_EMBEDDING_MODEL
+    assert provider.dimension == Settings().embedding_dimension
+    # Deterministic and offline: no external dependency is touched for the default provider.
+    assert provider.embed("книжные заметки") == hash_embedding("книжные заметки", dimension=provider.dimension)
+
+
+def test_build_embedding_provider_rejects_unknown_provider() -> None:
+    settings = Settings(embedding_provider="bogus")
+    with pytest.raises(EmbeddingProviderError, match="Unknown embedding provider"):
+        build_embedding_provider(settings)
+
+
+def test_local_provider_reports_missing_optional_dependency() -> None:
+    if importlib.util.find_spec("sentence_transformers") is not None:
+        pytest.skip("sentence-transformers is installed; the missing-dependency path is not exercised")
+    settings = Settings(embedding_provider="local")
+    build_embedding_provider.cache_clear()
+    with pytest.raises(EmbeddingProviderError, match="sentence-transformers"):
+        build_embedding_provider(settings)
