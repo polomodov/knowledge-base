@@ -306,8 +306,19 @@ def test_related_edges_link_similar_cross_document_chunks() -> None:
     assert neighbours["status"] == "ok"
     assert "rel-doc-b" in {row["document_key"] for row in neighbours["results"]}
 
-    # Idempotent: re-running adds no new edges.
-    assert build_related_edges(repository, top_k=5, min_score=0.5, source_key=source_key)["created"] == 0
+    # Rebuild is a full refresh (clear-then-insert): the edge set is stable, not duplicated.
+    second = build_related_edges(repository, top_k=5, min_score=0.5, source_key=source_key)
+    assert second["created"] == result["created"]
+    assert second["removed"] == result["created"]  # cleared exactly what the previous build owned
+    related_again = repository.client.aql(
+        """
+        FOR e IN item_related_to_item
+          FILTER e._from IN [@a, @b] AND e._to IN [@a, @b]
+          RETURN e
+        """,
+        {"a": "chunks/rel-doc-a-c0", "b": "chunks/rel-doc-b-c0"},
+    )
+    assert len(related_again) == len(related)  # still one a<->b edge, no duplication
 
 
 def _unique_document_keys(results: list[dict]) -> bool:

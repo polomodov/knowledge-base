@@ -1,4 +1,24 @@
-from knowledge_base.indexing import _scored_candidates, _select_related
+from typing import cast
+
+from knowledge_base.indexing import _ann_related, _scored_candidates, _select_related
+from knowledge_base.repository import KnowledgeRepository
+
+
+class _FakeAnnClient:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.windows: list[int] = []
+
+    def aql(self, query: str, bind_vars: dict | None = None) -> list[dict]:
+        assert bind_vars is not None
+        window = bind_vars["window"]
+        self.windows.append(window)
+        return [dict(row) for row in self.rows[:window]]
+
+
+class _FakeAnnRepository:
+    def __init__(self, rows: list[dict]) -> None:
+        self.client = _FakeAnnClient(rows)
 
 
 def _chunk(chunk_id: str, document_key: str, *, model: str = "hash-v1") -> dict:
@@ -34,6 +54,20 @@ def test_select_related_respects_top_k_and_orders_by_score_then_id() -> None:
         _candidate("chunks/d1", "D", 0.9),  # ties with c1 -> id breaks the tie (c1 before d1)
     ]
     assert _select_related(chunk, candidates, top_k=2, min_score=0.5) == [("chunks/c1", 0.9), ("chunks/d1", 0.9)]
+
+
+def test_ann_related_grows_window_past_invalid_neighbours() -> None:
+    # The first 50 ANN rows are all same-document (invalid); the only valid cross-document neighbour
+    # sits just outside that window. The builder must grow the window instead of returning nothing.
+    chunk = {"id": "chunks/a1", "document_key": "A", "embedding_model": "m", "embedding": [0.0, 0.0]}
+    rows = [{"id": f"chunks/a-{i}", "document_key": "A", "embedding_model": "m", "score": 0.99} for i in range(50)]
+    rows.append({"id": "chunks/b1", "document_key": "B", "embedding_model": "m", "score": 0.95})
+    repository = _FakeAnnRepository(rows)
+
+    selected = _ann_related(cast(KnowledgeRepository, repository), chunk, top_k=1, min_score=0.5)
+
+    assert selected == [("chunks/b1", 0.95)]
+    assert repository.client.windows == [50, 200]  # grew once past the 50 invalid same-document rows
 
 
 def test_scored_candidates_scores_pool_and_drops_self() -> None:

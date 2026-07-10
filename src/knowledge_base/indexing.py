@@ -48,6 +48,7 @@ def rebuild_indexes(
         related = build_related_edges(repository)
         counts["related_pairs"] = related["pairs"]
         counts["related_edges_created"] = related["created"]
+        counts["related_edges_removed"] = related["removed"]
     run["finished_at"] = _now()
     run["status"] = "ok"
     run["counts"] = counts
@@ -72,21 +73,27 @@ def build_related_edges(
     it scales across the whole corpus. With `source_key` the search is scoped to that source's
     chunks and compared directly (the vector index cannot be combined with a filter), which keeps
     a scoped rebuild — and tests — fast and isolated from the rest of the corpus.
+
+    It is a rebuildable derived index: the edges it owns are cleared first and rewritten from the
+    current embeddings/threshold, so stale weights and links that dropped below the threshold do
+    not survive a rebuild.
     """
     chunks = _chunks_for_similarity(repository, source_key=source_key)
     pairs: dict[tuple[str, str], float] = {}
     for chunk in chunks:
         if source_key is None:
-            candidates = _ann_candidates(repository, chunk["embedding"], window=max(top_k * 10, 50))
+            selected = _ann_related(repository, chunk, top_k=top_k, min_score=min_score)
         else:
-            candidates = _scored_candidates(chunk, chunks)
-        for other_id, weight in _select_related(chunk, candidates, top_k=top_k, min_score=min_score):
+            selected = _select_related(chunk, _scored_candidates(chunk, chunks), top_k=top_k, min_score=min_score)
+        for other_id, weight in selected:
             key = (chunk["id"], other_id) if chunk["id"] < other_id else (other_id, chunk["id"])
             if key not in pairs or weight > pairs[key]:
                 pairs[key] = weight
 
+    # Clear the edges this build owns, then insert fresh, so a rebuild reflects current embeddings.
+    removed = _clear_related_edges(repository, [chunk["id"] for chunk in chunks], scoped=source_key is not None)
     if not pairs:
-        return {"chunks": len(chunks), "pairs": 0, "created": 0}
+        return {"chunks": len(chunks), "pairs": 0, "created": 0, "removed": removed}
     now = _now()
     edges = [
         {
@@ -99,19 +106,70 @@ def build_related_edges(
         }
         for (from_id, to_id), weight in sorted(pairs.items())
     ]
-    # One round-trip for the whole batch; UPDATE {} keeps existing edges untouched (idempotent).
-    outcomes = repository.client.aql(
-        """
-        FOR edge IN @edges
-          UPSERT { _key: edge._key }
-          INSERT edge
-          UPDATE {} IN item_related_to_item
-          RETURN OLD == null
-        """,
+    repository.client.aql(
+        "FOR edge IN @edges INSERT edge INTO item_related_to_item",
         {"edges": edges},
     )
-    created = sum(1 for was_created in outcomes if was_created)
-    return {"chunks": len(chunks), "pairs": len(pairs), "created": created}
+    return {"chunks": len(chunks), "pairs": len(pairs), "created": len(edges), "removed": removed}
+
+
+def _ann_related(
+    repository: KnowledgeRepository,
+    chunk: dict[str, Any],
+    *,
+    top_k: int,
+    min_score: float,
+) -> list[tuple[str, float]]:
+    """Top-`top_k` valid neighbours for `chunk` via the ANN index, growing the window.
+
+    Self / same-document / incompatible-model rows are dropped only after the ANN returns them, so
+    a fixed window can be entirely invalid for a long document or a mixed-model corpus. The window
+    grows until `top_k` valid neighbours are found or the index is exhausted (as `_vector_ranked`
+    does), instead of silently returning nothing.
+    """
+    window = max(top_k * 10, 50)
+    selected: list[tuple[str, float]] = []
+    for _ in range(8):
+        candidates = _ann_candidates(repository, chunk["embedding"], window=window)
+        selected = _select_related(chunk, candidates, top_k=top_k, min_score=min_score)
+        if len(selected) >= top_k or len(candidates) < window:
+            return selected
+        window *= 4
+    return selected
+
+
+def _clear_related_edges(repository: KnowledgeRepository, chunk_ids: list[str], *, scoped: bool) -> int:
+    """Remove the embedding-similarity edges this build owns; returns how many were removed.
+
+    A scoped build owns only within-source edges (both endpoints among `chunk_ids`); a full build
+    owns every embedding-similarity edge. Non-derived edges (other methods) are never touched.
+    """
+    if scoped:
+        return int(
+            repository.client.aql(
+                """
+                RETURN LENGTH(
+                  FOR e IN item_related_to_item
+                    FILTER e.method == "embedding-similarity" AND e._from IN @ids AND e._to IN @ids
+                    REMOVE e IN item_related_to_item
+                    RETURN 1
+                )
+                """,
+                {"ids": chunk_ids},
+            )[0]
+        )
+    return int(
+        repository.client.aql(
+            """
+            RETURN LENGTH(
+              FOR e IN item_related_to_item
+                FILTER e.method == "embedding-similarity"
+                REMOVE e IN item_related_to_item
+                RETURN 1
+            )
+            """
+        )[0]
+    )
 
 
 def _select_related(
