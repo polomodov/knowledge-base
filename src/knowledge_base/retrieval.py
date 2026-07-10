@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from knowledge_base.arango import ArangoError
-from knowledge_base.constants import VECTOR_DIMENSION
+from knowledge_base.constants import RELATED_EDGE_METHOD, VECTOR_DIMENSION
 from knowledge_base.embeddings import EmbeddingProvider, HashEmbeddingProvider, cosine_similarity
 from knowledge_base.repository import KnowledgeRepository
 
@@ -661,14 +661,14 @@ def _document_related(
           LET chunk_ids = (FOR c IN chunks FILTER c.document_key == doc_key RETURN c._id)
           LET links = (
             FOR e IN item_related_to_item
-              FILTER e._from IN chunk_ids OR e._to IN chunk_ids
+              FILTER e.method == @method AND (e._from IN chunk_ids OR e._to IN chunk_ids)
               LET other = DOCUMENT(e._from IN chunk_ids ? e._to : e._from)
               FILTER other != null AND other.document_key != doc_key
               RETURN { doc: other.document_key, weight: e.weight }
           )
           RETURN { document_key: doc_key, links: links }
         """,
-        {"document_keys": unique_keys},
+        {"document_keys": unique_keys, "method": RELATED_EDGE_METHOD},
     )
     related: dict[str, dict[str, float]] = {}
     for row in rows:

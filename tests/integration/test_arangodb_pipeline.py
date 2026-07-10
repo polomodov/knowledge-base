@@ -381,6 +381,12 @@ def test_related_edges_boost_hybrid_ranking() -> None:
             "created_at": now,
         },
     )
+    # A non-derived edge (different method, no numeric weight) must be ignored by ranking (PR #26
+    # review): it must neither crash hybrid nor boost the otherwise-isolated document.
+    repository.upsert_edge(
+        "item_related_to_item",
+        {"_key": "manual-rr-isolated-seed", "_from": "chunks/rr-isolated-c0", "_to": "chunks/rr-seed-c0", "method": "manual"},
+    )
 
     hybrid = _hybrid_until_indexed(
         repository,

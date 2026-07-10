@@ -4,8 +4,11 @@ VECTOR_DIMENSION = 8
 
 # GR-3: cross-document similarity edges (item_related_to_item). Each chunk links to at most
 # RELATED_TOP_K most-similar chunks from other documents whose cosine is at least RELATED_MIN_SCORE.
+# RELATED_EDGE_METHOD tags these derived edges so writers and readers never confuse them with
+# non-derived item_related_to_item edges of another kind.
 RELATED_TOP_K = 5
 RELATED_MIN_SCORE = 0.5
+RELATED_EDGE_METHOD = "embedding-similarity"
 
 DOCUMENT_COLLECTIONS = [
     "sources",
