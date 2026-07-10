@@ -704,25 +704,34 @@ def _graph_boosts(
     if not base:
         return {}
     seeds = sorted(base, key=lambda key: base[key], reverse=True)[:seed_count]
-    raw: dict[str, float] = {}
-    for document_key_value in base:
-        entities: set[str] | frozenset[str] = entity_sets.get(document_key_value) or frozenset()
-        links: dict[str, float] = related.get(document_key_value) or {}
-        total = 0.0
-        for seed in seeds:
-            if seed == document_key_value:
-                continue
-            shared = entities & (entity_sets.get(seed) or frozenset())
-            if shared:
-                total += base[seed] * len(shared)
-            link_weight = links.get(seed)
-            if link_weight:
-                total += base[seed] * link_weight
-        raw[document_key_value] = total
+    raw = {key: _seed_connection(key, base, seeds, entity_sets, related) for key in base}
     highest = max(raw.values())
     if highest <= 0.0:
         return dict.fromkeys(base, 0.0)
     return {key: round(cap * value / highest, 6) for key, value in raw.items()}
+
+
+def _seed_connection(
+    document_key_value: str,
+    base: dict[str, float],
+    seeds: list[str],
+    entity_sets: dict[str, set[str]],
+    related: dict[str, dict[str, float]],
+) -> float:
+    """Raw graph connection of one document to the seeds: shared-entity plus similarity-link terms."""
+    entities: set[str] | frozenset[str] = entity_sets.get(document_key_value) or frozenset()
+    links: dict[str, float] = related.get(document_key_value) or {}
+    total = 0.0
+    for seed in seeds:
+        if seed == document_key_value:
+            continue
+        shared = entities & (entity_sets.get(seed) or frozenset())
+        if shared:
+            total += base[seed] * len(shared)
+        link_weight = links.get(seed)
+        if link_weight:
+            total += base[seed] * link_weight
+    return total
 
 
 def _start_vertex(
