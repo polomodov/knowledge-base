@@ -96,12 +96,13 @@ def semantic_search(
     embedder = provider if provider is not None else HashEmbeddingProvider(dimension=dimension)
     query_vector = embedder.embed(query)
     effective_dimension = embedder.dimension
-    ranked = _vector_ranked(repository, query_vector, limit=limit, source_key=source_key)
+    model = embedder.model
+    ranked = _vector_ranked(repository, query_vector, limit=limit, source_key=source_key, model=model)
     if ranked is None:
         # Fallback: full-scan cosine in Python. Used when the ANN index is unavailable,
         # the embedding dimension differs from the index, or a source filter is set (the
         # vector index cannot be combined with a filter).
-        chunks = _semantic_candidate_chunks(repository, dimension=effective_dimension, source_key=source_key)
+        chunks = _semantic_candidate_chunks(repository, dimension=effective_dimension, source_key=source_key, model=model)
         if not chunks:
             if source_key is not None:
                 return {"query": query, "mode": "semantic", "status": "ok", "results": []}
@@ -133,6 +134,7 @@ def _semantic_candidate_chunks(
     *,
     dimension: int,
     source_key: str | None,
+    model: str,
     batch_size: int = 500,
 ) -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
@@ -141,7 +143,7 @@ def _semantic_candidate_chunks(
         batch = repository.client.aql(
             """
             FOR chunk IN chunks
-              FILTER HAS(chunk, "embedding") AND LENGTH(chunk.embedding) == @dimension
+              FILTER HAS(chunk, "embedding") AND LENGTH(chunk.embedding) == @dimension AND chunk.embedding_model == @model
               LET doc = DOCUMENT("documents", chunk.document_key)
               FILTER doc != null
               FILTER @source_key == null OR doc.source_key == @source_key
@@ -154,7 +156,7 @@ def _semantic_candidate_chunks(
                 embedding: chunk.embedding
               }
             """,
-            {"dimension": dimension, "source_key": source_key, "offset": offset, "batch_size": batch_size},
+            {"dimension": dimension, "source_key": source_key, "model": model, "offset": offset, "batch_size": batch_size},
         )
         if not batch:
             return chunks
@@ -170,6 +172,7 @@ def _vector_ranked(
     *,
     limit: int,
     source_key: str | None,
+    model: str,
 ) -> list[dict[str, Any]] | None:
     """ANN ranking via the chunks vector index (findings #9, #12).
 
@@ -177,6 +180,10 @@ def _vector_ranked(
     that the caller should fall back to the full-scan path. The index is built for the
     configured embedding dimension, so it serves any dimension; only a source filter (which
     the index cannot be combined with) or an index error force the fallback.
+
+    The vector index is shared by every embedding model of the same dimension, so candidates are
+    filtered to `model` before dedup: chunks written by an incompatible same-dimension provider
+    (e.g. after a partial re-ingest with a different model) must not leak into results (GR-2 review).
     """
     if source_key is not None:
         return None
@@ -193,7 +200,14 @@ def _vector_ranked(
                   LET score = APPROX_NEAR_COSINE(chunk.embedding, @query)
                   SORT score DESC
                   LIMIT @candidates
-                  RETURN { id: chunk._id, key: chunk._key, document_key: chunk.document_key, text: chunk.text, score: score }
+                  RETURN {
+                    id: chunk._id,
+                    key: chunk._key,
+                    document_key: chunk.document_key,
+                    text: chunk.text,
+                    score: score,
+                    embedding_model: chunk.embedding_model
+                  }
                 """,
                 {"query": query_vector, "candidates": candidates_limit},
             )
@@ -201,7 +215,8 @@ def _vector_ranked(
             return None
         if not candidates:
             return None
-        deduped = _dedup_best_by_document(candidates)
+        matching = [row for row in candidates if row.get("embedding_model") == model]
+        deduped = _dedup_best_by_document(matching)
         # Enough distinct documents, or the index returned fewer rows than asked (exhausted).
         if len(deduped) >= limit or len(candidates) < candidates_limit:
             return deduped
