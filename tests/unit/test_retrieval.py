@@ -6,6 +6,7 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import (
     _cosine,
     _dedup_best_by_document,
+    _gate_by_similarity,
     _graph_boosts,
     _merge_hybrid,
     _start_vertex,
@@ -207,6 +208,16 @@ def test_vector_ranked_filters_out_incompatible_embedding_models() -> None:
 
     assert ranked is not None
     assert {item["document_key"] for item in ranked} == {"a", "c"}  # the model-y chunk is excluded
+
+
+def test_gate_by_similarity_drops_below_floor() -> None:
+    ranked = [{"score": 0.9}, {"score": 0.1}, {"score": 0.0}, {"score": -0.2}]
+    # Default floor 0.0 removes only anti-correlated (negative) hits.
+    assert _gate_by_similarity(ranked, 0.0) == [{"score": 0.9}, {"score": 0.1}, {"score": 0.0}]
+    # A higher floor keeps only clearly-relevant hits.
+    assert _gate_by_similarity(ranked, 0.5) == [{"score": 0.9}]
+    # A floor of -1.0 keeps everything (cosine is always >= -1).
+    assert _gate_by_similarity(ranked, -1.0) == ranked
 
 
 def test_dedup_best_by_document_keeps_first_per_document() -> None:

@@ -36,8 +36,9 @@
 | GR-1 | `feat/graph-aware-hybrid` | GR-1 | GR-0 | ✅ merged ([#23](https://github.com/polomodov/knowledge-base/pull/23)) |
 | GR-2 | `feat/pluggable-embeddings` | GR-2 | — | ✅ merged ([#24](https://github.com/polomodov/knowledge-base/pull/24)) |
 | GR-3 | `feat/related-edges` | GR-3 | GR-2 | ✅ merged ([#25](https://github.com/polomodov/knowledge-base/pull/25)) |
-| GR-3b | `feat/related-in-ranking` | GR-3 (ранжирование) | GR-3 | 🟡 на ревью |
-| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3b | ☐ не начат |
+| GR-3b | `feat/related-in-ranking` | GR-3 (ранжирование) | GR-3 | ✅ merged ([#26](https://github.com/polomodov/knowledge-base/pull/26)) |
+| GR-3d | `feat/relevance-gated-recall` | recall precision | GR-2 | 🟡 на ревью |
+| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + real эмбеддинги | ⛔ отложен |
 | GR-4 | `feat/graph-communities` | GR-4 | GR-3 | ☐ не начат |
 | GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | ☐ не начат |
 | GR-6 | `chore/retrieval-view-granularity` | GR-7 | — | ☐ не начат |
@@ -108,12 +109,23 @@
 
 **Реализация (принято):** `_document_related` резолвит chunk↔chunk рёбра до уровня документов (макс. вес на связанный документ). `_graph_boosts` теперь суммирует два сигнала связности с seed'ами: `seed_score × |общие сущности|` (GR-1) и `seed_score × similarity_weight` (GR-3b), затем min-max в `[0, 0.5]`. `_cosine`/сигнатуры не тронуты; чистая логика покрыта unit-тестами, end-to-end — интеграционным (буст только за related-ребро, без топиков). Расширение кандидатов вынесено в **GR-3c**, чтобы PR остался обозримым.
 
-### GR-3c — Расширение кандидатов графом (recall)
+### GR-3d — Relevance-gated recall (precision)
+
+**Ветка / PR:** `feat/relevance-gated-recall`
+**Проблемы:** semantic recall паддит пул слабыми хитами
+**Задача:** `semantic_search` возвращал ровно top-`limit` по сырому косинусу, включая почти-нерелевантные. Ввести настраиваемый порог релевантности (`retrieval.min_similarity`, env `KB_RETRIEVAL_MIN_SIMILARITY`, per-query `--min-similarity`): хит семантики ниже порога отбрасывается (текстовые хиты не трогаются — приходят из `text_search`).
+**Критерии приёмки:** дефолт `0.0` отбрасывает только анти-коррелированные (косинус < 0) — безопасно, не режет recall; выше порог = точнее пул (осмысленно с реальной моделью, GR-2 `local`); чистая функция гейта покрыта unit-тестами, поведение — интеграционным; конфиг задокументирован.
+
+**Зачем сейчас:** это самостоятельное улучшение precision И структурная предпосылка для GR-3c (без гейта пул всегда полон сырых косинус-хитов, и capped-расширению негде появиться).
+
+### GR-3c — Расширение кандидатов графом (recall) ⛔ отложен
 
 **Ветка / PR:** `feat/graph-candidate-expansion`
 **Проблемы:** GR-3 (recall), перенос из GR-1
-**Задача:** Подтягивать в `hybrid` graph-only соседей — документы, связанные `item_related_to_item` с seed'ами, у которых не было text/vector хита, с relevance-гейтом по весу ребра; гидрация с provenance, вход с base=0 (не перевешивают реальные хиты, заполняют разрежённый recall).
-**Критерии приёмки:** связанный документ без lexical/semantic хита может войти в top-`limit`; provenance корректен; unit- и интеграционные тесты; отсутствие деградации precision при плотном recall.
+**Задача:** Подтягивать в `hybrid` graph-only соседей — документы, связанные `item_related_to_item` с seed'ами, у которых не было text/vector хита.
+
+**Статус (отложен по итогам состязательного ревью):** реализация + мультиагентное adversarial-ревью показали, что фича не готова к этому окружению. Подтверждены две HIGH-проблемы у «стреляющей» (uncapped) версии — утечка через `source_key` и нарушение инварианта «не перевешивать реальный хит»; корректная (capped ≤ `_GRAPH_BOOST_CAP`) версия **инертна**: `semantic_search` всегда заполняет пул сырыми косинус-хитами > 0.5, поэтому capped-расширение не всплывает, и его нельзя детерминированно протестировать (чанк не может быть без эмбеддинга — vector index требует поле; same-source док = semantic-хит; cross-source корректно отфильтрован). Ценность появляется только поверх (1) реальных эмбеддингов (GR-2 `local`) и (2) relevance-gated recall (**GR-3d**). Возобновить после них.
+**Критерии приёмки (когда возобновим):** связанный документ без lexical/semantic хита может войти в top-`limit`; capped-скор не перевешивает реальные хиты; expansion уважает `source_key`; provenance non-null; тесты.
 
 ### GR-4 — Сообщества графа и их summaries
 

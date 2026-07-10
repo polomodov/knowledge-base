@@ -91,11 +91,13 @@ def _build_parser() -> argparse.ArgumentParser:
     semantic.add_argument("query")
     semantic.add_argument("--limit", type=int, default=10)
     semantic.add_argument("--source", help="Optional exact source_key filter")
+    semantic.add_argument("--min-similarity", type=float, help="Relevance floor for semantic hits (default from config)")
     semantic.set_defaults(handler=_search_semantic)
     hybrid = search_sub.add_parser("hybrid", help="Run hybrid search")
     hybrid.add_argument("query")
     hybrid.add_argument("--limit", type=int, default=10)
     hybrid.add_argument("--source", help="Optional exact source_key filter")
+    hybrid.add_argument("--min-similarity", type=float, help="Relevance floor for semantic hits (default from config)")
     hybrid.set_defaults(handler=_search_hybrid)
 
     graph = subcommands.add_parser("graph", help="Run graph queries")
@@ -205,6 +207,11 @@ def _search_text(args: argparse.Namespace) -> int:
     return emit_json(text_search(_repo(args), args.query, limit=args.limit, source_key=args.source))
 
 
+def _min_similarity(args: argparse.Namespace, settings) -> float:
+    override = getattr(args, "min_similarity", None)
+    return override if override is not None else settings.retrieval_min_similarity
+
+
 def _search_semantic(args: argparse.Namespace) -> int:
     settings = _settings(args)
     return emit_json(
@@ -214,6 +221,7 @@ def _search_semantic(args: argparse.Namespace) -> int:
             limit=args.limit,
             source_key=args.source,
             provider=build_embedding_provider(settings),
+            min_similarity=_min_similarity(args, settings),
         ),
     )
 
@@ -227,6 +235,7 @@ def _search_hybrid(args: argparse.Namespace) -> int:
             limit=args.limit,
             source_key=args.source,
             provider=build_embedding_provider(settings),
+            min_similarity=_min_similarity(args, settings),
         ),
     )
 

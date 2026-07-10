@@ -25,6 +25,7 @@ class Settings:
     embedding_dimension: int = VECTOR_DIMENSION
     embedding_provider: str = "hash"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    retrieval_min_similarity: float = 0.0
     repo_root: Path = REPO_ROOT
 
 
@@ -59,6 +60,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     data = _load_toml(path)
     arango = data.get("arangodb", {})
     embedding = data.get("embedding", {})
+    retrieval = data.get("retrieval", {})
     env_file = _load_env_file(REPO_ROOT / "config" / "arangodb.env")
 
     def resolve(key: str, toml_value: Any, default: Any) -> Any:
@@ -90,5 +92,8 @@ def load_settings(config_path: str | None = None) -> Settings:
         embedding_dimension=int(resolve("KB_EMBEDDING_DIMENSION", embedding.get("dimension"), Settings.embedding_dimension)),
         embedding_provider=resolve("KB_EMBEDDING_PROVIDER", embedding.get("provider"), Settings.embedding_provider),
         embedding_model=resolve("KB_EMBEDDING_MODEL", embedding.get("model"), Settings.embedding_model),
+        retrieval_min_similarity=float(
+            resolve("KB_RETRIEVAL_MIN_SIMILARITY", retrieval.get("min_similarity"), Settings.retrieval_min_similarity)
+        ),
         repo_root=REPO_ROOT,
     )
