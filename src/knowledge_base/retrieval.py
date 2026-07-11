@@ -13,6 +13,15 @@ from knowledge_base.repository import KnowledgeRepository
 _HYBRID_SEED_COUNT = 5
 _GRAPH_BOOST_CAP = 0.5
 
+# GR-5: local/global GraphRAG search. Global pulls a candidate document pool (via hybrid), maps it to
+# communities, and returns the strongest communities; local expands the seed documents into their
+# connecting entities, similarity-neighbours, and communities.
+_GLOBAL_CANDIDATE_POOL = 50
+_GLOBAL_COMMUNITY_LIMIT = 5
+_GLOBAL_DOCS_PER_COMMUNITY = 5
+_LOCAL_RELATED_LIMIT = 10
+_LOCAL_ENTITY_LIMIT = 15
+
 
 def text_search(
     repository: KnowledgeRepository,
@@ -549,6 +558,285 @@ def hybrid_search(
         "degraded_components": degraded_components,
         "results": fused[:limit],
     }
+
+
+def local_search(
+    repository: KnowledgeRepository,
+    query: str,
+    *,
+    limit: int = 10,
+    dimension: int = VECTOR_DIMENSION,
+    source_key: str | None = None,
+    provider: EmbeddingProvider | None = None,
+    min_similarity: float = 0.0,
+) -> dict[str, Any]:
+    """GR-5 local GraphRAG search: assemble the local subgraph around a query's strongest documents.
+
+    Retrieves seed documents with hybrid search, then expands along the knowledge graph to return the
+    entities (topics/authors/works) that connect them, the documents they are similarity-linked to
+    (item_related_to_item, GR-3), and the communities (GR-4) they belong to — a focused, cited local
+    context rather than a flat ranked list.
+    """
+    hybrid = hybrid_search(
+        repository,
+        query,
+        limit=limit,
+        dimension=dimension,
+        source_key=source_key,
+        provider=provider,
+        min_similarity=min_similarity,
+    )
+    seeds = hybrid["results"]
+    seed_keys = [row["document_key"] for row in seeds]
+    context: dict[str, Any] = {
+        "query": query,
+        "mode": "graphrag-local",
+        "status": hybrid["status"],
+        "degraded_components": hybrid.get("degraded_components", []),
+        "seeds": seeds,
+        "entities": [],
+        "related_documents": [],
+        "communities": [],
+    }
+    if not seed_keys:
+        return context
+    try:
+        context["entities"] = _entities_for_documents(repository, seed_keys, limit=_LOCAL_ENTITY_LIMIT)
+        context["related_documents"] = _related_documents(repository, seed_keys, limit=_LOCAL_RELATED_LIMIT)
+        context["communities"] = _communities_for_documents(repository, seed_keys)
+    except ArangoError:
+        _mark_degraded(context, "graph")
+    return context
+
+
+def global_search(
+    repository: KnowledgeRepository,
+    query: str,
+    *,
+    limit: int = 10,
+    community_limit: int = _GLOBAL_COMMUNITY_LIMIT,
+    dimension: int = VECTOR_DIMENSION,
+    source_key: str | None = None,
+    provider: EmbeddingProvider | None = None,
+    min_similarity: float = 0.0,
+) -> dict[str, Any]:
+    """GR-5 global GraphRAG search: answer at the corpus level over community summaries (GR-4).
+
+    Retrieves a candidate pool of documents with hybrid search, maps each to its community, and ranks
+    communities by the aggregated relevance of their matching documents. Returns the top communities
+    with their extractive summaries and the member documents that matched (citations with provenance)
+    — the map/reduce shape of GraphRAG global search, grounded in retrieval evidence rather than an LLM
+    pass over every summary. `limit` bounds the documents shown per community.
+    """
+    pool = max(limit, _GLOBAL_CANDIDATE_POOL)
+    hybrid = hybrid_search(
+        repository,
+        query,
+        limit=pool,
+        dimension=dimension,
+        source_key=source_key,
+        provider=provider,
+        min_similarity=min_similarity,
+    )
+    context: dict[str, Any] = {
+        "query": query,
+        "mode": "graphrag-global",
+        "status": hybrid["status"],
+        "degraded_components": hybrid.get("degraded_components", []),
+        "communities": [],
+    }
+    candidates = hybrid["results"]
+    if not candidates:
+        return context
+    try:
+        membership = _community_membership(repository, [row["document_key"] for row in candidates])
+        communities = _communities_by_id(repository, sorted({m["community"] for m in membership}))
+    except ArangoError:
+        _mark_degraded(context, "graph")
+        return context
+    context["communities"] = _aggregate_community_scores(
+        candidates,
+        membership,
+        communities,
+        community_limit=community_limit,
+        docs_per_community=min(limit, _GLOBAL_DOCS_PER_COMMUNITY),
+    )
+    return context
+
+
+def _mark_degraded(context: dict[str, Any], component: str) -> None:
+    context["status"] = "degraded"
+    context.setdefault("degraded_components", [])
+    if component not in context["degraded_components"]:
+        context["degraded_components"].append(component)
+
+
+def _entities_for_documents(repository: KnowledgeRepository, document_keys: list[str], *, limit: int) -> list[dict[str, Any]]:
+    """Entities (topics/authors/works) linking the given documents, ranked by how many mention them."""
+    unique_keys = list(dict.fromkeys(document_keys))
+    if not unique_keys:
+        return []
+    return repository.client.aql(
+        """
+        LET mentions = (
+          FOR doc_key IN @document_keys
+            LET from_ids = PUSH(
+              (FOR c IN chunks FILTER c.document_key == doc_key RETURN c._id),
+              CONCAT("documents/", doc_key)
+            )
+            FOR pair IN UNION(
+                (FOR e IN document_mentions_topic FILTER e._from IN from_ids RETURN {id: e._to, kind: "topic"}),
+                (FOR e IN document_mentions_author FILTER e._from IN from_ids RETURN {id: e._to, kind: "author"}),
+                (FOR e IN document_references_work FILTER e._from IN from_ids RETURN {id: e._to, kind: "work"}))
+              RETURN pair
+        )
+        FOR m IN mentions
+          COLLECT id = m.id, kind = m.kind WITH COUNT INTO documents
+          LET node = DOCUMENT(id)
+          LET label = node.label != null ? node.label : (node.title != null ? node.title : id)
+          SORT documents DESC, label ASC
+          LIMIT @limit
+          RETURN { id: id, kind: kind, label: label, documents: documents }
+        """,
+        {"document_keys": unique_keys, "limit": limit},
+    )
+
+
+def _related_documents(repository: KnowledgeRepository, document_keys: list[str], *, limit: int) -> list[dict[str, Any]]:
+    """Documents similarity-linked (item_related_to_item, GR-3) to the seeds but not themselves seeds."""
+    unique_keys = list(dict.fromkeys(document_keys))
+    if not unique_keys:
+        return []
+    return repository.client.aql(
+        """
+        LET seeds = @document_keys
+        LET links = (
+          FOR doc_key IN seeds
+            LET chunk_ids = (FOR c IN chunks FILTER c.document_key == doc_key RETURN c._id)
+            FOR e IN item_related_to_item
+              FILTER e.method == @method AND (e._from IN chunk_ids OR e._to IN chunk_ids)
+              LET other = DOCUMENT(e._from IN chunk_ids ? e._to : e._from)
+              FILTER other != null AND other.document_key != null AND other.document_key NOT IN seeds
+              RETURN { doc: other.document_key, weight: e.weight }
+        )
+        FOR l IN links
+          COLLECT doc = l.doc AGGREGATE weight = MAX(l.weight)
+          LET d = DOCUMENT("documents", doc)
+          SORT weight DESC, doc ASC
+          LIMIT @limit
+          RETURN {
+            document_key: doc,
+            title: d.title,
+            weight: weight,
+            provenance: { source_key: d.source_key, url: d.url }
+          }
+        """,
+        {"document_keys": unique_keys, "method": RELATED_EDGE_METHOD, "limit": limit},
+    )
+
+
+def _communities_for_documents(repository: KnowledgeRepository, document_keys: list[str]) -> list[dict[str, Any]]:
+    """Communities (GR-4) the given documents belong to, with how many of them fall in each."""
+    unique_keys = list(dict.fromkeys(document_keys))
+    if not unique_keys:
+        return []
+    return repository.client.aql(
+        """
+        LET memberships = (
+          FOR doc_key IN @document_keys
+            FOR e IN document_in_community FILTER e._from == CONCAT("documents/", doc_key)
+              RETURN e._to
+        )
+        FOR community_id IN memberships
+          COLLECT cid = community_id WITH COUNT INTO seed_members
+          LET c = DOCUMENT(cid)
+          FILTER c != null
+          SORT seed_members DESC, cid ASC
+          RETURN {
+            community_key: c._key,
+            size: c.size,
+            summary: c.summary,
+            top_topics: c.top_topics,
+            seed_members: seed_members
+          }
+        """,
+        {"document_keys": unique_keys},
+    )
+
+
+def _community_membership(repository: KnowledgeRepository, document_keys: list[str]) -> list[dict[str, str]]:
+    """Map each document to the community it belongs to (documents not in a community are omitted)."""
+    unique_keys = list(dict.fromkeys(document_keys))
+    if not unique_keys:
+        return []
+    return repository.client.aql(
+        """
+        FOR doc_key IN @document_keys
+          FOR e IN document_in_community FILTER e._from == CONCAT("documents/", doc_key)
+            RETURN { doc: doc_key, community: e._to }
+        """,
+        {"document_keys": unique_keys},
+    )
+
+
+def _communities_by_id(repository: KnowledgeRepository, community_ids: list[str]) -> dict[str, dict[str, Any]]:
+    if not community_ids:
+        return {}
+    rows = repository.client.aql(
+        "FOR id IN @ids LET c = DOCUMENT(id) FILTER c != null RETURN { id: id, community: c }",
+        {"ids": community_ids},
+    )
+    return {row["id"]: row["community"] for row in rows}
+
+
+def _aggregate_community_scores(
+    candidates: list[dict[str, Any]],
+    membership: list[dict[str, str]],
+    communities: dict[str, dict[str, Any]],
+    *,
+    community_limit: int,
+    docs_per_community: int,
+) -> list[dict[str, Any]]:
+    """Rank communities by the summed relevance of their matched candidate documents (pure).
+
+    Each community's score is the sum of its member candidates' hybrid scores, so a community with
+    several strong matches outranks one with a single hit — the corpus-level relevance signal. Only
+    the top `docs_per_community` matched documents are returned as citations.
+    """
+    scores = {row["document_key"]: row for row in candidates}
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in membership:
+        row = scores.get(entry["doc"])
+        if row is not None:
+            grouped.setdefault(entry["community"], []).append(row)
+
+    ranked: list[dict[str, Any]] = []
+    for community_id, rows in grouped.items():
+        community = communities.get(community_id)
+        if community is None:
+            continue
+        members = sorted(rows, key=lambda item: item["score"], reverse=True)
+        ranked.append(
+            {
+                "community_key": community["_key"],
+                "size": community.get("size"),
+                "summary": community.get("summary"),
+                "top_topics": community.get("top_topics", []),
+                "score": round(sum(row["score"] for row in members), 6),
+                "matched_documents": len(members),
+                "documents": [
+                    {
+                        "document_key": row["document_key"],
+                        "title": row.get("title"),
+                        "score": row["score"],
+                        "provenance": row.get("provenance"),
+                    }
+                    for row in members[:docs_per_community]
+                ],
+            }
+        )
+    ranked.sort(key=lambda item: (item["score"], item["community_key"]), reverse=True)
+    return ranked[:community_limit]
 
 
 def _fuse_by_document(

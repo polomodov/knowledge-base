@@ -13,7 +13,14 @@ from knowledge_base.embeddings import hash_embedding
 from knowledge_base.fixture import ingest_fixture
 from knowledge_base.indexing import build_communities, build_related_edges, rebuild_indexes
 from knowledge_base.repository import KnowledgeRepository
-from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_search, text_search
+from knowledge_base.retrieval import (
+    global_search,
+    graph_neighbors,
+    hybrid_search,
+    local_search,
+    semantic_search,
+    text_search,
+)
 from knowledge_base.schema import bootstrap_schema
 
 pytestmark = pytest.mark.integration
@@ -679,6 +686,117 @@ def test_build_communities_clusters_similarity_graph() -> None:
     assert second["counts"]["communities"] == 1
     assert second["counts"]["communities_removed"] == 3
     assert len(repository.client.aql("FOR c IN communities RETURN 1")) == 1
+
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_graphrag_local_and_global_search() -> None:
+    # GR-5: global search maps retrieval hits to their communities and ranks communities; local search
+    # expands the seed documents into connecting entities, similarity-neighbours, and communities.
+    # Retrieval is made deterministic by gating the noisy hash-vector hits (min_similarity=1.01), so
+    # hybrid is effectively BM25-only over the crafted corpus. Runs in its own database.
+    base = load_settings()
+    settings = cast(Settings, dataclasses.replace(base, arango_database=f"{base.arango_database}_graphrag"))
+    client = ArangoClient(settings)
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+    repository = KnowledgeRepository(client)
+    bootstrap_schema(client, embedding_dimension=settings.embedding_dimension)
+    dim = settings.embedding_dimension
+    now = "2026-07-11T00:00:00Z"
+
+    repository.upsert("sources", {"_key": "gs-src", "type": "test", "display_name": "gs", "created_at": now})
+    repository.upsert("topics", {"_key": "gs-databases", "label": "Databases", "created_at": now})
+    repository.upsert("topics", {"_key": "gs-leadership", "label": "Leadership", "created_at": now})
+
+    corpus = {
+        "gs-db1": ("Distributed Databases", "distributed database consensus replication quorum", "gs-databases"),
+        "gs-db2": ("Consensus Systems", "distributed consensus quorum database replication", "gs-databases"),
+        "gs-db3": ("Sharding Guide", "sharding partition tolerance rebalancing shards", "gs-databases"),
+        "gs-mg1": ("Engineering Leadership", "engineering leadership coaching growing teams", "gs-leadership"),
+        "gs-mg2": ("Team Management", "management leadership coaching engineering teams", "gs-leadership"),
+    }
+    for key, (title, text, topic) in corpus.items():
+        repository.upsert(
+            "documents",
+            {
+                "_key": key,
+                "source_key": "gs-src",
+                "canonical_id": key,
+                "title": title,
+                "text": text,
+                "url": None,
+                "created_at": now,
+            },
+        )
+        repository.upsert(
+            "chunks",
+            {
+                "_key": f"{key}-c0",
+                "document_key": key,
+                "ordinal": 0,
+                "text": text,
+                "embedding": hash_embedding(text, dimension=dim),
+                "embedding_model": "hash-v1",
+            },
+        )
+        repository.upsert_edge(
+            "chunk_of_document",
+            {"_key": f"{key}-cod", "_from": f"chunks/{key}-c0", "_to": f"documents/{key}", "method": "test"},
+        )
+        repository.upsert_edge(
+            "document_mentions_topic",
+            {"_key": f"{key}-dmt", "_from": f"documents/{key}", "_to": f"topics/{topic}", "method": "test"},
+        )
+
+    def relate(a: str, b: str, weight: float) -> None:
+        repository.upsert_edge(
+            "item_related_to_item",
+            {
+                "_key": f"{a}-{b}",
+                "_from": f"chunks/{a}-c0",
+                "_to": f"chunks/{b}-c0",
+                "weight": weight,
+                "method": "embedding-similarity",
+            },
+        )
+
+    relate("gs-db1", "gs-db2", 0.9)
+    relate("gs-db1", "gs-db3", 0.8)  # db3 joins the db cluster but does not match the query lexically
+    relate("gs-mg1", "gs-mg2", 0.9)
+    build_communities(repository)  # -> {db1, db2, db3} and {mg1, mg2}
+
+    query = "distributed database consensus quorum"
+    # Wait until ArangoSearch has indexed the db documents (eventual consistency). Poll the BM25 path
+    # directly so the readiness signal matches the min_similarity=1.01 (BM25-only) retrieval under
+    # test — a hybrid wait could be satisfied early by noisy hash-vector hits before BM25 is ready.
+    for _ in range(40):
+        indexed = {row["document_key"] for row in text_search(repository, query)["results"]}
+        if {"gs-db1", "gs-db2"} <= indexed:
+            break
+        time.sleep(0.25)
+
+    # GLOBAL: only the db documents match BM25, so the db community is returned with its summary.
+    global_result = global_search(repository, query, dimension=dim, min_similarity=1.01)
+    assert global_result["status"] in {"ok", "degraded"}
+    assert global_result["communities"], "expected at least one community"
+    top = global_result["communities"][0]
+    assert "Databases" in top["top_topics"]
+    assert top["summary"]
+    assert {"gs-db1", "gs-db2"} & {doc["document_key"] for doc in top["documents"]}
+    assert all(doc["provenance"] for doc in top["documents"])
+
+    # LOCAL: seeds are the db documents; expansion surfaces the topic, the off-query neighbour, community.
+    local_result = local_search(repository, query, limit=2, dimension=dim, min_similarity=1.01)
+    seed_keys = {row["document_key"] for row in local_result["seeds"]}
+    assert seed_keys <= {"gs-db1", "gs-db2"}
+    assert "Databases" in {entity["label"] for entity in local_result["entities"]}
+    related_keys = {row["document_key"] for row in local_result["related_documents"]}
+    assert "gs-db3" in related_keys  # graph-expanded neighbour that was not itself a query hit
+    assert seed_keys.isdisjoint(related_keys)  # related documents exclude the seeds
+    assert any("Databases" in community["top_topics"] for community in local_result["communities"])
 
     with contextlib.suppress(ArangoError):
         client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
