@@ -16,9 +16,13 @@ dev = [
   "ruff>=0.14",
   "mypy>=1.13",
 ]
+mcp = [
+  "mcp>=1.27,<2",
+]
 
 [project.scripts]
 kb = "knowledge_base.cli.main:main"
+kb-mcp = "knowledge_base.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]

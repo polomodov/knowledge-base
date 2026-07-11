@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект содержит исполнимый вертикальный срез с завершённым GraphRAG-слоем: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск** и JSONL export.
+Проект содержит исполнимый вертикальный срез с завершённым GraphRAG-слоем: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск**, локальный read-only MCP server и JSONL export.
 
 ## Зачем
 
@@ -49,6 +49,7 @@ Raw-данные, нормализованные данные и generated outpu
 - Derived-индексы: `--target related` (similarity-рёбра `item_related_to_item` через ANN) и `--target communities` (Louvain community detection + экстрактивные summaries).
 - Retrieval-команды: `kb search text` (BM25), `kb search semantic` (ANN + relevance-гейт), `kb search hybrid` (BM25 + вектор + **graph_boost**, с расширением кандидатов графом), `kb graph neighbors` (обход графа знаний).
 - GraphRAG-поиск: `kb search local` (подграф вокруг релевантных сущностей) и `kb search global` (ответ поверх community summaries) — экстрактивный цитируемый контекст с провенансом.
+- Read-only MCP server `kb-mcp` для локальных агентов и других проектов.
 - `kb export jsonl` для generated exports в gitignored data zone.
 - Unit и integration tests (включая проверку на живой ArangoDB), CI (ruff + mypy + pytest) и SonarCloud.
 
@@ -195,11 +196,47 @@ uv run kb search hybrid "книжные заметки из архива"
 
 Для полного архива используйте Telegram Desktop export в режиме **Machine-readable JSON**. Реальный архив и вложенные media/files должны оставаться в `data/raw/book-cube/`, который игнорируется git; в репозитории хранятся только synthetic fixtures.
 
+Подключить базу знаний к MCP-клиенту:
+
+```bash
+cp config/pipeline.example.toml config/pipeline.local.toml
+# Настройте provider/model/dimension как у уже построенного корпуса.
+# Только для embedding.provider = "local" (тяжёлая зависимость намеренно вне lock-файла):
+uv pip install sentence-transformers
+uv run --extra mcp kb-mcp --config config/pipeline.local.toml
+```
+
+Пример локальной stdio-конфигурации для MCP-клиента:
+
+```json
+{
+  "mcpServers": {
+    "knowledge-base": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--extra",
+        "mcp",
+        "kb-mcp",
+        "--config",
+        "/absolute/path/to/knowledge-base/config/pipeline.local.toml"
+      ],
+      "cwd": "/absolute/path/to/knowledge-base"
+    }
+  }
+}
+```
+
+MCP v1 работает локально через stdio и открывает только read-only tools/resources/prompts: `kb_search`, `kb_get_document`, `kb_graph_neighbors`, `kb_list_sources`, `kb_health`, `kb://sources`, `kb://documents/{document_key}` и `research_knowledge_base`. `kb_search` поддерживает `text`, `semantic`, `hybrid`, `local` и `global`; embedding-backed режимы используют provider/model/dimension и `retrieval.min_similarity` из того же конфига, что CLI и индекс корпуса. `pipeline.example.toml` настроен на fixture/hash-эмбеддинги; для реального корпуса локальный конфиг обязан совпадать с моделью, которой выполнен `--target embeddings`, а provider `local` требует установленный `sentence-transformers`.
+
 Проверки:
 
 ```bash
-uv run --extra test pytest tests/unit
-KB_RUN_INTEGRATION=1 uv run --extra test pytest
+uv run --extra dev pytest tests/unit
+uv run --extra dev --extra mcp pytest tests/unit
+KB_RUN_INTEGRATION=1 uv run --extra dev --extra mcp pytest
+uv run --extra dev ruff check src tests
+uv run --extra dev mypy
 npm run check:adr
 ```
 
@@ -229,7 +266,8 @@ Integration-тесты работают против выделенной БД `
 │   ├── 002-tellmeabout-tech-source/
 │   ├── 003-book-cube-telegram-source/
 │   ├── 004-book-cube-owner-archive-import/
-│   └── 005-medium-export-source/
+│   ├── 005-medium-export-source/
+│   └── 006-knowledge-base-mcp-server/
 ├── scripts/
 │   └── ...
 ├── data/
@@ -258,6 +296,7 @@ Integration-тесты работают против выделенной БД `
 - [specs/003-book-cube-telegram-source/spec.md](specs/003-book-cube-telegram-source/spec.md) - Spec Kit feature для Telegram-канала "Книжный куб".
 - [specs/004-book-cube-owner-archive-import/spec.md](specs/004-book-cube-owner-archive-import/spec.md) - Spec Kit feature для полного владельческого Telegram archive import.
 - [specs/005-medium-export-source/spec.md](specs/005-medium-export-source/spec.md) - Spec Kit feature для Medium account export import.
+- [specs/006-knowledge-base-mcp-server/spec.md](specs/006-knowledge-base-mcp-server/spec.md) - Spec Kit feature для read-only MCP server.
 
 ## Spec-Driven Development
 
@@ -288,6 +327,8 @@ Feature specs по умолчанию пишутся на русском с кр
 
 Третий реальный source adapter: [Medium Export Source](specs/005-medium-export-source/spec.md). Он импортирует локальный Medium account export directory или `.zip`, строит raw manifest snapshot и нормализует опубликованные `posts/*.html` с Medium post id, canonical URL, author, dates and provenance.
 
+Локальный read-only MCP-интерфейс: [Knowledge Base MCP Server](specs/006-knowledge-base-mcp-server/spec.md). Он открывает search, document expansion, graph neighbors, source inventory, health, resources and research prompt для других проектов без ingest/index/export mutations.
+
 ## Architecture Decisions
 
 Architecture Decision Records живут в [docs/adr](docs/adr). Это docs-only артефакты: они объясняют важные решения, но не являются исходными данными, обработанными данными или generated outputs.
@@ -310,7 +351,7 @@ npm run check:adr
 - **v0** - стартовая документация, принципы, архитектурный контур.
 - **v1** - production-like ArangoDB fixture pipeline с provenance, search, vector, graph и hybrid retrieval.
 - **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб", включая полный владельческий archive import.
-- **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги и качество retrieval — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
+- **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги, качество retrieval и локальный read-only MCP server — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
 - **v4** - визуализация тем, источников и связей.
 - **v5** - writer/research workflow поверх базы знаний.
 

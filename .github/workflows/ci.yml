@@ -41,6 +41,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install uv
+      - name: Base package imports without MCP extra
+        run: uv run --isolated --extra dev python -c 'import importlib.util; import knowledge_base.mcp_server; assert importlib.util.find_spec("mcp") is None'
       - name: Wait for ArangoDB
         run: |
           for _ in $(seq 1 60); do
@@ -53,4 +55,4 @@ jobs:
           echo "ArangoDB did not become ready in time" >&2
           exit 1
       - name: Tests with coverage (unit + integration)
-        run: uv run --extra dev pytest --cov=knowledge_base --cov-report=term-missing --cov-fail-under=70
+        run: uv run --extra dev --extra mcp pytest --cov=knowledge_base --cov-report=term-missing --cov-fail-under=70

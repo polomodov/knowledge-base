@@ -17,7 +17,9 @@ htmlcov/
 .env.*
 !.env.example
 config/arangodb.env
+config/pipeline.local.toml
 .local/
+.specify/feature.json
 
 # Personal knowledge data
 data/raw/
