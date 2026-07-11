@@ -7,7 +7,7 @@ import time
 import pytest
 
 from knowledge_base.arango import ArangoClient, ArangoError
-from knowledge_base.config import load_settings
+from knowledge_base.config import Settings, load_settings
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.fixture import ingest_fixture
 from knowledge_base.indexing import build_related_edges, rebuild_indexes
@@ -482,7 +482,7 @@ def test_reembed_switches_embedding_dimension() -> None:
     # index at its dimension — this is how you switch providers/models after ingest. Runs in its own
     # database so the global re-embed does not disturb other tests.
     base = load_settings()
-    settings = dataclasses.replace(base, arango_database=f"{base.arango_database}_reembed", embedding_dimension=8)
+    settings: Settings = dataclasses.replace(base, arango_database=f"{base.arango_database}_reembed", embedding_dimension=8)
     client = ArangoClient(settings)
     with contextlib.suppress(ArangoError):
         client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
@@ -493,7 +493,7 @@ def test_reembed_switches_embedding_dimension() -> None:
     dims_before = set(repository.client.aql("FOR c IN chunks FILTER HAS(c, 'embedding') RETURN LENGTH(c.embedding)"))
     assert dims_before == {8}
 
-    new_settings = dataclasses.replace(settings, embedding_dimension=16)
+    new_settings: Settings = dataclasses.replace(settings, embedding_dimension=16)
     result = rebuild_indexes(repository, target="embeddings", embedding_dimension=16, settings=new_settings)
     assert result["status"] == "ok"
     assert result["counts"]["embedding_dimension"] == 16
