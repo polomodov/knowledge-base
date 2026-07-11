@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+from knowledge_base.config import Settings, load_settings
 from knowledge_base.constants import RELATED_EDGE_METHOD, RELATED_MIN_SCORE, RELATED_TOP_K, VECTOR_DIMENSION
-from knowledge_base.embeddings import cosine_similarity
+from knowledge_base.embeddings import EmbeddingProvider, build_embedding_provider, cosine_similarity
 from knowledge_base.ids import stable_key
 from knowledge_base.repository import KnowledgeRepository
-from knowledge_base.schema import bootstrap_schema
+from knowledge_base.schema import bootstrap_schema, ensure_vector_index
 
-_INDEX_TARGETS = {"all", "text", "vector", "graph", "related"}
+_INDEX_TARGETS = {"all", "text", "vector", "graph", "related", "embeddings"}
 
 
 def rebuild_indexes(
@@ -17,6 +18,7 @@ def rebuild_indexes(
     *,
     target: str = "all",
     embedding_dimension: int = VECTOR_DIMENSION,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
     if target not in _INDEX_TARGETS:
         raise ValueError(f"Invalid index target: {target}")
@@ -49,11 +51,55 @@ def rebuild_indexes(
         counts["related_pairs"] = related["pairs"]
         counts["related_edges_created"] = related["created"]
         counts["related_edges_removed"] = related["removed"]
+    # Re-embedding is its own explicit target (never part of "all"): it rewrites every chunk vector
+    # and the vector index, which is how you switch embedding providers/models (`--target embeddings`).
+    if target == "embeddings":
+        embedded = build_embeddings(repository, settings or load_settings())
+        counts["chunks_reembedded"] = embedded["chunks"]
+        counts["embedding_model"] = embedded["model"]
+        counts["embedding_dimension"] = embedded["dimension"]
     run["finished_at"] = _now()
     run["status"] = "ok"
     run["counts"] = counts
     repository.upsert("index_runs", run)
     return {"status": "ok", "index_run_key": index_run_key, "target": target, "counts": counts, "bootstrap": bootstrap}
+
+
+def build_embeddings(repository: KnowledgeRepository, settings: Settings) -> dict[str, Any]:
+    """Re-embed every chunk with the configured provider and rebuild the vector index.
+
+    This is how you switch embedding providers/models after ingest without re-running the source
+    adapters: it recomputes each chunk's vector (and stored `embedding_model`) with the current
+    provider. The vector index is dropped first because its dimension is fixed at creation — a new
+    provider may use a different dimension — then recreated at the provider's dimension once the
+    chunks carry vectors of the new size.
+    """
+    provider = build_embedding_provider(settings)
+    repository.client.drop_index("chunks", "idx_chunks_embedding_vector")
+    reembedded = _reembed_chunks(repository, provider)
+    index = ensure_vector_index(repository.client, dimension=provider.dimension)
+    return {"chunks": reembedded, "model": provider.model, "dimension": provider.dimension, "vector_index": index}
+
+
+def _reembed_chunks(repository: KnowledgeRepository, provider: EmbeddingProvider, *, batch_size: int = 500) -> int:
+    total = 0
+    offset = 0
+    while True:
+        chunks = repository.client.aql(
+            "FOR c IN chunks SORT c._key LIMIT @offset, @batch_size RETURN { key: c._key, text: c.text }",
+            {"offset": offset, "batch_size": batch_size},
+        )
+        if not chunks:
+            return total
+        updates = [{"key": row["key"], "embedding": provider.embed(row["text"]), "model": provider.model} for row in chunks]
+        repository.client.aql(
+            "FOR item IN @items UPDATE item.key WITH { embedding: item.embedding, embedding_model: item.model } IN chunks",
+            {"items": updates},
+        )
+        total += len(chunks)
+        if len(chunks) < batch_size:
+            return total
+        offset += batch_size
 
 
 def build_related_edges(

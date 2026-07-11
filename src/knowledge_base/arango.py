@@ -118,6 +118,15 @@ class ArangoClient:
                 return {"name": body.get("name"), "created": False}
             raise
 
+    def drop_index(self, collection: str, name: str) -> dict[str, Any]:
+        path = f"/_api/index?collection={urllib.parse.quote(collection)}"
+        response = self.request("GET", path, database=self.settings.arango_database)
+        for index in response.get("indexes", []):
+            if index.get("name") == name:
+                self.request("DELETE", f"/_api/index/{index['id']}", database=self.settings.arango_database)
+                return {"name": name, "dropped": True}
+        return {"name": name, "dropped": False}
+
     def ensure_view(self, body: dict[str, Any]) -> dict[str, Any]:
         try:
             result = self.request("POST", "/_api/view", database=self.settings.arango_database, body=body)
