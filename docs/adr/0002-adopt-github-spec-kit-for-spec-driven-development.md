@@ -5,12 +5,12 @@
   "id": "0002",
   "titleRu": "Ввести GitHub Spec Kit для spec-driven development",
   "titleEn": "Adopt GitHub Spec Kit for spec-driven development",
-  "status": "accepted",
+  "status": "superseded",
   "date": "2026-06-23",
   "deciders": ["knowledge-base maintainer"],
   "tags": ["spec-driven-development", "agent-workflow", "process"],
   "supersedes": [],
-  "supersededBy": []
+  "supersededBy": ["0009"]
 }
 ```
 
