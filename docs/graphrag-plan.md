@@ -42,7 +42,7 @@
 | GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + GR-2b (реальные эмбеддинги) | ⛔ отложен |
 | — | `chore/isolate-integration-test-db` | тест-БД изоляция | — | ✅ merged ([#28](https://github.com/polomodov/knowledge-base/pull/28)) |
 | GR-6 | `chore/retrieval-view-granularity` | GR-7 (аудит #14) | — | ✅ merged ([#29](https://github.com/polomodov/knowledge-base/pull/29)) |
-| GR-4 | `feat/graph-communities` | GR-4 | GR-3 | 🟡 на ревью |
+| GR-4 | `feat/graph-communities` | GR-4 | GR-3 | 🟡 на ревью ([#31](https://github.com/polomodov/knowledge-base/pull/31)) |
 | GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | ☐ не начат |
 
 ### GR-0 — Документация плана
