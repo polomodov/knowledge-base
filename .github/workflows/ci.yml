@@ -13,7 +13,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
       - run: pip install uv
+      - name: Offline visualization template syntax and safety
+        run: node scripts/check-viz-template.mjs
+      - name: Wheel carries the offline visualization template
+        run: |
+          uv build --wheel
+          unzip -l dist/*.whl | grep 'knowledge_base/templates/viz_template.html'
       - name: Ruff lint
         run: uv run --extra dev ruff check src tests
       - name: Ruff format check

@@ -50,3 +50,57 @@ def test_platform_health_fails_when_core_component_missing(capsys, monkeypatch) 
         lambda client: {"status": "degraded", "checks": [{"name": "collection:documents", "status": "missing"}]},
     )
     assert cli.main(["platform", "health"]) == 1  # a missing core collection is not ready
+
+
+def test_export_graph_wires_public_options_and_exit_status(capsys, monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_export(repository, output, **options):
+        captured.update({"output": output, **options})
+        return {"status": "ok", "nodes": 3, "edges": 2, "bytes": 100}
+
+    monkeypatch.setattr(cli, "_repo", lambda args: object())
+    monkeypatch.setattr(cli, "export_graph", fake_export)
+    output = tmp_path / "graph.graphml"
+    code = cli.main(
+        [
+            "export",
+            "graph",
+            "--format",
+            "graphml",
+            "--output",
+            str(output),
+            "--ego",
+            "doc-1",
+            "--topic-min-documents",
+            "3",
+            "--include-drafts",
+        ]
+    )
+    assert code == 0
+    assert captured == {
+        "output": output,
+        "output_format": "graphml",
+        "include_drafts": True,
+        "topic_min_documents": 3,
+        "ego_document_key": "doc-1",
+    }
+
+
+def test_viz_build_uses_default_contract_and_degraded_exit(capsys, monkeypatch, tmp_path) -> None:
+    captured = {}
+
+    def fake_build(repository, output, **options):
+        captured.update({"output": output, **options})
+        return {"status": "degraded", "warnings": [{"code": "related_index_empty"}]}
+
+    monkeypatch.setattr(cli, "_repo", lambda args: object())
+    monkeypatch.setattr(cli, "build_visualization", fake_build)
+    output = tmp_path / "viz.html"
+    code = cli.main(["viz", "build", "--output", str(output), "--timeline-top-topics", "7", "--include-drafts"])
+    assert code == 1
+    assert captured == {
+        "output": output,
+        "timeline_top_topics": 7,
+        "include_drafts": True,
+    }

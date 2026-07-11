@@ -11,6 +11,7 @@ from knowledge_base.config import load_settings
 from knowledge_base.embeddings import build_embedding_provider
 from knowledge_base.exporting import export_jsonl
 from knowledge_base.fixture import ingest_fixture
+from knowledge_base.graph_export import export_graph
 from knowledge_base.indexing import rebuild_indexes
 from knowledge_base.json_output import emit_json
 from knowledge_base.platform import platform_down, platform_up
@@ -28,6 +29,7 @@ from knowledge_base.sources.book_cube import DEFAULT_PUBLIC_URL as BOOK_CUBE_DEF
 from knowledge_base.sources.book_cube import ingest_book_cube, ingest_book_cube_archive
 from knowledge_base.sources.medium_export import ingest_medium_export
 from knowledge_base.sources.tellmeabout_tech import DEFAULT_FEED_URL, ingest_tellmeabout_tech
+from knowledge_base.viz_builder import DEFAULT_VIZ_OUTPUT, build_visualization
 
 _MIN_SIMILARITY_HELP = "Relevance floor for semantic hits (default from config)"
 
@@ -143,6 +145,22 @@ def _build_parser() -> argparse.ArgumentParser:
     jsonl = export_sub.add_parser("jsonl", help="Export documents/chunks as JSONL")
     jsonl.add_argument("--output", required=True)
     jsonl.set_defaults(handler=_export_jsonl)
+
+    graph_export = export_sub.add_parser("graph", help="Export the document/topic graph as node-link JSON or GraphML")
+    graph_export.add_argument("--format", choices=["json", "graphml"], default="json")
+    graph_export.add_argument("--output", required=True)
+    graph_export.add_argument("--ego", help="Optional document key for a bounded ego export")
+    graph_export.add_argument("--topic-min-documents", type=int, default=2)
+    graph_export.add_argument("--include-drafts", action="store_true")
+    graph_export.set_defaults(handler=_export_graph)
+
+    viz = subcommands.add_parser("viz", help="Build offline knowledge-base visualizations")
+    viz_sub = viz.add_subparsers(dest="viz_command")
+    viz_build = viz_sub.add_parser("build", help="Build a self-contained offline HTML visualization")
+    viz_build.add_argument("--output", default=str(DEFAULT_VIZ_OUTPUT))
+    viz_build.add_argument("--timeline-top-topics", type=int, default=10)
+    viz_build.add_argument("--include-drafts", action="store_true")
+    viz_build.set_defaults(handler=_viz_build)
 
     return parser
 
@@ -316,6 +334,28 @@ def _graph_neighbors(args: argparse.Namespace) -> int:
 
 def _export_jsonl(args: argparse.Namespace) -> int:
     return emit_json(export_jsonl(_repo(args), Path(args.output)))
+
+
+def _export_graph(args: argparse.Namespace) -> int:
+    result = export_graph(
+        _repo(args),
+        Path(args.output),
+        output_format=args.format,
+        include_drafts=args.include_drafts,
+        topic_min_documents=args.topic_min_documents,
+        ego_document_key=args.ego,
+    )
+    return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
+
+
+def _viz_build(args: argparse.Namespace) -> int:
+    result = build_visualization(
+        _repo(args),
+        Path(args.output),
+        timeline_top_topics=args.timeline_top_topics,
+        include_drafts=args.include_drafts,
+    )
+    return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
 
 
 if __name__ == "__main__":  # pragma: no cover
