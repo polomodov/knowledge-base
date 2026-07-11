@@ -114,7 +114,7 @@ def test_graph_only_candidates_clamps_to_weakest_real_hit(monkeypatch) -> None:
     repository = KnowledgeRepository(ArangoClient(load_settings()))
 
     rows = _graph_only_candidates(repository, fused, limit=6, source_key="src")
-    assert captured["limit"] == 3  # slots = limit - len(fused)
+    assert captured["limit"] == 3  # the empty-slot count: limit minus the pool size
     assert captured["source_key"] == "src"
     assert captured["exclude"] == ["r1", "r2", "r3"]  # the whole pool is excluded
     assert captured["anchors"] == ["r1", "r2", "r3"]  # anchors are the top hits (<= seed_count)
