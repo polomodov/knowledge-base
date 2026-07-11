@@ -68,6 +68,7 @@
 - community detection (Louvain) и экстрактивные community summaries (`--target communities`);
 - GraphRAG local/global поиск поверх графа и сообществ (`kb search local` / `global`);
 - relevance-gated recall и CLI-команды поиска;
+- локальный read-only MCP server для search, GraphRAG, раскрытия документов, graph neighbors, source inventory и health;
 - unit/integration-тесты на воспроизводимость индексации и ранжирования.
 
 ## v4 - Визуализация
@@ -93,7 +94,7 @@
 
 ## Текущий статус
 
-Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); и **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection и local/global GraphRAG-поиск на реальном корпусе** (детали и диаграммы — [docs/graphrag-plan.md](graphrag-plan.md)).
+Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); и **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server** (детали и диаграммы — [docs/graphrag-plan.md](graphrag-plan.md)).
 
 **Аудит реализации (июль 2026) полностью отработан:** все 46 находок устранены и смерджены в `main` — единый `topic_key`, провенанс и честный дедуп (`created_at`, корректные счётчики), качество retrieval (дедуп выдачи, корректный фьюжн скора, реальное использование vector index, устранение N+1), безопасность и приватность (учётные данные, валидация fetch-URL/SSRF, path traversal, зона экспорта), инженерная гигиена (общий `ingest_core`, ruff + mypy + pytest-cov, CI против ArangoDB service-container) и робастность парсеров источников. Подробности и трекер MR - в [docs/implementation-audit-plan.md](implementation-audit-plan.md).
 

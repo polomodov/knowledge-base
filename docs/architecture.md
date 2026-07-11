@@ -93,7 +93,12 @@ flowchart TD
 - `kb search text`, `kb search semantic`, `kb graph neighbors`, `kb search hybrid`, `kb search local` и `kb search global` возвращают результаты с provenance; retrieval-команды поддерживают optional source filter для исследования одного источника.
   - `kb search hybrid` сливает полнотекст (BM25) и вектор и **вкладывает графовый сигнал в ранжирование**: `score_components.graph_boost` — ограниченный буст за общие сущности (GR-1) и similarity-рёбра `item_related_to_item` (GR-3b). `graph_boost = null` только если графовый слой деградировал. Если relevance-гейт оставил пустые слоты, `hybrid` дозаполняет их graph-only соседями топ-хитов (GR-3c, `graph_expanded: true`) — они дописываются после реальных хитов и не могут их перевесить.
   - `kb search local` (GR-5) собирает локальный подграф вокруг сильнейших документов запроса: связывающие сущности, similarity-соседи и сообщества. `kb search global` (GR-5) отвечает на уровне корпуса поверх community summaries (GR-4): сопоставляет retrieval-хиты сообществам и возвращает топ сообществ с summary и документами-цитатами. Оба контекста экстрактивные и цитируемые (без LLM). Полный трекинг GraphRAG-подсистемы — [docs/graphrag-plan.md](graphrag-plan.md).
+- `kb-mcp` открывает локальный read-only MCP server поверх тех же retrieval/document/graph/source/health операций для других проектов и агентских клиентов.
 - `kb export jsonl` пишет generated exports в gitignored data zone.
+
+### MCP integration
+
+MCP слой является интерфейсом чтения поверх `processed`/indexed data. Он не запускает ingest, index rebuild или export, не получает raw snapshot payloads и не выдаёт локальные archive/file paths; document metadata и вложенный provenance проходят явные allowlist-проекции. Сервер работает только через локальный stdio transport. `kb_search` открывает text/semantic/hybrid и local/global GraphRAG режимы; embedding-backed запросы используют тот же configured `EmbeddingProvider` и `retrieval.min_similarity`, что CLI. Tools возвращают agent-ready snippets с `source_key`, `document_key`, `chunk_key`, URL и безопасным raw/import provenance; resources дают `kb://sources` и `kb://documents/{document_key}`. Синхронные handlers и один stdio-клиент за процесс являются принятым ограничением v1; shared/remote concurrency требует отдельного решения с auth/audit моделью.
 
 ### Visualization
 
@@ -143,3 +148,4 @@ Feature workflow строится через GitHub Spec Kit: `.specify/` хра
 - [Book Cube Telegram Source spec](../specs/003-book-cube-telegram-source/spec.md)
 - [Book Cube Owner Archive Import spec](../specs/004-book-cube-owner-archive-import/spec.md)
 - [Medium Export Source spec](../specs/005-medium-export-source/spec.md)
+- [Knowledge Base MCP Server spec](../specs/006-knowledge-base-mcp-server/spec.md)
