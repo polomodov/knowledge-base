@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект содержит исполнимый вертикальный срез с завершённым GraphRAG-слоем: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск**, локальный read-only MCP server и JSONL export.
+Проект содержит исполнимый вертикальный срез с завершёнными GraphRAG- и visualization-слоями: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск**, локальный read-only MCP server, стандартный graph export и самодостаточная offline-визуализация.
 
 ## Зачем
 
@@ -51,6 +51,8 @@ Raw-данные, нормализованные данные и generated outpu
 - GraphRAG-поиск: `kb search local` (подграф вокруг релевантных сущностей) и `kb search global` (retrieval-conditioned обзор community summaries из bounded candidate pool) — экстрактивный цитируемый контекст с провенансом.
 - Read-only MCP server `kb-mcp` для локальных агентов и других проектов.
 - `kb export jsonl` для generated exports в gitignored data zone.
+- `kb export graph` для полного doc-level графа и topic co-occurrence в node-link JSON/GraphML.
+- `kb viz build` для самодостаточного offline HTML: карта сообществ/топиков, таймлайн и ego-граф документов без CDN, сервера или npm runtime.
 - Unit и integration tests (включая проверку на живой ArangoDB), CI (ruff + mypy + pytest) и SonarCloud.
 
 ## Быстрый старт
@@ -81,6 +83,13 @@ uv run kb search hybrid "systems thinking writing workflow"
 uv run kb search local "systems thinking"       # GraphRAG local: подграф вокруг хитов
 uv run kb search global "ideas across books"     # GraphRAG global: поверх community summaries
 uv run kb export jsonl --output data/generated/exports/fixture.jsonl
+```
+
+Fixture имеет служебный `status=fixture`, поэтому published-only визуализация трактует его как no-data smoke. На реальном опубликованном корпусе:
+
+```bash
+uv run kb export graph --format graphml --output data/generated/graph/knowledge-base.graphml
+uv run kb viz build                              # data/generated/viz/knowledge-base.html
 ```
 
 ### Семантический поиск и GraphRAG на реальной модели
@@ -122,6 +131,7 @@ uv run --extra dev ruff format --check src tests
 uv run --extra dev mypy
 uv run --extra dev pytest tests/unit -q            # unit, без БД
 KB_RUN_INTEGRATION=1 uv run --extra dev pytest -q  # полный прогон с живым ArangoDB
+node scripts/check-viz-template.mjs                # offline JS/CSP/XSS-гейт
 ```
 
 Проверка живого окружения и корпуса:
@@ -289,6 +299,8 @@ Integration-тесты работают против выделенной БД `
 - [AGENTS.md](AGENTS.md) - правила для Codex и других агентов, работающих с репозиторием.
 - [docs/architecture.md](docs/architecture.md) - целевая архитектура, ключевые сущности и диаграммы (системный поток, модель данных графа).
 - [docs/graphrag-plan.md](docs/graphrag-plan.md) - GraphRAG-эпик (GR-0…GR-6): статус, «как работает база знаний сейчас» и диаграммы конвейеров retrieval/GraphRAG.
+- [docs/visualization.md](docs/visualization.md) - команды, схемы JSON/GraphML/HTML, деградации и контрольные размеры v4.
+- [docs/viz-smoke-checklist.md](docs/viz-smoke-checklist.md) - ручная offline-проверка трёх визуальных видов.
 - [docs/roadmap.md](docs/roadmap.md) - этапы развития проекта.
 - [docs/adr/README.md](docs/adr/README.md) - журнал архитектурных решений и ADR-процесс.
 - [specs/001-production-knowledge-pipeline/spec.md](specs/001-production-knowledge-pipeline/spec.md) - Spec Kit feature для ArangoDB-centered production pipeline.
@@ -354,7 +366,7 @@ npm run check:adr
 - **v1** - production-like ArangoDB fixture pipeline с provenance, search, vector, graph и hybrid retrieval.
 - **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб", включая полный владельческий archive import.
 - **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги, качество retrieval и локальный read-only MCP server — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
-- **v4** - принятый, но ещё не реализованный срез визуализации: node-link JSON/GraphML + самодостаточный offline HTML (см. [ADR 0008](docs/adr/0008-adopt-offline-visualization-and-graph-export.md)).
+- **v4** ✅ - node-link JSON/GraphML + самодостаточный offline HTML с картой сообществ/топиков, таймлайном и ego-графом документов (см. [docs/visualization.md](docs/visualization.md) и [ADR 0008](docs/adr/0008-adopt-offline-visualization-and-graph-export.md)).
 - **v5** - writer/research workflow поверх базы знаний.
 
 Подробнее: [docs/roadmap.md](docs/roadmap.md).

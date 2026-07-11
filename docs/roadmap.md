@@ -71,7 +71,7 @@
 - локальный read-only MCP server для search, GraphRAG, раскрытия документов, graph neighbors, source inventory и health;
 - unit/integration-тесты на воспроизводимость индексации и ранжирования.
 
-## v4 - Визуализация
+## v4 - Визуализация ✅
 
 Цель: увидеть связи внутри базы знаний.
 
@@ -83,7 +83,16 @@
 
 Вид «книги/авторы» отложен: текущий корпус содержит 0 works и только 2 authors, поэтому он не входит в принятый v4 scope.
 
-Архитектурный выбор зафиксирован в [ADR 0008](adr/0008-adopt-offline-visualization-and-graph-export.md), детальный план реализации (шаги V4-0…V4-6 отдельными PR) — в [docs/visualization-plan.md](visualization-plan.md).
+Архитектурный выбор зафиксирован в [ADR 0008](adr/0008-adopt-offline-visualization-and-graph-export.md), детальный трекер этапов V4-0…V4-6 — в [docs/visualization-plan.md](visualization-plan.md).
+
+Реализовано:
+
+- canonical distinct-document aggregation для топиков, doc-level similarity fold и community/timeline/ego read models;
+- `kb export graph` в node-link JSON и typed GraphML, включая bounded `--ego`;
+- детерминированные Fruchterman–Reingold и phyllotaxis layouts;
+- `kb viz build` с provenance/freshness metadata, atomic write и published-only default;
+- самодостаточный CSP-защищённый HTML с картой сообществ/топиков, timeline и ego-графом;
+- seeded integration tests, no-data/degradation tests и CI `node --check` для offline JS.
 
 ## v5 - Writer/research workflow
 
@@ -97,8 +106,8 @@
 
 ## Текущий статус
 
-Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); и **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server** (детали и диаграммы — [docs/graphrag-plan.md](graphrag-plan.md)).
+Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server**; и **v4 — graph export + самодостаточная offline-визуализация трёх видов** (команды и контракты — [docs/visualization.md](visualization.md)).
 
 **Аудит реализации (июль 2026) полностью отработан:** все 46 находок устранены и смерджены в `main` — единый `topic_key`, провенанс и честный дедуп (`created_at`, корректные счётчики), качество retrieval (дедуп выдачи, корректный фьюжн скора, реальное использование vector index, устранение N+1), безопасность и приватность (учётные данные, валидация fetch-URL/SSRF, path traversal, зона экспорта), инженерная гигиена (общий `ingest_core`, ruff + mypy + pytest-cov, CI против ArangoDB service-container) и робастность парсеров источников. Подробности и трекер MR - в [docs/implementation-audit-plan.md](implementation-audit-plan.md).
 
-Следующий фокус - визуализация тем, источников и связей внутри базы знаний (v4) и writer/research workflow поверх неё (v5).
+Следующий фокус — writer/research workflow поверх готовых retrieval, MCP и visualization read models (v5).
