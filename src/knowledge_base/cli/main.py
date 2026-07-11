@@ -15,12 +15,21 @@ from knowledge_base.indexing import rebuild_indexes
 from knowledge_base.json_output import emit_json
 from knowledge_base.platform import platform_down, platform_up
 from knowledge_base.repository import KnowledgeRepository
-from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_search, text_search
+from knowledge_base.retrieval import (
+    global_search,
+    graph_neighbors,
+    hybrid_search,
+    local_search,
+    semantic_search,
+    text_search,
+)
 from knowledge_base.schema import bootstrap_schema, health_report
 from knowledge_base.sources.book_cube import DEFAULT_PUBLIC_URL as BOOK_CUBE_DEFAULT_URL
 from knowledge_base.sources.book_cube import ingest_book_cube, ingest_book_cube_archive
 from knowledge_base.sources.medium_export import ingest_medium_export
 from knowledge_base.sources.tellmeabout_tech import DEFAULT_FEED_URL, ingest_tellmeabout_tech
+
+_MIN_SIMILARITY_HELP = "Relevance floor for semantic hits (default from config)"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,14 +102,27 @@ def _build_parser() -> argparse.ArgumentParser:
     semantic.add_argument("query")
     semantic.add_argument("--limit", type=int, default=10)
     semantic.add_argument("--source", help="Optional exact source_key filter")
-    semantic.add_argument("--min-similarity", type=float, help="Relevance floor for semantic hits (default from config)")
+    semantic.add_argument("--min-similarity", type=float, help=_MIN_SIMILARITY_HELP)
     semantic.set_defaults(handler=_search_semantic)
     hybrid = search_sub.add_parser("hybrid", help="Run hybrid search")
     hybrid.add_argument("query")
     hybrid.add_argument("--limit", type=int, default=10)
     hybrid.add_argument("--source", help="Optional exact source_key filter")
-    hybrid.add_argument("--min-similarity", type=float, help="Relevance floor for semantic hits (default from config)")
+    hybrid.add_argument("--min-similarity", type=float, help=_MIN_SIMILARITY_HELP)
     hybrid.set_defaults(handler=_search_hybrid)
+    local = search_sub.add_parser("local", help="Run GraphRAG local search (entity subgraph around hits)")
+    local.add_argument("query")
+    local.add_argument("--limit", type=int, default=10)
+    local.add_argument("--source", help="Optional exact source_key filter")
+    local.add_argument("--min-similarity", type=float, help=_MIN_SIMILARITY_HELP)
+    local.set_defaults(handler=_search_local)
+    global_search_cmd = search_sub.add_parser("global", help="Run GraphRAG global search (community summaries)")
+    global_search_cmd.add_argument("query")
+    global_search_cmd.add_argument("--limit", type=int, default=10, help="Documents shown per community")
+    global_search_cmd.add_argument("--communities", type=int, default=5, help="Number of communities to return")
+    global_search_cmd.add_argument("--source", help="Optional exact source_key filter")
+    global_search_cmd.add_argument("--min-similarity", type=float, help=_MIN_SIMILARITY_HELP)
+    global_search_cmd.set_defaults(handler=_search_global)
 
     graph = subcommands.add_parser("graph", help="Run graph queries")
     graph_sub = graph.add_subparsers(dest="graph_command")
@@ -240,6 +262,35 @@ def _search_hybrid(args: argparse.Namespace) -> int:
             _repo(args),
             args.query,
             limit=args.limit,
+            source_key=args.source,
+            provider=build_embedding_provider(settings),
+            min_similarity=_min_similarity(args, settings),
+        ),
+    )
+
+
+def _search_local(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    return emit_json(
+        local_search(
+            _repo(args),
+            args.query,
+            limit=args.limit,
+            source_key=args.source,
+            provider=build_embedding_provider(settings),
+            min_similarity=_min_similarity(args, settings),
+        ),
+    )
+
+
+def _search_global(args: argparse.Namespace) -> int:
+    settings = _settings(args)
+    return emit_json(
+        global_search(
+            _repo(args),
+            args.query,
+            limit=args.limit,
+            community_limit=args.communities,
             source_key=args.source,
             provider=build_embedding_provider(settings),
             min_similarity=_min_similarity(args, settings),

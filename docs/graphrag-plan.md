@@ -43,7 +43,7 @@
 | — | `chore/isolate-integration-test-db` | тест-БД изоляция | — | ✅ merged ([#28](https://github.com/polomodov/knowledge-base/pull/28)) |
 | GR-6 | `chore/retrieval-view-granularity` | GR-7 (аудит #14) | — | ✅ merged ([#29](https://github.com/polomodov/knowledge-base/pull/29)) |
 | GR-4 | `feat/graph-communities` | GR-4 | GR-3 | 🟡 на ревью ([#31](https://github.com/polomodov/knowledge-base/pull/31)) |
-| GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | ☐ не начат |
+| GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | 🟡 на ревью ([#32](https://github.com/polomodov/knowledge-base/pull/32)) |
 
 ### GR-0 — Документация плана
 
@@ -165,9 +165,15 @@
 **Задача:** Ввести local- и global-search команды GraphRAG: local — подграф вокруг релевантных сущностей + их материалы; global — ответ поверх community summaries (GR-4). Возвращать ранжированный контекст с цитированием и провенансом (совместимо с текущим форматом результатов).
 **Критерии приёмки:** `kb search graphrag` (или local/global) возвращает контекст с провенансом; local собирает подграф вокруг найденных сущностей; global агрегирует community summaries; выходной контракт задокументирован; интеграционные тесты на фикстуре.
 
+**Реализация (✅):** только read-side, без изменений схемы, без LLM (контекст экстрактивный и цитируемый — как того требует критерий).
+- **`global_search` — `kb search global`:** ответ на уровне корпуса поверх community summaries. Берёт пул документов-кандидатов через `hybrid_search`, сопоставляет каждый его сообществу (`document_in_community`), ранжирует сообщества по суммарной релевантности их документов и возвращает топ-`--communities` сообществ с их summary/`top_topics` и документами-цитатами (с провенансом). Это map/reduce-форма global-search GraphRAG, но опёртая на retrieval-эвидэнс, а не на LLM-проход по всем summary. Пер-community агрегация вынесена в чистую `_aggregate_community_scores` (юнит-тест).
+- **`local_search` — `kb search local`:** локальный подграф вокруг сильнейших документов запроса. Сиды из `hybrid_search` → сущности (topics/authors/works), которые их связывают (`_entities_for_documents`), документы-соседи по similarity (`item_related_to_item`, вне retrieval-пула — `_related_documents`) и сообщества сидов (`_communities_for_documents`). Фокусный цитируемый контекст, а не плоский список.
+- **Контракт:** оба возвращают `{query, mode: "graphrag-local"|"graphrag-global", status, degraded_components, …}`; при падении графового слоя — `status="degraded"`, а не исключение. Провенанс проброшен из hybrid-строк.
+- **Тесты:** unit на `_aggregate_community_scores` (суммарное ранжирование, пропуск неизвестных сообществ, усечение, пустой ввод); интеграционный на реальном ArangoDB (крафт-корпус из двух тем → build_communities → global возвращает тему-сообщество с summary и цитатами; local даёт сиды + сущность `Databases` + off-query соседа `gs-db3` + сообщество). Ретривал детерминизирован гейтом `min_similarity=1.01` (BM25-only), чтобы шум hash-эмбеддингов не влиял.
+
 | # | Важность | Файл:строка | Проблема | Решение |
 |--:|----------|-------------|----------|---------|
-| GR-5 | средний | — (новая подсистема) | Нет local/global GraphRAG search API поверх графа | Команды local/global поверх графа знаний и сообществ. |
+| GR-5 | средний | — (новая подсистема) | Нет local/global GraphRAG search API поверх графа | ✅ `kb search local`/`global` поверх графа знаний и сообществ; экстрактивный цитируемый контекст с провенансом. |
 
 ### GR-6 — Единая гранулярность ArangoSearch view
 
@@ -190,7 +196,7 @@
 | GR-2 | высокий | Embeddings | Эмбеддинги несемантичны (hash, dim=8) | `embeddings.py:13` |
 | GR-3 | высокий | Ingest/Граф | Нет графа знаний: теги вместо сущностей; `item_related_to_item` пуст | `ingest_core.py`, `schema.py:145` |
 | GR-4 | средний | GraphRAG | ✅ Community detection (Louvain, модулярность) + экстрактивные summaries; `--target communities` | `indexing.py` (`build_communities`) |
-| GR-5 | средний | GraphRAG | Нет local/global GraphRAG search API | — |
+| GR-5 | средний | GraphRAG | ✅ `kb search local`/`global` — local/global GraphRAG search поверх графа и сообществ | `retrieval.py` (`local_search`/`global_search`) |
 | GR-6 | низкий | Доки | `architecture.md` не оговаривает, что граф не влияет на ранжирование | `docs/architecture.md:56` |
 | GR-7 | низкий | Retrieval | Двойная индексация `documents.text` + `chunks.text` во view | `schema.py:105` |
 
