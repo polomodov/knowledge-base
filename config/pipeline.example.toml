@@ -19,9 +19,16 @@ dimension = 8
 # After changing provider/model/dimension, re-embed the existing corpus (no re-ingest needed):
 #   kb index rebuild --target embeddings   # recompute vectors + rebuild index; clears stale similarity edges
 #   kb index rebuild --target related      # rebuild item_related_to_item on the new embeddings
+#   kb index rebuild --target communities  # cluster the similarity graph into communities (GR-4)
 
 [retrieval]
 # min_similarity: relevance floor for semantic hits (cosine). 0.0 (default) only drops
 # anti-correlated hits; raise it (e.g. 0.35) with a real embedding model to keep the pool
 # precise. Also overridable per query with `kb search semantic|hybrid --min-similarity`.
 min_similarity = 0.0
+
+[community]
+# resolution: granularity of GR-4 Louvain community detection (`kb index rebuild --target
+# communities`). 1.0 (default) is standard Louvain; higher values (e.g. 2.0, 4.0) yield more,
+# smaller communities. On a dense similarity graph raise it if the largest community is too broad.
+resolution = 1.0

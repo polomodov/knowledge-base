@@ -11,7 +11,7 @@ from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import Settings, load_settings
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.fixture import ingest_fixture
-from knowledge_base.indexing import build_related_edges, rebuild_indexes
+from knowledge_base.indexing import build_communities, build_related_edges, rebuild_indexes
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import graph_neighbors, hybrid_search, semantic_search, text_search
 from knowledge_base.schema import bootstrap_schema
@@ -584,6 +584,101 @@ def test_reembed_switches_embedding_dimension() -> None:
     assert remaining[0] == 0
     # Semantic search works against the rebuilt (16-dim) vector index.
     assert semantic_search(repository, "systems thinking", dimension=16)["status"] in {"ok", "degraded"}
+
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_build_communities_clusters_similarity_graph() -> None:
+    # GR-4: documents linked by item_related_to_item similarity edges are grouped into a community
+    # with an extractive summary (size + shared topics); a document with no similarity edges stays
+    # unclustered. Runs in its own database so global community detection cannot see other tests'
+    # similarity edges.
+    base = load_settings()
+    settings = cast(Settings, dataclasses.replace(base, arango_database=f"{base.arango_database}_communities"))
+    client = ArangoClient(settings)
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+    repository = KnowledgeRepository(client)
+    bootstrap_schema(client, embedding_dimension=settings.embedding_dimension)
+
+    now = "2026-07-10T00:00:00Z"
+    repository.upsert("sources", {"_key": "cm-src", "type": "test", "display_name": "cm", "created_at": now})
+    repository.upsert("topics", {"_key": "cm-topic", "label": "Systems Thinking", "created_at": now})
+    for key in ("cm-a", "cm-b", "cm-c"):
+        repository.upsert(
+            "documents",
+            {"_key": key, "source_key": "cm-src", "canonical_id": key, "title": key, "text": key, "url": None, "created_at": now},
+        )
+        # Chunks carry an embedding only to satisfy the vector index; community detection reads the
+        # similarity edges, not the vectors.
+        repository.upsert(
+            "chunks",
+            {
+                "_key": f"{key}-c0",
+                "document_key": key,
+                "ordinal": 0,
+                "text": key,
+                "embedding": hash_embedding(key, dimension=settings.embedding_dimension),
+                "embedding_model": "hash-v1",
+            },
+        )
+        repository.upsert_edge(
+            "chunk_of_document",
+            {"_key": f"{key}-cod", "_from": f"chunks/{key}-c0", "_to": f"documents/{key}", "method": "test"},
+        )
+        repository.upsert_edge(
+            "document_mentions_topic",
+            {"_key": f"{key}-dmt", "_from": f"documents/{key}", "_to": "topics/cm-topic", "method": "test"},
+        )
+    # A lonely document with no similarity edges must be left unclustered.
+    repository.upsert(
+        "documents",
+        {
+            "_key": "cm-lonely",
+            "source_key": "cm-src",
+            "canonical_id": "cm-lonely",
+            "title": "cm-lonely",
+            "text": "x",
+            "url": None,
+            "created_at": now,
+        },
+    )
+    # A chain a-b-c of similarity edges collapses into a single community {a, b, c}.
+    repository.upsert_edge(
+        "item_related_to_item",
+        {"_key": "cm-ab", "_from": "chunks/cm-a-c0", "_to": "chunks/cm-b-c0", "weight": 0.9, "method": "embedding-similarity"},
+    )
+    repository.upsert_edge(
+        "item_related_to_item",
+        {"_key": "cm-bc", "_from": "chunks/cm-b-c0", "_to": "chunks/cm-c-c0", "weight": 0.8, "method": "embedding-similarity"},
+    )
+
+    first = build_communities(repository)
+    assert first["documents_clustered"] == 3
+    assert first["communities"] == 1
+    assert first["communities_removed"] == 0  # nothing to clear on the first build
+
+    communities = repository.client.aql("FOR c IN communities RETURN c")
+    assert len(communities) == 1
+    assert communities[0]["size"] == 3
+    assert communities[0]["method"] == "louvain"
+    assert "Systems Thinking" in communities[0]["top_topics"]
+    assert "Systems Thinking" in communities[0]["summary"]
+
+    members = set(repository.client.aql("FOR e IN document_in_community RETURN e._from"))
+    assert members == {"documents/cm-a", "documents/cm-b", "documents/cm-c"}
+    assert "documents/cm-lonely" not in members
+
+    # Rebuilding via the CLI target is idempotent: the first build's 3 membership edges are cleared
+    # and recreated, leaving exactly one community node (no duplicates).
+    second = rebuild_indexes(
+        repository, target="communities", embedding_dimension=settings.embedding_dimension, settings=settings
+    )
+    assert second["counts"]["communities"] == 1
+    assert second["counts"]["communities_removed"] == 3
+    assert len(repository.client.aql("FOR c IN communities RETURN 1")) == 1
 
     with contextlib.suppress(ArangoError):
         client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))

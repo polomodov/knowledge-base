@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from knowledge_base.constants import VECTOR_DIMENSION
+from knowledge_base.constants import COMMUNITY_RESOLUTION, VECTOR_DIMENSION
 
 try:
     import tomllib
@@ -26,6 +26,7 @@ class Settings:
     embedding_provider: str = "hash"
     embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
     retrieval_min_similarity: float = 0.0
+    community_resolution: float = COMMUNITY_RESOLUTION
     repo_root: Path = REPO_ROOT
 
 
@@ -61,6 +62,7 @@ def load_settings(config_path: str | None = None) -> Settings:
     arango = data.get("arangodb", {})
     embedding = data.get("embedding", {})
     retrieval = data.get("retrieval", {})
+    community = data.get("community", {})
     env_file = _load_env_file(REPO_ROOT / "config" / "arangodb.env")
 
     def resolve(key: str, toml_value: Any, default: Any) -> Any:
@@ -94,6 +96,9 @@ def load_settings(config_path: str | None = None) -> Settings:
         embedding_model=resolve("KB_EMBEDDING_MODEL", embedding.get("model"), Settings.embedding_model),
         retrieval_min_similarity=float(
             resolve("KB_RETRIEVAL_MIN_SIMILARITY", retrieval.get("min_similarity"), Settings.retrieval_min_similarity)
+        ),
+        community_resolution=float(
+            resolve("KB_COMMUNITY_RESOLUTION", community.get("resolution"), Settings.community_resolution)
         ),
         repo_root=REPO_ROOT,
     )
