@@ -30,12 +30,32 @@ def test_louvain_splits_a_single_connected_component() -> None:
     assert _sizes(_louvain(adjacency)) == [3, 3]
 
 
-def test_louvain_is_deterministic() -> None:
-    adjacency = {
-        "a": {"b": 1.0, "c": 1.0}, "b": {"a": 1.0, "c": 1.0}, "c": {"a": 1.0, "b": 1.0},
-        "x": {"y": 1.0}, "y": {"x": 1.0},
-    }
-    assert _louvain(adjacency) == _louvain(adjacency)
+def _build_adjacency(edges: list[tuple[str, str, float]]) -> dict[str, dict[str, float]]:
+    adjacency: dict[str, dict[str, float]] = {}
+    for u, v, weight in edges:
+        adjacency.setdefault(u, {})[v] = weight
+        adjacency.setdefault(v, {})[u] = weight
+    return adjacency
+
+
+def test_louvain_partition_is_order_independent() -> None:
+    # The GR-4 acceptance criterion is a *reproducible* partition — independent of dict insertion
+    # order, not merely free of intra-run randomness. A symmetric 4-cycle a-b-c-d-a (all ties) is the
+    # sharpest case: the greedy local move genuinely depends on visit/candidate order. Building it
+    # with two edge orders and asserting an identical partition guards the two sorted() calls in
+    # _louvain_local_move (visit order + candidate tie-break); dropping either makes these two orders
+    # split differently ([[a,b],[c,d]] vs [[a,d],[b,c]]), so this test fails while the weaker
+    # "same object twice" check would still pass.
+    def partition(edges: list[tuple[str, str, float]]) -> list[list[str]]:
+        return _communities_from_partition(_louvain(_build_adjacency(edges)), min_size=1)
+
+    order_one = [("a", "b", 1.0), ("b", "c", 1.0), ("c", "d", 1.0), ("d", "a", 1.0)]
+    order_two = [("b", "c", 1.0), ("a", "b", 1.0), ("c", "d", 1.0), ("d", "a", 1.0)]
+    assert partition(order_one) == partition(order_two)
+    # A larger graph with a weak bridge must also be order-stable end to end.
+    triangles = [("a", "b", 1.0), ("a", "c", 1.0), ("b", "c", 1.0), ("c", "x", 0.1),
+                 ("x", "y", 1.0), ("x", "z", 1.0), ("y", "z", 1.0)]
+    assert partition(triangles) == partition(list(reversed(triangles)))
 
 
 def test_louvain_handles_empty_and_edgeless_graphs() -> None:
