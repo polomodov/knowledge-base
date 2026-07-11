@@ -4,9 +4,9 @@
 **Дата:** 11 июля 2026
 **Контекст:** мультиагентное проектирование v4-среза (3 параллельных дизайнера: graph export, HTML-архитектура, агрегирующие AQL) с состязательной верификацией против инвариантов проекта и повторным замером всех чисел на реальном корпусе. Все «measured»-значения в этом плане перепроверены независимым верификатором read-only запросами к живой БД.
 
-## Статус: реализация завершена, ручная browser/tool matrix ожидает smoke
+## Статус: V4-эпик завершён ✅
 
-Python/CLI/HTML-реализация V4-1…V4-6 находится в `codex/v4-visualizations`; unit, seeded integration, real-corpus build, JSON/GraphML parse round-trip, wheel resource check, ruff, mypy, ADR и Node template gates зелёные. Для полного ручного acceptance остаются пункты [viz-smoke-checklist.md](viz-smoke-checklist.md): открыть `file://` в Chrome/Firefox/Safari и импортировать GraphML в Gephi/yEd.
+Python/CLI/HTML-реализация V4-1…V4-6 находится в `codex/v4-visualizations`; unit, seeded integration, real-corpus build, JSON/GraphML parse round-trip, wheel resource check, ruff, mypy, ADR и Node template gates зелёные. 12 июля 2026 года владелец подтвердил итоговый ручной acceptance артефактов. [viz-smoke-checklist.md](viz-smoke-checklist.md) сохраняется как воспроизводимая процедура регрессионной проверки browser/tool matrix.
 
 ## Выбранная форма (решение пользователя)
 
@@ -61,10 +61,10 @@ Python/CLI/HTML-реализация V4-1…V4-6 находится в `codex/v4
 |----:|------------|-----|-----------|--------|
 | V4-0 | [`docs/visualization-plan` / PR #37](https://github.com/polomodov/knowledge-base/pull/37) | этот план | — | ✅ merged в `main` (`d2f9f43`) |
 | V4-1 | `codex/v4-visualizations` | агрегационное ядро + канонический дедуп-хелпер | — | ✅ реализован и протестирован |
-| V4-2 | `codex/v4-visualizations` | `kb export graph` (node-link JSON + GraphML) | V4-1 | 🟡 код/round-trip готовы; Gephi/yEd smoke ожидает |
+| V4-2 | `codex/v4-visualizations` | `kb export graph` (node-link JSON + GraphML) | V4-1 | ✅ реализован; round-trip и ручной acceptance подтверждены |
 | V4-3 | `codex/v4-visualizations` | детерминированные лейауты (FR + phyllotaxis) | V4-1 | ✅ реализован и протестирован |
 | V4-4 | `codex/v4-visualizations` | `kb viz build`: шаблон + сборка HTML + деградации | V4-1, V4-3 | ✅ реализован и протестирован |
-| V4-5 | `codex/v4-visualizations` | JS трёх видов + smoke-чеклист + `node --check` CI | V4-4 | 🟡 код/автогейты готовы; browser matrix ожидает |
+| V4-5 | `codex/v4-visualizations` | JS трёх видов + smoke-чеклист + `node --check` CI | V4-4 | ✅ реализован; автогейты и ручной acceptance подтверждены |
 | V4-6 | `codex/v4-visualizations` | roadmap/README/диаграммы, де-скоуп authors/works | V4-1…V4-5 | ✅ документация синхронизирована |
 
 ### V4-1 — Агрегационное ядро (`src/knowledge_base/visualizing.py`)
@@ -98,4 +98,4 @@ Python/CLI/HTML-реализация V4-1…V4-6 находится в `codex/v4
 
 ## Метод
 
-Выполнение: единая feature-ветка с логическими коммитами V4-1…V4-6 и один gh PR против актуального `main`; полный гейт перед пушем; состязательное мультиагентное ревью изменений перед мержем. Все «measured»-числа — только из реальных замеров (read-only), расхождения замеров решаются повторным независимым замером. Ручные Chrome/Firefox/Safari и Gephi/yEd пункты остаются явно pending, пока не выполнены владельцем/ревьюером в доступном окружении.
+Выполнение: единая feature-ветка с логическими коммитами V4-1…V4-6 и один gh PR против актуального `main`; полный гейт перед пушем; состязательное мультиагентное ревью изменений перед мержем. Все «measured»-числа — только из реальных замеров (read-only), расхождения замеров решаются повторным независимым замером. Итоговый ручной acceptance подтверждён владельцем 12 июля 2026 года; точечный browser/tool-чеклист остаётся процедурой для последующих регрессионных прогонов.
