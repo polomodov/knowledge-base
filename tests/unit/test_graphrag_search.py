@@ -4,7 +4,7 @@ import knowledge_base.retrieval as retrieval
 from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import load_settings
 from knowledge_base.repository import KnowledgeRepository
-from knowledge_base.retrieval import _aggregate_community_scores, global_search, local_search
+from knowledge_base.retrieval import _aggregate_community_scores, _graph_only_row, global_search, local_search
 
 
 def _candidate(key: str, score: float, provenance: dict | None = None) -> dict:
@@ -67,6 +67,22 @@ def test_aggregate_community_scores_breaks_ties_by_community_key_ascending() -> 
     }
     ranked = _aggregate_community_scores(candidates, membership, communities, community_limit=5, docs_per_community=5)
     assert [c["community_key"] for c in ranked] == ["aaa", "zzz"]
+
+
+def test_graph_only_row_clamps_score_and_marks_expanded() -> None:
+    # GR-3c: a graph-only candidate's score is its connection weight clamped to the ceiling (the
+    # weakest real hit's score, itself <= the cap), and it is flagged graph_expanded.
+    row = _graph_only_row(
+        {"document_key": "d9", "title": "D9", "weight": 0.92, "provenance": {"source_key": "s", "url": None}},
+        ceiling=0.3,
+    )
+    assert row["graph_expanded"] is True
+    assert row["score"] == pytest.approx(0.3)  # weight 0.92 clamped down to the 0.3 ceiling
+    assert row["score_components"] == {"bm25": None, "vector": None, "graph_boost": pytest.approx(0.3)}
+    assert row["document_key"] == "d9" and row["provenance"]["source_key"] == "s"
+    # A weight below the ceiling is kept as-is.
+    low = _graph_only_row({"document_key": "d8", "title": "D8", "weight": 0.1, "provenance": {}}, ceiling=0.5)
+    assert low["score"] == pytest.approx(0.1)
 
 
 def test_local_and_global_search_degrade_when_retrieval_raises(monkeypatch) -> None:
