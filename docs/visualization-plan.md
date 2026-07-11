@@ -10,7 +10,7 @@
 2. **`kb viz build`** — самодостаточный статический HTML в `data/generated/` (inline vanilla JS + встроенный пре-агрегированный JSON, работает офлайн из `file://`, без CDN, без сервера, без npm-сборки).
 3. **Три вида** (все выбраны): карта сообществ и топиков, таймлайн публикаций, выборочный граф документов (ego-подграф).
 
-Формат трекера — как в [graphrag-plan.md](graphrag-plan.md): шаги `V4-N`, каждый — отдельный PR против `main` с полным гейтом (ruff + format + mypy + pytest incl. integration) и состязательным ревью перед мержем. Spec Kit-спека не заводится — следуем прецеденту GraphRAG-эпика (docs-трекер); спеки `specs/NNN` остаются за source adapters.
+Формат трекера — как в [graphrag-plan.md](graphrag-plan.md): шаги `V4-N`, каждый — отдельный PR против `main` с полным гейтом (ruff + format + mypy + pytest incl. integration) и состязательным ревью перед мержем. Spec Kit-спека не заводится: v4 — ограниченный сквозной architecture-эпик с явно зафиксированным scope, поэтому применяется docs plan tracker по [ADR 0009](adr/0009-scope-spec-kit-and-plan-tracker-workflows.md).
 
 ## Реальный корпус (замерено, июль 2026)
 
@@ -54,7 +54,7 @@
 
 | Шаг | Ветка / PR | Что | Зависит от | Статус |
 |----:|------------|-----|-----------|--------|
-| V4-0 | `docs/visualization-plan` | этот план | — | 🟡 на ревью |
+| V4-0 | [`docs/visualization-plan` / PR #37](https://github.com/polomodov/knowledge-base/pull/37) | этот план | — | ✅ merged в `main` (`d2f9f43`) |
 | V4-1 | `feat/viz-aggregations` | агрегационное ядро + канонический дедуп-хелпер | — | ☐ не начат |
 | V4-2 | `feat/graph-export` | `kb export graph` (node-link JSON + GraphML) | V4-1 | ☐ не начат |
 | V4-3 | `feat/viz-layouts` | детерминированные лейауты (FR + phyllotaxis) | V4-1 | ☐ не начат |
