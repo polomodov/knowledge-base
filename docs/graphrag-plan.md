@@ -37,11 +37,12 @@
 | GR-2 | `feat/pluggable-embeddings` | GR-2 | — | ✅ merged ([#24](https://github.com/polomodov/knowledge-base/pull/24)) |
 | GR-3 | `feat/related-edges` | GR-3 | GR-2 | ✅ merged ([#25](https://github.com/polomodov/knowledge-base/pull/25)) |
 | GR-3b | `feat/related-in-ranking` | GR-3 (ранжирование) | GR-3 | ✅ merged ([#26](https://github.com/polomodov/knowledge-base/pull/26)) |
-| GR-3d | `feat/relevance-gated-recall` | recall precision | GR-2 | 🟡 на ревью |
+| GR-3d | `feat/relevance-gated-recall` | recall precision | GR-2 | ✅ merged ([#27](https://github.com/polomodov/knowledge-base/pull/27)) |
 | GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + real эмбеддинги | ⛔ отложен |
+| — | `chore/isolate-integration-test-db` | тест-БД изоляция | — | ✅ merged ([#28](https://github.com/polomodov/knowledge-base/pull/28)) |
+| GR-6 | `chore/retrieval-view-granularity` | GR-7 (аудит #14) | — | 🟡 на ревью |
 | GR-4 | `feat/graph-communities` | GR-4 | GR-3 | ☐ не начат |
 | GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | ☐ не начат |
-| GR-6 | `chore/retrieval-view-granularity` | GR-7 | — | ☐ не начат |
 
 ### GR-0 — Документация плана
 
@@ -156,6 +157,8 @@
 **Проблемы:** GR-7 (аудит #14)
 **Задача:** Устранить двойную индексацию `documents.text` и `chunks.text` во view: выбрать единую гранулярность (индексировать только чанки) или явно задокументировать текущее поведение. На уровне выдачи дедуп по `document_key` уже смягчает эффект, но индекс раздувается и BM25-масса задваивается.
 **Критерии приёмки:** одна гранулярность во view либо явное обоснование в доках; поиск не деградирует; unit/интеграционные тесты подтверждают отсутствие дублей в выдаче.
+
+**Реализация (принято):** из view-линка `documents` убрано поле `text` (осталось `title`); тело документа индексируется только через `chunks.text`. Так body-текст не индексируется дважды (нет задвоения BM25-статистики), а заголовок остаётся искомым. Поиск тела теперь всплывает через чанк документа (дедуп по `document_key` уже был). `ensure_view` на 409 обновляет линки (PUT), поэтому фикс применяется на следующем `kb platform bootstrap`. Unit-тест на тело view; интеграционный — title-only и body матчи возвращают документ.
 
 | # | Важность | Файл:строка | Проблема | Решение |
 |--:|----------|-------------|----------|---------|
