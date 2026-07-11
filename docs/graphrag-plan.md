@@ -146,16 +146,17 @@
 **Открытое решение:** алгоритм и способ генерации summaries (LLM vs экстрактивный) — зависит от GR-2/GR-3.
 
 **Реализация (✅):**
-- **Алгоритм — взвешенная label propagation** (`_label_propagation`, чистая функция без зависимостей): каждый узел начинает в своём сообществе и на каждой итерации перенимает метку с максимальной суммой весов соседей; обход в фиксированном порядке, тай-брейк по метке → **детерминированный и воспроизводимый** результат без внешних библиотек (сохраняем zero-runtime-dependency инвариант). Louvain/Leiden отложены: они требуют либо новой зависимости, либо существенно большего кода, а на текущем графе документов label propagation даёт стабильное разбиение.
+- **Алгоритм — Louvain (модулярность), чистый Python** (`_louvain`, без зависимостей): чередует local-moving (жадно переносит узел в соседнее сообщество с максимальным приростом модулярности) и агрегацию графа (сообщество → супер-узел) до уровня без перемещений. Детерминизм: узлы обходятся в отсортированном порядке, перенос только при строго положительном приросте → одинаковый граф всегда даёт одинаковое разбиение (без рандома референсного Louvain). `resolution` (параметр `COMMUNITY_RESOLUTION`, настраивается через `[community] resolution` / `KB_COMMUNITY_RESOLUTION`) регулирует гранулярность: больше → больше и мельче сообщества.
+- **Почему не label propagation (эмпирически):** первая реализация была на взвешенной label propagation, но на **реальном** корпусе (24 888 чанков, mpnet-768d, 102 582 similarity-ребра) similarity-граф — это один плотный связный компонент. LP «заливает» его одной меткой: измерено — одно сообщество из **2961 документа (99.4 %)**, что бесполезно для global-search. Модулярностная оптимизация (Louvain) разбивает тот же связный компонент на когерентные тематические сообщества (res=1.0 → 12 сообществ, крупнейшее 34 %: architecture / AI-ML / management / eng-process; res=2.0 → 44 сообщества, крупнейшее 11 %). Именно поэтому канонический GraphRAG использует Leiden/Louvain, а не LP или connected-components (порог по весу тоже не помогает: гигантский компонент сохраняется до T≈0.92, теряя >50 % документов).
 - **Граф — документный:** `_document_similarity_adjacency` строит взвешенный неориентированный граф документов из `item_related_to_item` (method=`embedding-similarity`, GR-3), сводя эндпоинты-чанки к их `document_key` и суммируя веса. Поэтому GR-4 запускается **после `--target related`** (и, в идеале, реальных эмбеддингов GR-2 `local`).
 - **Хранение:** сообщества ≥ `COMMUNITY_MIN_SIZE` документов пишутся как узлы `communities` (`size`, `method`, `top_topics`, `summary`) + рёбра `document_in_community` (documents → communities), добавленные в именованный граф. Summary **экстрактивный** (без LLM): размер + топ-N общих топиков сообщества (`_community_top_topics` агрегирует `document_mentions_topic` участников).
-- **Идемпотентность:** это перестраиваемый derived-индекс — `_clear_communities` сносит принадлежащие GR-4 узлы/рёбра (по `method`) перед каждой сборкой, поэтому пересчёт отражает текущий граф и не плодит дубли.
-- **CLI:** `kb index rebuild --target communities` (собственная явная цель, не входит в `all`). Возвращает `documents_clustered` / `communities` / `communities_removed`.
-- **Тесты:** unit на label propagation (два кластера через слабый мост; изолированные узлы), unit на фильтр по размеру и детерминизм порядка; интеграционный на реальном ArangoDB (цепочка similarity-рёбер → одно сообщество, одинокий документ не кластеризуется, summary с топиком, идемпотентный пересчёт).
+- **Идемпотентность:** это перестраиваемый derived-индекс — `_clear_communities` **полностью очищает** выделенные коллекции `communities` и `document_in_community` (их пишет только `build_communities`) перед каждой сборкой. Не фильтруем по `method`: иначе строки, записанные под прежним именем алгоритма, осели бы как устаревшее разбиение.
+- **CLI:** `kb index rebuild --target communities` (собственная явная цель, не входит в `all`). Возвращает `documents_clustered` / `communities` / `communities_removed` / `community_resolution`.
+- **Тесты:** unit на Louvain (два плотных кластера через слабый мост; **разбиение одного связного компонента** — то, чего не могла LP; детерминизм; пустой/безрёберный граф), unit на фильтр по размеру и порядок; интеграционный на реальном ArangoDB (цепочка similarity-рёбер → одно сообщество, одинокий документ не кластеризуется, summary с топиком, идемпотентный пересчёт).
 
 | # | Важность | Файл:строка | Проблема | Решение |
 |--:|----------|-------------|----------|---------|
-| GR-4 | средний | — (новая подсистема) | Нет community detection и community summaries → нет global search GraphRAG | ✅ Взвешенная label propagation над similarity-графом → узлы `communities` + рёбра `document_in_community` с экстрактивными summaries; `kb index rebuild --target communities`. |
+| GR-4 | средний | — (новая подсистема) | Нет community detection и community summaries → нет global search GraphRAG | ✅ Louvain (модулярность, чистый Python) над similarity-графом → узлы `communities` + рёбра `document_in_community` с экстрактивными summaries; `kb index rebuild --target communities`. |
 
 ### GR-5 — GraphRAG-поиск (local / global)
 
@@ -188,7 +189,7 @@
 | GR-1 | высокий | Retrieval | Граф не участвует в ранжировании (`graph_boost=None`; граф только в `kb graph neighbors`) | `retrieval.py:463`, `retrieval.py:533` |
 | GR-2 | высокий | Embeddings | Эмбеддинги несемантичны (hash, dim=8) | `embeddings.py:13` |
 | GR-3 | высокий | Ingest/Граф | Нет графа знаний: теги вместо сущностей; `item_related_to_item` пуст | `ingest_core.py`, `schema.py:145` |
-| GR-4 | средний | GraphRAG | ✅ Community detection (label propagation) + экстрактивные summaries; `--target communities` | `indexing.py` (`build_communities`) |
+| GR-4 | средний | GraphRAG | ✅ Community detection (Louvain, модулярность) + экстрактивные summaries; `--target communities` | `indexing.py` (`build_communities`) |
 | GR-5 | средний | GraphRAG | Нет local/global GraphRAG search API | — |
 | GR-6 | низкий | Доки | `architecture.md` не оговаривает, что граф не влияет на ранжирование | `docs/architecture.md:56` |
 | GR-7 | низкий | Retrieval | Двойная индексация `documents.text` + `chunks.text` во view | `schema.py:105` |

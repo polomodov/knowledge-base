@@ -10,12 +10,18 @@ RELATED_TOP_K = 5
 RELATED_MIN_SCORE = 0.5
 RELATED_EDGE_METHOD = "embedding-similarity"
 
-# GR-4: community detection over the item_related_to_item similarity graph (label propagation).
-# Only communities of at least COMMUNITY_MIN_SIZE documents are stored; summaries list the top
-# shared topics. COMMUNITY_METHOD tags the derived community nodes/edges.
+# GR-4: community detection over the item_related_to_item similarity graph. The algorithm is
+# Louvain modularity optimization (pure Python, no runtime dependency). Louvain — not label
+# propagation — is required because the real similarity graph is one dense connected component:
+# label propagation floods a single label across it (measured: one community held 99.4% of
+# documents), while modularity optimization splits it into cohesive thematic sub-communities.
+# COMMUNITY_RESOLUTION is the granularity knob (higher => more, smaller communities). Only
+# communities of at least COMMUNITY_MIN_SIZE documents are stored; summaries list the top shared
+# topics. COMMUNITY_METHOD tags the derived community nodes/edges.
 COMMUNITY_MIN_SIZE = 2
 COMMUNITY_TOP_TOPICS = 5
-COMMUNITY_METHOD = "label-propagation"
+COMMUNITY_RESOLUTION = 1.0
+COMMUNITY_METHOD = "louvain"
 
 DOCUMENT_COLLECTIONS = [
     "sources",

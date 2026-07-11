@@ -663,7 +663,7 @@ def test_build_communities_clusters_similarity_graph() -> None:
     communities = repository.client.aql("FOR c IN communities RETURN c")
     assert len(communities) == 1
     assert communities[0]["size"] == 3
-    assert communities[0]["method"] == "label-propagation"
+    assert communities[0]["method"] == "louvain"
     assert "Systems Thinking" in communities[0]["top_topics"]
     assert "Systems Thinking" in communities[0]["summary"]
 

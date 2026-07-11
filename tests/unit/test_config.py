@@ -63,3 +63,10 @@ def test_retrieval_min_similarity_defaults_and_env_override(monkeypatch) -> None
     assert load_settings().retrieval_min_similarity == pytest.approx(0.0)  # conservative default
     monkeypatch.setenv("KB_RETRIEVAL_MIN_SIMILARITY", "0.35")
     assert load_settings().retrieval_min_similarity == pytest.approx(0.35)
+
+
+def test_community_resolution_defaults_and_env_override(monkeypatch) -> None:
+    monkeypatch.delenv("KB_COMMUNITY_RESOLUTION", raising=False)
+    assert load_settings().community_resolution == pytest.approx(1.0)  # standard Louvain default
+    monkeypatch.setenv("KB_COMMUNITY_RESOLUTION", "2.0")
+    assert load_settings().community_resolution == pytest.approx(2.0)
