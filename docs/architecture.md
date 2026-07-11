@@ -4,8 +4,20 @@
 
 ## Целевой поток
 
-```text
-sources -> ingest -> normalize -> store -> index/search -> visualize/write
+```mermaid
+flowchart LR
+    S["Источники<br/>Книжный куб · Medium<br/>tellmeabout.tech · fixture"]
+    S --> I["Ingest<br/>адаптеры источников"]
+    I --> DB
+    subgraph DB["ArangoDB — мультимодель"]
+        direction TB
+        D["documents / chunks<br/>+ 768d эмбеддинги"]
+        G["граф знаний<br/>knowledge_graph"]
+        X["индексы<br/>BM25 view · vector ANN"]
+    end
+    DB --> DI["Derived-индексы<br/>related · communities · embeddings"]
+    DI --> R["Retrieval<br/>text · semantic · hybrid · graph"]
+    R --> GR["GraphRAG-поиск<br/>local · global"]
 ```
 
 - **Sources** - внешние или локальные источники личных материалов: "Книжный куб", Medium, заметки, документы, архивы ссылок.
@@ -37,6 +49,29 @@ sources -> ingest -> normalize -> store -> index/search -> visualize/write
 Это разделение важно, чтобы можно было пересобрать базу после изменения нормализации или индексации.
 
 **Как это реализовано в v1.** ArangoDB сейчас является единой зоной хранения: raw snapshot (полный payload или manifest), нормализованные documents/chunks и derived индексы живут в одной базе. Разделение `data/raw` / `data/processed` / `data/generated` в репозитории - это соглашение для on-disk артефактов: `data/raw/` хранит исходные экспорты/снимки, которые вы передаёте адаптерам, а `data/generated/` - выходы `kb export`. `data/processed/` пока не используется (нормализованные данные живут в ArangoDB). При live-ingest по URL сырьё сохраняется только внутри базы (`raw_snapshots.payload`), поэтому для воспроизводимости «пересобрать processed из raw» держите исходные снимки в `data/raw/` и импортируйте их через `--input`/`--archive`.
+
+**Модель данных (граф `knowledge_graph`).** Узлы — коллекции документов/сущностей; рёбра — типизированные связи. Similarity-рёбра `item_related_to_item` (chunk↔chunk) и членство `document_in_community` — производные (derived), перестраиваемые.
+
+```mermaid
+flowchart TD
+    src["sources"]
+    raw["raw_snapshots"]
+    doc["documents"]
+    chunk["chunks"]
+    topic["topics"]
+    author["authors"]
+    work["works"]
+    comm["communities"]
+
+    doc -->|document_from_source| src
+    chunk -->|chunk_of_document| doc
+    chunk -->|chunk_derived_from_raw| raw
+    doc -->|document_mentions_topic| topic
+    doc -->|document_mentions_author| author
+    doc -->|document_references_work| work
+    chunk -->|item_related_to_item| chunk
+    doc -->|document_in_community| comm
+```
 
 ### Search and embeddings
 
