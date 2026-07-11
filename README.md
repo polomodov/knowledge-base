@@ -146,6 +146,8 @@ KB_RUN_INTEGRATION=1 uv run --extra test pytest
 npm run check:adr
 ```
 
+Integration-тесты работают против выделенной БД `knowledge_base_integration_test` (сбрасывается в начале каждого прогона), чтобы не засевать тест-данные в ваш реальный корпус `knowledge_base`. Переопределить — задать `KB_ARANGO_DATABASE` явно.
+
 ## Структура
 
 Текущая структура:
