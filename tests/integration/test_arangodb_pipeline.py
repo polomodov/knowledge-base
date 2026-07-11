@@ -433,6 +433,73 @@ def _hybrid_until_indexed(repository, query: str, *, dimension: int, required: s
 
 
 @pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_text_search_matches_title_and_body_after_single_granularity() -> None:
+    # GR-6 / audit #14: the body is indexed only via chunks now, so a body match must still surface
+    # the document (through its chunk) and a title-only match must still surface it (through the
+    # retained documents.title link).
+    settings = load_settings()
+    repository = KnowledgeRepository(ArangoClient(settings))
+    bootstrap_schema(repository.client)
+
+    now = "2026-07-11T00:00:00Z"
+    source_key = "vg-src"
+    repository.upsert("sources", {"_key": source_key, "type": "test", "display_name": source_key, "created_at": now})
+    repository.upsert(
+        "documents",
+        {
+            "_key": "vg-doc",
+            "source_key": source_key,
+            "canonical_id": "vg-doc",
+            "title": "vgtitlemarker overview",  # matches only via the title link
+            "text": "a note about vgbodymarker and gardening",  # matches only via the chunk link
+            "url": None,
+            "created_at": now,
+        },
+    )
+    repository.upsert(
+        "chunks",
+        {
+            "_key": "vg-doc-c0",
+            "document_key": "vg-doc",
+            "ordinal": 0,
+            "text": "a note about vgbodymarker and gardening",
+            "embedding": hash_embedding("vgbodymarker", dimension=settings.embedding_dimension),
+            "embedding_model": "hash-v1",
+        },
+    )
+    repository.upsert_edge(
+        "chunk_of_document",
+        {"_key": "vg-cof", "_from": "chunks/vg-doc-c0", "_to": "documents/vg-doc"},
+    )
+    repository.upsert_edge(
+        "document_from_source",
+        {
+            "_key": "vg-dfs",
+            "_from": "documents/vg-doc",
+            "_to": f"sources/{source_key}",
+            "import_run_key": "vg-run",
+            "provenance": {"raw_snapshot_key": "vg-raw", "url": None},
+        },
+    )
+
+    def _text_has(query: str) -> bool:
+        return "vg-doc" in {row["document_key"] for row in text_search(repository, query, source_key=source_key)["results"]}
+
+    # Body term is only in the chunk text; title term is only in the document title.
+    assert _until(lambda: _text_has("vgbodymarker"))
+    assert _until(lambda: _text_has("vgtitlemarker"))
+
+
+def _until(predicate) -> bool:
+    # ArangoSearch is eventually consistent; retry (bounded) until the freshly-indexed doc appears.
+    for _ in range(20):
+        if predicate():
+            return True
+        time.sleep(0.25)
+    return predicate()
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
 def test_semantic_search_relevance_gate() -> None:
     # Relevance-gated recall: a semantic hit below the floor is dropped. rg-doc's chunk text equals
     # the query, so its cosine is 1.0 — kept at a 0.99 floor, dropped at a 1.01 floor. Source-scoped
