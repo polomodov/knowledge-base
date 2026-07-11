@@ -102,11 +102,13 @@ def _text_view_body() -> dict[str, Any]:
         "name": TEXT_VIEW_NAME,
         "type": "arangosearch",
         "links": {
+            # Single granularity for body text (audit #14 / GR-6): the document body is indexed
+            # only through its chunks, so a document is not indexed both as itself and as its
+            # chunks (no doubled BM25 term statistics). Only the title is indexed on documents.
             "documents": {
                 "includeAllFields": False,
                 "fields": {
                     "title": {"analyzers": ["text_en"]},
-                    "text": {"analyzers": ["text_en"]},
                 },
             },
             "chunks": {

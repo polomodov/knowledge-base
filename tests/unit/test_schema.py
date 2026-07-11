@@ -1,5 +1,13 @@
 from knowledge_base.constants import VECTOR_DIMENSION
-from knowledge_base.schema import ensure_vector_index
+from knowledge_base.schema import _text_view_body, ensure_vector_index
+
+
+def test_text_view_indexes_body_once_via_chunks() -> None:
+    # GR-6 / audit #14: the document body is indexed only through chunks, so a document is not
+    # double-indexed as itself and as its chunks. Titles stay searchable on documents.
+    links = _text_view_body()["links"]
+    assert set(links["documents"]["fields"]) == {"title"}
+    assert set(links["chunks"]["fields"]) == {"text"}
 
 
 class _FakeClient:
