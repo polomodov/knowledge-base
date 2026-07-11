@@ -528,11 +528,10 @@ def hybrid_search(
 
     # Fuse text+vector, then fold a graph signal into the score of every retrieved candidate before
     # truncating to `limit`. The signal combines shared topic/author/work entities (GR-1) and direct
-    # item_related_to_item similarity links (GR-3b). It re-ranks and boosts the retrieved pool; it
-    # does not yet pull in graph-only neighbours that had no text/vector hit — that candidate
-    # expansion is the next step, GR-3c (see docs/graphrag-plan.md).
+    # item_related_to_item similarity links (GR-3b). It re-ranks and boosts the retrieved pool.
     fused = _fuse_by_document(text_results, semantic["results"])
 
+    graph_ok = True
     if fused:
         try:
             document_keys = [row["document_key"] for row in fused]
@@ -540,6 +539,7 @@ def hybrid_search(
             related = _document_related(repository, document_keys)
         except ArangoError:
             degraded_components.append("graph")
+            graph_ok = False
         else:
             boosts = _graph_boosts(fused, entity_sets, related=related)
             for row in fused:
@@ -549,6 +549,16 @@ def hybrid_search(
             fused.sort(key=lambda item: item["score"], reverse=True)
     # When the graph lookup degrades, graph_boost is left null (from _fuse_by_document) and the
     # ranking falls back to the text+vector order rather than a fabricated signal.
+
+    # GR-3c: if relevance-gated retrieval left empty slots, fill them with graph-only neighbours of the
+    # strongest candidates — documents related via item_related_to_item that had no text/vector hit.
+    # They are appended AFTER all real hits, so a capped graph-only candidate can never outrank a real
+    # one; expansion respects source_key and carries full provenance.
+    if fused and graph_ok and len(fused) < limit:
+        try:
+            fused.extend(_graph_only_candidates(repository, fused, limit=limit, source_key=source_key))
+        except ArangoError:
+            degraded_components.append("graph")
 
     return {
         "query": query,
@@ -720,10 +730,17 @@ def _entities_for_documents(repository: KnowledgeRepository, document_keys: list
 
 
 def _related_documents(
-    repository: KnowledgeRepository, document_keys: list[str], *, limit: int, source_key: str | None = None
+    repository: KnowledgeRepository,
+    document_keys: list[str],
+    *,
+    limit: int,
+    source_key: str | None = None,
+    exclude: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Documents similarity-linked (item_related_to_item, GR-3) to the seeds but not themselves seeds.
+    """Documents similarity-linked (item_related_to_item, GR-3) to the anchors but not themselves anchors.
 
+    `exclude` is the set of document keys to drop from the results (defaults to the anchors); GR-3c
+    passes the whole retrieved pool so expansion never re-surfaces a document that already has a hit.
     When `source_key` is set, cross-source neighbours are excluded so a source-scoped exploration stays
     within that source (PR #32 review), matching the exact source filter of the other retrieval
     commands. Each returned document carries the full provenance object (raw snapshot / import run /
@@ -732,16 +749,17 @@ def _related_documents(
     unique_keys = list(dict.fromkeys(document_keys))
     if not unique_keys:
         return []
+    exclude_keys = list(dict.fromkeys(exclude if exclude is not None else document_keys))
     return repository.client.aql(
         """
-        LET seeds = @document_keys
+        LET anchors = @document_keys
         LET links = (
-          FOR doc_key IN seeds
+          FOR doc_key IN anchors
             LET chunk_ids = (FOR c IN chunks FILTER c.document_key == doc_key RETURN c._id)
             FOR e IN item_related_to_item
               FILTER e.method == @method AND (e._from IN chunk_ids OR e._to IN chunk_ids)
               LET other = DOCUMENT(e._from IN chunk_ids ? e._to : e._from)
-              FILTER other != null AND other.document_key != null AND other.document_key NOT IN seeds
+              FILTER other != null AND other.document_key != null AND other.document_key NOT IN @exclude_keys
               RETURN { doc: other.document_key, weight: e.weight }
         )
         FOR l IN links
@@ -777,8 +795,59 @@ def _related_documents(
             }
           }
         """,
-        {"document_keys": unique_keys, "method": RELATED_EDGE_METHOD, "limit": limit, "source_key": source_key},
+        {
+            "document_keys": unique_keys,
+            "exclude_keys": exclude_keys,
+            "method": RELATED_EDGE_METHOD,
+            "limit": limit,
+            "source_key": source_key,
+        },
     )
+
+
+def _graph_only_candidates(
+    repository: KnowledgeRepository,
+    fused: list[dict[str, Any]],
+    *,
+    limit: int,
+    source_key: str | None,
+    cap: float = _GRAPH_BOOST_CAP,
+    seed_count: int = _HYBRID_SEED_COUNT,
+) -> list[dict[str, Any]]:
+    """Graph-only candidates that fill the empty slots left after relevance-gated retrieval (GR-3c).
+
+    Anchored on the strongest `seed_count` retrieved documents, it returns up to `slots` neighbours
+    (item_related_to_item) that are not already in the pool, ranked by connection weight. Each is
+    scored only by its capped connection weight and marked `graph_expanded`; the caller appends them
+    after the real hits so they can never outrank one.
+    """
+    slots = limit - len(fused)
+    if slots <= 0:
+        return []
+    # Graph-only scores stay at or below both the cap and the weakest real hit's score (`fused` is
+    # sorted descending), so appending them keeps the result list monotonic non-increasing and a
+    # capped candidate never outranks a real one.
+    ceiling = min(cap, float(fused[-1]["score"]))
+    anchors = [row["document_key"] for row in fused[:seed_count]]
+    existing = [row["document_key"] for row in fused]
+    related = _related_documents(repository, anchors, limit=slots, source_key=source_key, exclude=existing)
+    return [_graph_only_row(row, ceiling=ceiling) for row in related]
+
+
+def _graph_only_row(related_row: dict[str, Any], *, ceiling: float) -> dict[str, Any]:
+    """Shape a related-document row as a graph-only hybrid result (no text/vector hit, capped score)."""
+    boost = round(min(ceiling, float(related_row["weight"])), 6)
+    return {
+        "id": None,
+        "document_key": related_row["document_key"],
+        "chunk_key": None,
+        "title": related_row["title"],
+        "snippet": None,
+        "score": boost,
+        "score_components": {"bm25": None, "vector": None, "graph_boost": boost},
+        "provenance": related_row["provenance"],
+        "graph_expanded": True,
+    }
 
 
 def _communities_for_documents(repository: KnowledgeRepository, document_keys: list[str]) -> list[dict[str, Any]]:

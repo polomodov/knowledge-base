@@ -39,7 +39,7 @@
 | GR-3 | `feat/related-edges` | GR-3 | GR-2 | ✅ merged ([#25](https://github.com/polomodov/knowledge-base/pull/25)) |
 | GR-3b | `feat/related-in-ranking` | GR-3 (ранжирование) | GR-3 | ✅ merged ([#26](https://github.com/polomodov/knowledge-base/pull/26)) |
 | GR-3d | `feat/relevance-gated-recall` | recall precision | GR-2 | ✅ merged ([#27](https://github.com/polomodov/knowledge-base/pull/27)) |
-| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + GR-2b (реальные эмбеддинги) | ⛔ отложен |
+| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + GR-2b (реальные эмбеддинги) | 🟡 на ревью ([#33](https://github.com/polomodov/knowledge-base/pull/33)) |
 | — | `chore/isolate-integration-test-db` | тест-БД изоляция | — | ✅ merged ([#28](https://github.com/polomodov/knowledge-base/pull/28)) |
 | GR-6 | `chore/retrieval-view-granularity` | GR-7 (аудит #14) | — | ✅ merged ([#29](https://github.com/polomodov/knowledge-base/pull/29)) |
 | GR-4 | `feat/graph-communities` | GR-4 | GR-3 | 🟡 на ревью ([#31](https://github.com/polomodov/knowledge-base/pull/31)) |
@@ -128,14 +128,22 @@
 
 **Зачем сейчас:** это самостоятельное улучшение precision И структурная предпосылка для GR-3c (без гейта пул всегда полон сырых косинус-хитов, и capped-расширению негде появиться).
 
-### GR-3c — Расширение кандидатов графом (recall) ⛔ отложен
+### GR-3c — Расширение кандидатов графом (recall) ✅
 
 **Ветка / PR:** `feat/graph-candidate-expansion`
 **Проблемы:** GR-3 (recall), перенос из GR-1
 **Задача:** Подтягивать в `hybrid` graph-only соседей — документы, связанные `item_related_to_item` с seed'ами, у которых не было text/vector хита.
 
-**Статус (отложен по итогам состязательного ревью):** реализация + мультиагентное adversarial-ревью показали, что фича не готова к этому окружению. Подтверждены две HIGH-проблемы у «стреляющей» (uncapped) версии — утечка через `source_key` и нарушение инварианта «не перевешивать реальный хит»; корректная (capped ≤ `_GRAPH_BOOST_CAP`) версия **инертна**: `semantic_search` всегда заполняет пул сырыми косинус-хитами > 0.5, поэтому capped-расширение не всплывает, и его нельзя детерминированно протестировать (чанк не может быть без эмбеддинга — vector index требует поле; same-source док = semantic-хит; cross-source корректно отфильтрован). Ценность появляется только поверх (1) реальных эмбеддингов (GR-2 `local`) и (2) relevance-gated recall (**GR-3d**). Возобновить после них.
-**Критерии приёмки (когда возобновим):** связанный документ без lexical/semantic хита может войти в top-`limit`; capped-скор не перевешивает реальные хиты; expansion уважает `source_key`; provenance non-null; тесты.
+**История (был отложен):** первая реализация + мультиагентное adversarial-ревью показали, что фича не готова к тому окружению. Были подтверждены две HIGH-проблемы у «стреляющей» (uncapped) версии — утечка через `source_key` и нарушение инварианта «не перевешивать реальный хит»; корректная (capped) версия была **инертна**: без relevance-гейта `semantic_search` всегда заполнял пул сырыми косинус-хитами > 0.5, «пустых слотов» под расширение не было, и его нельзя было детерминированно протестировать. Ценность появлялась только поверх (1) реальных эмбеддингов (GR-2 `local`) и (2) relevance-gated recall (GR-3d) — оба сделаны, поэтому фича возобновлена.
+
+**Реализация (✅):**
+- **Только пустые слоты:** расширение срабатывает лишь когда relevance-гейт оставил `len(fused) < limit`. Graph-only кандидаты (соседи топ-`_HYBRID_SEED_COUNT` хитов по `item_related_to_item`, которых нет в пуле) **дописываются после всех реальных хитов** — поэтому capped-кандидат структурно не может перевесить реальный.
+- **Инвариант ранжирования + монотонность:** скор graph-only = вес связи, обрезанный по `min(_GRAPH_BOOST_CAP, скор слабейшего реального хита)`, так что итоговый список остаётся монотонно невозрастающим (существующий контракт hybrid) и реальные хиты всегда выше.
+- **Source scope:** расширение уважает `source_key` (переиспользует `_related_documents` GR-5 с параметром `exclude` = весь пул); кросс-source соседи не протекают.
+- **Provenance:** graph-only строки несут полный provenance-объект и помечены `graph_expanded: true`.
+- **Тесты:** unit на `_graph_only_row` (обрезка скора, флаг); интеграционный на реальном ArangoDB (сосед без lexical/semantic хита входит в top-`limit`, реальный хит первый, монотонность, source-scope исключает кросс-source соседа, provenance non-null, при `limit=1` расширения нет).
+
+**Критерии приёмки:** ✅ связанный документ без lexical/semantic хита входит в top-`limit`; ✅ capped-скор не перевешивает реальные хиты; ✅ expansion уважает `source_key`; ✅ provenance non-null; ✅ тесты.
 
 ### GR-4 — Сообщества графа и их summaries
 

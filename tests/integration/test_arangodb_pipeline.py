@@ -857,6 +857,99 @@ def test_graphrag_local_and_global_search() -> None:
         client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
 
 
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_hybrid_graph_candidate_expansion_fills_empty_slots() -> None:
+    # GR-3c: when relevance-gated retrieval leaves empty slots, hybrid pulls in graph-only neighbours
+    # of the top hits (item_related_to_item) that had no text/vector hit — appended AFTER the real
+    # hits (never outranking them), source-scoped, with full provenance. Deterministic via
+    # min_similarity=1.01 (BM25-only), so the neighbours enter only through graph expansion.
+    base = load_settings()
+    settings = cast(Settings, dataclasses.replace(base, arango_database=f"{base.arango_database}_expand"))
+    client = ArangoClient(settings)
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+    repository = KnowledgeRepository(client)
+    bootstrap_schema(client, embedding_dimension=settings.embedding_dimension)
+    dim = settings.embedding_dimension
+    now = "2026-07-11T00:00:00Z"
+
+    repository.upsert("sources", {"_key": "gc-src", "type": "test", "display_name": "gc", "created_at": now})
+    repository.upsert("sources", {"_key": "gc-src-2", "type": "test", "display_name": "gc2", "created_at": now})
+    corpus = {
+        "gc-seed": ("gc-src", "Raft Protocol", "distributed consensus raft protocol election"),
+        "gc-related": ("gc-src", "Unrelated Note", "quantum knitting sourdough zzz marker"),
+        "gc-other": ("gc-src-2", "Cross Source", "botanical watercolor techniques qqq marker"),
+    }
+    for key, (src, title, text) in corpus.items():
+        repository.upsert(
+            "documents",
+            {"_key": key, "source_key": src, "canonical_id": key, "title": title, "text": text, "url": None, "created_at": now},
+        )
+        repository.upsert(
+            "chunks",
+            {
+                "_key": f"{key}-c0",
+                "document_key": key,
+                "ordinal": 0,
+                "text": text,
+                "embedding": hash_embedding(text, dimension=dim),
+                "embedding_model": "hash-v1",
+            },
+        )
+        repository.upsert_edge(
+            "chunk_of_document", {"_key": f"{key}-cod", "_from": f"chunks/{key}-c0", "_to": f"documents/{key}", "method": "test"}
+        )
+
+    def relate(a: str, b: str, weight: float) -> None:
+        repository.upsert_edge(
+            "item_related_to_item",
+            {
+                "_key": f"{a}-{b}",
+                "_from": f"chunks/{a}-c0",
+                "_to": f"chunks/{b}-c0",
+                "weight": weight,
+                "method": "embedding-similarity",
+            },
+        )
+
+    relate("gc-seed", "gc-related", 0.8)  # same-source neighbour, no lexical/semantic hit
+    relate("gc-seed", "gc-other", 0.75)  # cross-source neighbour
+
+    query = "distributed consensus raft protocol"
+    for _ in range(40):
+        if "gc-seed" in {row["document_key"] for row in text_search(repository, query)["results"]}:
+            break
+        time.sleep(0.25)
+
+    result = hybrid_search(repository, query, limit=5, dimension=dim, min_similarity=1.01)
+    keys = [row["document_key"] for row in result["results"]]
+    assert keys[0] == "gc-seed"  # the real hit is ranked first
+    expanded = [row for row in result["results"] if row.get("graph_expanded")]
+    expanded_keys = {row["document_key"] for row in expanded}
+    assert {"gc-related", "gc-other"} <= expanded_keys  # graph-only neighbours filled the empty slots
+    # Capped graph-only candidates never outrank the real hit, and the list stays monotonic.
+    seed_score = next(row["score"] for row in result["results"] if row["document_key"] == "gc-seed")
+    assert all(row["score"] <= seed_score for row in expanded)
+    scores = [row["score"] for row in result["results"]]
+    assert scores == sorted(scores, reverse=True)
+    provenance_fields = {"source_key", "raw_snapshot_key", "import_run_key", "medium_post", "url", "captured_at"}
+    assert expanded and all(provenance_fields <= set(row["provenance"]) for row in expanded)
+
+    # Source scope constrains expansion: the cross-source neighbour is excluded under --source.
+    scoped = hybrid_search(repository, query, limit=5, dimension=dim, source_key="gc-src", min_similarity=1.01)
+    scoped_keys = {row["document_key"] for row in scoped["results"]}
+    assert "gc-related" in scoped_keys  # same-source neighbour kept
+    assert "gc-other" not in scoped_keys  # cross-source neighbour excluded
+
+    # No empty slots -> no expansion: limit=1 is filled by the real hit alone.
+    tight = hybrid_search(repository, query, limit=1, dimension=dim, min_similarity=1.01)
+    assert [row["document_key"] for row in tight["results"]] == ["gc-seed"]
+    assert not any(row.get("graph_expanded") for row in tight["results"])
+
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+
+
 def _unique_document_keys(results: list[dict]) -> bool:
     keys = [result["document_key"] for result in results]
     return len(keys) == len(set(keys))
