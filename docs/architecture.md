@@ -12,7 +12,7 @@ sources -> ingest -> normalize -> store -> index/search -> visualize/write
 - **Ingest** - source adapters, которые получают данные из конкретного источника и сохраняют raw-снимок или читаемый экспорт.
 - **Normalize** - преобразование сырого материала в единый формат: текст, метаданные, даты, ссылки, теги, цитаты.
 - **Store** - долговременное хранение raw-данных, обработанных документов, индексов и generated outputs в разных зонах.
-- **Index/Search** - полнотекстовый поиск, эмбеддинги, тематические индексы и будущий RAG-контекст.
+- **Index/Search** - полнотекстовый (BM25) и семантический (ANN) поиск, graph-aware hybrid-ранжирование, community detection и local/global GraphRAG-поиск поверх графа знаний (GraphRAG-эпик GR-0…GR-6 завершён — см. [graphrag-plan.md](graphrag-plan.md)).
 - **Visualize/Write** - графы, карты тем, исследовательские панели и writing workflows для подготовки постов, статей и книг.
 
 ## Подсистемы

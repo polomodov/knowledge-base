@@ -4,7 +4,62 @@
 **Дата:** 8 июля 2026
 **Контекст:** мультиагентный анализ реализации GraphRAG (граф-модель, ingest, retrieval, embeddings, доки) с состязательной верификацией ключевых утверждений против кода.
 
-## Итоговая оценка
+## Статус: GraphRAG-эпик завершён ✅ (11 июля 2026)
+
+Все шаги **GR-0 … GR-6** плюс ранее отложенный **GR-3c** смерджены в `main` (PR #22–#33). Разрывы из исходной оценки закрыты:
+
+| Исходный разрыв | Статус |
+|---|---|
+| граф не участвует в ранжировании | ✅ `graph_boost` (GR-1/GR-3b) + расширение кандидатов графом (GR-3c) |
+| нет графа знаний (`item_related_to_item` пуст) | ✅ similarity-рёбра пишутся (GR-3): 102 556 рёбер на реальном корпусе |
+| эмбеддинги несемантичны (hash, dim 8) | ✅ `all-mpnet-base-v2` (768d) на 24 877 чанках (GR-2/GR-2b) |
+| нет community detection и summaries | ✅ Louvain + экстрактивные summaries (GR-4): 11 сообществ |
+| нет local/global GraphRAG-поиска | ✅ `kb search local` / `global` (GR-5) |
+| доки не отражают ограничения | ✅ `architecture.md` актуализирован |
+
+Дальше — раздел «[Как работает база знаний сейчас](#как-работает-база-знаний-сейчас)». Ниже сохранена **исходная** оценка (стартовая точка эпика) для истории.
+
+## Как работает база знаний сейчас
+
+Полный путь: **ingest → хранилище → derived-индексы → retrieval → GraphRAG-поиск.**
+
+### 1. Хранилище (ArangoDB, мультимодель)
+Одна база совмещает три модели поиска:
+- **Документы/чанки** — коллекции `documents`, `chunks` (текст + 768-мерный эмбеддинг на чанк).
+- **Граф знаний** — именованный граф `knowledge_graph`: рёбра провенанса (`document_from_source`, `chunk_of_document`, `chunk_derived_from_raw`), сущности (`document_mentions_topic/author`, `document_references_work`), similarity-рёбра (`item_related_to_item`) и членство в сообществах (`document_in_community`).
+- **Индексы поиска** — ArangoSearch view `kb_text_view` (BM25, полнотекст, единая гранулярность по чанкам после GR-6) + vector index `idx_chunks_embedding_vector` (cosine, ANN).
+
+### 2. Ingest (адаптеры источников)
+`kb ingest <source>` — `book-cube` (Telegram «Книжный куб»), `medium-export`, `tellmeabout-tech`, `fixture`. Поток: источник → сырой снапшот (`raw_snapshots`, дедуп по sha256) → документы с каноническим id → чанки с эмбеддингом → рёбра провенанса и сущностей. Провенанс сквозной: любой результат прослеживается до snapshot / import-run / источника.
+
+### 3. Эмбеддинги (pluggable)
+`EmbeddingProvider`: `hash` (детерминированный, dim 8, дефолт, zero-dependency) либо `local` (sentence-transformers, `all-mpnet-base-v2`, 768d). Выбирается конфигом (`[embedding] provider/model/dimension`). `kb index rebuild --target embeddings` переэмбеддит корпус **без re-ingest**: дропает и пересоздаёт vector index под новую размерность и чистит устаревшие similarity-рёбра. **Текущий рабочий корпус: 2 972 документа / 24 877 чанков на mpnet-768d.**
+
+### 4. Derived-индексы (`kb index rebuild --target …`)
+- `all` — идемпотентно проверяет search/vector/graph слой (не трогает O(N²)-таргеты).
+- `related` — строит `item_related_to_item` через ANN: каждый чанк → топ-K похожих чанков из других документов, вес = cosine ≥ порога. **102 556 рёбер.**
+- `communities` — Louvain-кластеризация similarity-графа (чистый Python, параметр `[community] resolution`) → узлы `communities` с экстрактивными summaries. **11 тематических сообществ** (architecture / AI-ML / management-books / eng-process).
+- `embeddings` — переэмбеддинг (см. выше).
+
+### 5. Retrieval (`kb search …`)
+- `text` — BM25 по view.
+- `semantic` — ANN по vector index; relevance-гейт `min_similarity` отсекает слабые хиты (recall precision, GR-3d).
+- `hybrid` — сливает BM25 + вектор и **вкладывает графовый сигнал в ранжирование**: `score_components.graph_boost` — ограниченный буст за общие сущности (GR-1) и similarity-рёбра (GR-3b). Если гейт оставил пустые слоты — дозаполняет их graph-only соседями топ-хитов (GR-3c, `graph_expanded: true`), которые дописываются после реальных хитов и не могут их перевесить.
+- `graph neighbors` — прямой обход графа знаний от топика/автора/работы/документа/чанка.
+
+### 6. GraphRAG-поиск (поверх графа и сообществ)
+- `kb search local` — локальный подграф вокруг сильнейших документов запроса: связывающие сущности (topics/authors/works) + similarity-соседи + сообщества сидов.
+- `kb search global` — ответ на уровне корпуса: сопоставляет retrieval-хиты сообществам, ранжирует сообщества по суммарной релевантности их документов, возвращает топ с summary/`top_topics` и документами-цитатами.
+
+Контекст обоих — **экстрактивный и цитируемый** (без LLM-генерации), совместим с обычным форматом результатов (провенанс на каждой строке).
+
+### Сквозные инварианты
+- **Zero runtime dependency** — ядро на stdlib (свой ArangoDB HTTP-клиент, argparse-CLI); sentence-transformers опционален (lazy import), Louvain — чистый Python.
+- **Провенанс сквозной** — каждый результат прослеживается до источника (raw snapshot / import run / url / captured_at).
+- **Идемпотентность** — derived-индексы полностью перестраиваемы; повторный ingest дедуплицирует, `created_at` неизменен.
+- **Гейт качества** — `ruff` + `ruff format` + `mypy` + `pytest` (unit + live-ArangoDB integration, изолированная тест-БД); CI (lint/test) + SonarCloud на каждом PR.
+
+## Итоговая оценка (исходная — стартовая точка, июль 2026)
 
 Сейчас в проекте есть **субстрат** для GraphRAG (граф + вектор + полнотекст в одной ArangoDB), но не сам GraphRAG. Ключевые разрывы:
 
@@ -39,11 +94,11 @@
 | GR-3 | `feat/related-edges` | GR-3 | GR-2 | ✅ merged ([#25](https://github.com/polomodov/knowledge-base/pull/25)) |
 | GR-3b | `feat/related-in-ranking` | GR-3 (ранжирование) | GR-3 | ✅ merged ([#26](https://github.com/polomodov/knowledge-base/pull/26)) |
 | GR-3d | `feat/relevance-gated-recall` | recall precision | GR-2 | ✅ merged ([#27](https://github.com/polomodov/knowledge-base/pull/27)) |
-| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + GR-2b (реальные эмбеддинги) | 🟡 на ревью ([#33](https://github.com/polomodov/knowledge-base/pull/33)) |
+| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + GR-2b (реальные эмбеддинги) | ✅ merged ([#33](https://github.com/polomodov/knowledge-base/pull/33)) |
 | — | `chore/isolate-integration-test-db` | тест-БД изоляция | — | ✅ merged ([#28](https://github.com/polomodov/knowledge-base/pull/28)) |
 | GR-6 | `chore/retrieval-view-granularity` | GR-7 (аудит #14) | — | ✅ merged ([#29](https://github.com/polomodov/knowledge-base/pull/29)) |
-| GR-4 | `feat/graph-communities` | GR-4 | GR-3 | 🟡 на ревью ([#31](https://github.com/polomodov/knowledge-base/pull/31)) |
-| GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | 🟡 на ревью ([#32](https://github.com/polomodov/knowledge-base/pull/32)) |
+| GR-4 | `feat/graph-communities` | GR-4 | GR-3 | ✅ merged ([#31](https://github.com/polomodov/knowledge-base/pull/31)) |
+| GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | ✅ merged ([#32](https://github.com/polomodov/knowledge-base/pull/32)) |
 
 ### GR-0 — Документация плана
 
