@@ -35,12 +35,13 @@
 | GR-0 | `docs/graphrag-plan` | GR-6 (доки) | — | ✅ merged ([#22](https://github.com/polomodov/knowledge-base/pull/22)) |
 | GR-1 | `feat/graph-aware-hybrid` | GR-1 | GR-0 | ✅ merged ([#23](https://github.com/polomodov/knowledge-base/pull/23)) |
 | GR-2 | `feat/pluggable-embeddings` | GR-2 | — | ✅ merged ([#24](https://github.com/polomodov/knowledge-base/pull/24)) |
+| GR-2b | `feat/reembed-switch-provider` | switch provider без re-ingest | GR-2 | 🟡 на ревью |
 | GR-3 | `feat/related-edges` | GR-3 | GR-2 | ✅ merged ([#25](https://github.com/polomodov/knowledge-base/pull/25)) |
 | GR-3b | `feat/related-in-ranking` | GR-3 (ранжирование) | GR-3 | ✅ merged ([#26](https://github.com/polomodov/knowledge-base/pull/26)) |
 | GR-3d | `feat/relevance-gated-recall` | recall precision | GR-2 | ✅ merged ([#27](https://github.com/polomodov/knowledge-base/pull/27)) |
-| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + real эмбеддинги | ⛔ отложен |
+| GR-3c | `feat/graph-candidate-expansion` | GR-3 (recall) | GR-3d + GR-2b (реальные эмбеддинги) | ⛔ отложен |
 | — | `chore/isolate-integration-test-db` | тест-БД изоляция | — | ✅ merged ([#28](https://github.com/polomodov/knowledge-base/pull/28)) |
-| GR-6 | `chore/retrieval-view-granularity` | GR-7 (аудит #14) | — | 🟡 на ревью |
+| GR-6 | `chore/retrieval-view-granularity` | GR-7 (аудит #14) | — | ✅ merged ([#29](https://github.com/polomodov/knowledge-base/pull/29)) |
 | GR-4 | `feat/graph-communities` | GR-4 | GR-3 | ☐ не начат |
 | GR-5 | `feat/graphrag-search` | GR-5 | GR-3, GR-4 | ☐ не начат |
 
@@ -84,6 +85,14 @@
 | # | Важность | Файл:строка | Проблема | Решение |
 |--:|----------|-------------|----------|---------|
 | GR-2 | высокий | `src/knowledge_base/embeddings.py:13` | `hash_embedding` (детерминированный хеш, dim=8) несемантичен — «semantic search» не про смысл | Интерфейс провайдера, опциональная реальная модель, единая размерность. |
+
+### GR-2b — Re-embed / переключение провайдера
+
+**Ветка / PR:** `feat/reembed-switch-provider`
+**Проблема:** GR-2 добавил провайдера, но эмбеддинги считаются только на ingest — переключить провайдера/модель без полного реингеста было нельзя (а другой размерности мешает зафиксированный vector index).
+**Задача:** дать шаг `kb index rebuild --target embeddings` (`build_embeddings`): пересчитать вектор каждого чанка текущим провайдером и перестроить vector index под его размерность.
+**Реализация (принято):** дропнуть старый vector index (его размерность неизменна) → пересчитать эмбеддинги чанков батчами (`_reembed_chunks`, обновляя `embedding` + `embedding_model`) → создать vector index на `provider.dimension`. Отдельный target, НЕ входит в `all`. `ArangoClient.drop_index` добавлен. Интеграционный тест: реальная смена размерности 8 → 16.
+**Зачем:** это операционная предпосылка, чтобы **реально включить `provider = local`** на существующем корпусе и получить осмысленные `item_related_to_item`/GR-3c/GR-4 (без повторения тупика GR-3c на шумном hash).
 
 ### GR-3 — Извлечение сущностей и связей (граф знаний)
 

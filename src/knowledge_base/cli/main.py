@@ -77,7 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
     index = subcommands.add_parser("index", help="Manage derived indexes")
     index_sub = index.add_subparsers(dest="index_command")
     rebuild = index_sub.add_parser("rebuild", help="Rebuild/check derived indexes")
-    rebuild.add_argument("--target", default="all", choices=["all", "text", "vector", "graph", "related"])
+    rebuild.add_argument("--target", default="all", choices=["all", "text", "vector", "graph", "related", "embeddings"])
     rebuild.set_defaults(handler=_index_rebuild)
 
     search = subcommands.add_parser("search", help="Run retrieval queries")
@@ -199,7 +199,12 @@ def _ingest_medium_export(args: argparse.Namespace) -> int:
 def _index_rebuild(args: argparse.Namespace) -> int:
     settings = _settings(args)
     return emit_json(
-        rebuild_indexes(_repo(args), target=args.target, embedding_dimension=settings.embedding_dimension),
+        rebuild_indexes(
+            _repo(args),
+            target=args.target,
+            embedding_dimension=settings.embedding_dimension,
+            settings=settings,
+        ),
     )
 
 

@@ -1,11 +1,14 @@
+import contextlib
+import dataclasses
 import itertools
 import os
 import time
+from typing import cast
 
 import pytest
 
-from knowledge_base.arango import ArangoClient
-from knowledge_base.config import load_settings
+from knowledge_base.arango import ArangoClient, ArangoError
+from knowledge_base.config import Settings, load_settings
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.fixture import ingest_fixture
 from knowledge_base.indexing import build_related_edges, rebuild_indexes
@@ -539,6 +542,51 @@ def test_semantic_search_relevance_gate() -> None:
         repository, body, source_key=source_key, dimension=settings.embedding_dimension, min_similarity=1.01
     )
     assert "rg-doc" not in {row["document_key"] for row in dropped["results"]}  # nothing clears a 1.01 floor
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_reembed_switches_embedding_dimension() -> None:
+    # build_embeddings re-embeds every chunk with the configured provider and rebuilds the vector
+    # index at its dimension — this is how you switch providers/models after ingest. Runs in its own
+    # database so the global re-embed does not disturb other tests.
+    base = load_settings()
+    settings = cast(Settings, dataclasses.replace(base, arango_database=f"{base.arango_database}_reembed", embedding_dimension=8))
+    client = ArangoClient(settings)
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+    repository = KnowledgeRepository(client)
+    bootstrap_schema(client, embedding_dimension=settings.embedding_dimension)
+    ingest_fixture(repository, settings)
+
+    dims_before = set(repository.client.aql("FOR c IN chunks FILTER HAS(c, 'embedding') RETURN LENGTH(c.embedding)"))
+    assert dims_before == {8}
+
+    # A similarity edge from the OLD vector space must be invalidated by re-embedding (PR #30 review).
+    repository.upsert_edge(
+        "item_related_to_item",
+        {"_key": "stale-rel", "_from": "chunks/a", "_to": "chunks/b", "weight": 0.9, "method": "embedding-similarity"},
+    )
+
+    new_settings = cast(Settings, dataclasses.replace(settings, embedding_dimension=16))
+    result = rebuild_indexes(repository, target="embeddings", embedding_dimension=16, settings=new_settings)
+    assert result["status"] == "ok"
+    assert result["counts"]["embedding_dimension"] == 16
+    assert result["counts"]["chunks_reembedded"] >= 1
+    assert result["counts"]["related_edges_removed"] >= 1  # the stale similarity edge was cleared
+
+    dims_after = set(repository.client.aql("FOR c IN chunks FILTER HAS(c, 'embedding') RETURN LENGTH(c.embedding)"))
+    assert dims_after == {16}  # every chunk re-embedded at the new dimension
+    assert set(repository.client.aql("FOR c IN chunks RETURN c.embedding_model")) == {"hash-v1"}
+    # Stale embedding-similarity edges are gone; rebuild them with --target related on the new space.
+    remaining = repository.client.aql(
+        'RETURN LENGTH(FOR e IN item_related_to_item FILTER e.method == "embedding-similarity" RETURN 1)'
+    )
+    assert remaining[0] == 0
+    # Semantic search works against the rebuilt (16-dim) vector index.
+    assert semantic_search(repository, "systems thinking", dimension=16)["status"] in {"ok", "degraded"}
+
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
 
 
 def _unique_document_keys(results: list[dict]) -> bool:
