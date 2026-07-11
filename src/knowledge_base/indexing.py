@@ -58,6 +58,7 @@ def rebuild_indexes(
         counts["chunks_reembedded"] = embedded["chunks"]
         counts["embedding_model"] = embedded["model"]
         counts["embedding_dimension"] = embedded["dimension"]
+        counts["related_edges_removed"] = embedded["related_edges_removed"]
     run["finished_at"] = _now()
     run["status"] = "ok"
     run["counts"] = counts
@@ -73,12 +74,23 @@ def build_embeddings(repository: KnowledgeRepository, settings: Settings) -> dic
     provider. The vector index is dropped first because its dimension is fixed at creation — a new
     provider may use a different dimension — then recreated at the provider's dimension once the
     chunks carry vectors of the new size.
+
+    Re-embedding invalidates the similarity graph: item_related_to_item edges were computed from the
+    previous vector space, so they are cleared here to stop hybrid ranking from using stale boosts
+    (PR #30 review). Rebuild them on the new embeddings with `kb index rebuild --target related`.
     """
     provider = build_embedding_provider(settings)
     repository.client.drop_index("chunks", "idx_chunks_embedding_vector")
     reembedded = _reembed_chunks(repository, provider)
     index = ensure_vector_index(repository.client, dimension=provider.dimension)
-    return {"chunks": reembedded, "model": provider.model, "dimension": provider.dimension, "vector_index": index}
+    related_removed = _clear_related_edges(repository, [], scoped=False)
+    return {
+        "chunks": reembedded,
+        "model": provider.model,
+        "dimension": provider.dimension,
+        "vector_index": index,
+        "related_edges_removed": related_removed,
+    }
 
 
 def _reembed_chunks(repository: KnowledgeRepository, provider: EmbeddingProvider, *, batch_size: int = 500) -> int:

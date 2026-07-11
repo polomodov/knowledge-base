@@ -494,15 +494,27 @@ def test_reembed_switches_embedding_dimension() -> None:
     dims_before = set(repository.client.aql("FOR c IN chunks FILTER HAS(c, 'embedding') RETURN LENGTH(c.embedding)"))
     assert dims_before == {8}
 
+    # A similarity edge from the OLD vector space must be invalidated by re-embedding (PR #30 review).
+    repository.upsert_edge(
+        "item_related_to_item",
+        {"_key": "stale-rel", "_from": "chunks/a", "_to": "chunks/b", "weight": 0.9, "method": "embedding-similarity"},
+    )
+
     new_settings = cast(Settings, dataclasses.replace(settings, embedding_dimension=16))
     result = rebuild_indexes(repository, target="embeddings", embedding_dimension=16, settings=new_settings)
     assert result["status"] == "ok"
     assert result["counts"]["embedding_dimension"] == 16
     assert result["counts"]["chunks_reembedded"] >= 1
+    assert result["counts"]["related_edges_removed"] >= 1  # the stale similarity edge was cleared
 
     dims_after = set(repository.client.aql("FOR c IN chunks FILTER HAS(c, 'embedding') RETURN LENGTH(c.embedding)"))
     assert dims_after == {16}  # every chunk re-embedded at the new dimension
     assert set(repository.client.aql("FOR c IN chunks RETURN c.embedding_model")) == {"hash-v1"}
+    # Stale embedding-similarity edges are gone; rebuild them with --target related on the new space.
+    remaining = repository.client.aql(
+        'RETURN LENGTH(FOR e IN item_related_to_item FILTER e.method == "embedding-similarity" RETURN 1)'
+    )
+    assert remaining[0] == 0
     # Semantic search works against the rebuilt (16-dim) vector index.
     assert semantic_search(repository, "systems thinking", dimension=16)["status"] in {"ok", "degraded"}
 

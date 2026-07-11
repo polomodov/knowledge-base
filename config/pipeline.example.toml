@@ -17,8 +17,8 @@ dimension = 8
 # model = "sentence-transformers/all-MiniLM-L6-v2"
 # dimension = 384
 # After changing provider/model/dimension, re-embed the existing corpus (no re-ingest needed):
-#   kb index rebuild --target embeddings
-# It recomputes every chunk vector with the new provider and rebuilds the vector index.
+#   kb index rebuild --target embeddings   # recompute vectors + rebuild index; clears stale similarity edges
+#   kb index rebuild --target related      # rebuild item_related_to_item on the new embeddings
 
 [retrieval]
 # min_similarity: relevance floor for semantic hits (cosine). 0.0 (default) only drops
