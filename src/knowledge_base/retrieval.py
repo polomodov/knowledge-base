@@ -609,7 +609,9 @@ def local_search(
         return context
     try:
         context["entities"] = _entities_for_documents(repository, seed_keys, limit=_LOCAL_ENTITY_LIMIT)
-        context["related_documents"] = _related_documents(repository, seed_keys, limit=_LOCAL_RELATED_LIMIT)
+        context["related_documents"] = _related_documents(
+            repository, seed_keys, limit=_LOCAL_RELATED_LIMIT, source_key=source_key
+        )
         context["communities"] = _communities_for_documents(repository, seed_keys)
     except ArangoError:
         _mark_degraded(context, "graph")
@@ -717,8 +719,16 @@ def _entities_for_documents(repository: KnowledgeRepository, document_keys: list
     )
 
 
-def _related_documents(repository: KnowledgeRepository, document_keys: list[str], *, limit: int) -> list[dict[str, Any]]:
-    """Documents similarity-linked (item_related_to_item, GR-3) to the seeds but not themselves seeds."""
+def _related_documents(
+    repository: KnowledgeRepository, document_keys: list[str], *, limit: int, source_key: str | None = None
+) -> list[dict[str, Any]]:
+    """Documents similarity-linked (item_related_to_item, GR-3) to the seeds but not themselves seeds.
+
+    When `source_key` is set, cross-source neighbours are excluded so a source-scoped exploration stays
+    within that source (PR #32 review), matching the exact source filter of the other retrieval
+    commands. Each returned document carries the full provenance object (raw snapshot / import run /
+    capture context), not just source_key + url, preserving the project's provenance invariant.
+    """
     unique_keys = list(dict.fromkeys(document_keys))
     if not unique_keys:
         return []
@@ -737,16 +747,37 @@ def _related_documents(repository: KnowledgeRepository, document_keys: list[str]
         FOR l IN links
           COLLECT doc = l.doc AGGREGATE weight = MAX(l.weight)
           LET d = DOCUMENT("documents", doc)
+          FILTER d != null
+          FILTER @source_key == null OR d.source_key == @source_key
           SORT weight DESC, doc ASC
           LIMIT @limit
+          LET anchor_chunk = FIRST(
+            FOR chunk_doc IN chunks FILTER chunk_doc.document_key == doc SORT chunk_doc.ordinal ASC LIMIT 1 RETURN chunk_doc
+          )
+          LET raw_edge = anchor_chunk ? FIRST(FOR e IN chunk_derived_from_raw FILTER e._from == anchor_chunk._id RETURN e) : null
+          LET raw = raw_edge ? DOCUMENT(raw_edge._to) : null
+          LET source_edge = FIRST(FOR e IN document_from_source FILTER e._from == d._id RETURN e)
           RETURN {
             document_key: doc,
             title: d.title,
             weight: weight,
-            provenance: { source_key: d.source_key, url: d.url }
+            provenance: {
+              source_key: d.source_key,
+              raw_snapshot_key: raw ? raw._key : (
+                source_edge != null AND HAS(source_edge, "provenance") ? source_edge.provenance.raw_snapshot_key : null
+              ),
+              import_run_key: raw_edge ? raw_edge.import_run_key : (source_edge ? source_edge.import_run_key : null),
+              medium_post: (
+                source_edge != null AND HAS(source_edge, "provenance") AND HAS(source_edge.provenance, "medium_post")
+                  ? source_edge.provenance.medium_post
+                  : null
+              ),
+              url: d.url,
+              captured_at: raw ? raw.captured_at : null
+            }
           }
         """,
-        {"document_keys": unique_keys, "method": RELATED_EDGE_METHOD, "limit": limit},
+        {"document_keys": unique_keys, "method": RELATED_EDGE_METHOD, "limit": limit, "source_key": source_key},
     )
 
 

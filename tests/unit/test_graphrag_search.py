@@ -1,7 +1,9 @@
 import pytest
 
 import knowledge_base.retrieval as retrieval
-from knowledge_base.arango import ArangoError
+from knowledge_base.arango import ArangoClient, ArangoError
+from knowledge_base.config import load_settings
+from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import _aggregate_community_scores, global_search, local_search
 
 
@@ -75,14 +77,16 @@ def test_local_and_global_search_degrade_when_retrieval_raises(monkeypatch) -> N
         raise ArangoError("db down")
 
     monkeypatch.setattr(retrieval, "hybrid_search", _boom)
+    # A real repository object (never connected — hybrid_search raises before it is touched).
+    repository = KnowledgeRepository(ArangoClient(load_settings()))
 
-    local = local_search(object(), "q")  # repository is never touched past the failed retrieval
+    local = local_search(repository, "q")
     assert local["status"] == "degraded"
     assert "retrieval" in local["degraded_components"]
     assert local["mode"] == "graphrag-local"
     assert local["seeds"] == [] and local["communities"] == [] and local["entities"] == []
 
-    result = global_search(object(), "q")
+    result = global_search(repository, "q")
     assert result["status"] == "degraded"
     assert "retrieval" in result["degraded_components"]
     assert result["mode"] == "graphrag-global"

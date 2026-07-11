@@ -763,18 +763,51 @@ def test_graphrag_local_and_global_search() -> None:
             },
         )
 
+    # A cross-source neighbour of gs-db1: similarity-linked but in a DIFFERENT source, and lexically
+    # off both queries — reachable only via graph expansion. Used to prove source scoping.
+    repository.upsert("sources", {"_key": "gs-src-other", "type": "test", "display_name": "other", "created_at": now})
+    repository.upsert(
+        "documents",
+        {
+            "_key": "gs-x1",
+            "source_key": "gs-src-other",
+            "canonical_id": "gs-x1",
+            "title": "Storage Engine Internals",
+            "text": "storage engine internals rocksdb lsm compaction",
+            "url": None,
+            "created_at": now,
+        },
+    )
+    repository.upsert(
+        "chunks",
+        {
+            "_key": "gs-x1-c0",
+            "document_key": "gs-x1",
+            "ordinal": 0,
+            "text": "storage engine internals rocksdb lsm compaction",
+            "embedding": hash_embedding("storage engine internals rocksdb lsm compaction", dimension=dim),
+            "embedding_model": "hash-v1",
+        },
+    )
+    repository.upsert_edge(
+        "chunk_of_document",
+        {"_key": "gs-x1-cod", "_from": "chunks/gs-x1-c0", "_to": "documents/gs-x1", "method": "test"},
+    )
+
     relate("gs-db1", "gs-db2", 0.9)
     relate("gs-db1", "gs-db3", 0.8)  # db3 joins the db cluster but does not match the query lexically
+    relate("gs-db1", "gs-x1", 0.7)  # cross-source neighbour, only reachable via graph expansion
     relate("gs-mg1", "gs-mg2", 0.9)
-    build_communities(repository)  # -> {db1, db2, db3} and {mg1, mg2}
+    build_communities(repository)  # -> {db1, db2, db3, x1} and {mg1, mg2}
 
     query = "distributed database consensus quorum"
-    # Wait until ArangoSearch has indexed the db documents (eventual consistency). Poll the BM25 path
+    # Wait until ArangoSearch has indexed both clusters (eventual consistency). Poll the BM25 path
     # directly so the readiness signal matches the min_similarity=1.01 (BM25-only) retrieval under
     # test — a hybrid wait could be satisfied early by noisy hash-vector hits before BM25 is ready.
     for _ in range(40):
-        indexed = {row["document_key"] for row in text_search(repository, query)["results"]}
-        if {"gs-db1", "gs-db2"} <= indexed:
+        db_indexed = {row["document_key"] for row in text_search(repository, query)["results"]}
+        both_indexed = {row["document_key"] for row in text_search(repository, "database leadership")["results"]}
+        if {"gs-db1", "gs-db2"} <= db_indexed and {"gs-mg1", "gs-mg2"} <= both_indexed:
             break
         time.sleep(0.25)
 
@@ -804,10 +837,21 @@ def test_graphrag_local_and_global_search() -> None:
     seed_keys = {row["document_key"] for row in local_result["seeds"]}
     assert seed_keys <= {"gs-db1", "gs-db2"}
     assert "Databases" in {entity["label"] for entity in local_result["entities"]}
-    related_keys = {row["document_key"] for row in local_result["related_documents"]}
+    related = local_result["related_documents"]
+    related_keys = {row["document_key"] for row in related}
     assert "gs-db3" in related_keys  # graph-expanded neighbour that was not itself a query hit
+    assert "gs-x1" in related_keys  # unscoped: the cross-source neighbour is included
     assert seed_keys.isdisjoint(related_keys)  # related documents exclude the seeds
     assert any("Databases" in community["top_topics"] for community in local_result["communities"])
+    # Every related document carries the full provenance object (PR #32 review), not just source_key+url.
+    provenance_fields = {"source_key", "raw_snapshot_key", "import_run_key", "medium_post", "url", "captured_at"}
+    assert related and all(provenance_fields <= set(row["provenance"]) for row in related)
+
+    # Source scope must also constrain graph-expanded related documents (PR #32 Codex P2).
+    scoped = local_search(repository, query, limit=2, dimension=dim, source_key="gs-src", min_similarity=1.01)
+    scoped_related = {row["document_key"] for row in scoped["related_documents"]}
+    assert "gs-db3" in scoped_related  # same-source neighbour kept
+    assert "gs-x1" not in scoped_related  # cross-source neighbour excluded under source scope
 
     with contextlib.suppress(ArangoError):
         client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
