@@ -79,6 +79,8 @@
 - временная шкала публикаций и заметок;
 - экспорт графа или простой frontend для исследования.
 
+Детальный план реализации (форма: `kb export graph` + самодостаточный статический HTML `kb viz build`; шаги V4-0…V4-6 отдельными PR) — в [docs/visualization-plan.md](visualization-plan.md).
+
 ## v5 - Writer/research workflow
 
 Цель: использовать knowledge database при написании постов, исследований и книг.
