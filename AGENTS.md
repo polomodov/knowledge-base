@@ -38,6 +38,7 @@ ADR contract:
 - Новый ADR создавайте командой `npm run adr:new -- --title-ru "..." --title-en "..."`.
 - После добавления или изменения ADR запускайте `npm run generate:adr-index` и коммитьте обновленный `docs/adr/README.md`.
 - Перед завершением ADR-изменений запускайте `npm run check:adr`.
+- Перед завершением архитектурной фичи проверьте diff на ADR-значимые решения. Ретроспективный `accepted` ADR допустим для закрытия пробела, но должен назвать исходный план, PR, коммит или набор изменений и явно сказать, что не являлся предварительным одобрением.
 - Accepted ADR не переписывайте для изменения истории. Если решение изменилось, создайте новый ADR и свяжите записи через `supersedes` / `supersededBy`.
 
 ## Ожидаемые зоны данных
@@ -61,11 +62,13 @@ data/generated/   # summaries, drafts, reports, LLM outputs
 
 ## Spec-Driven Development
 
-Проект использует GitHub Spec Kit как основной spec-driven development workflow. Spec Kit установлен через `specify` CLI с Codex integration; skills живут в `.agents/skills/`, а общие шаблоны и scripts - в `.specify/`.
+Проект использует scoped hybrid workflow из [ADR 0009](docs/adr/0009-scope-spec-kit-and-plan-tracker-workflows.md). GitHub Spec Kit остается default для новых пользовательских фич, feature/API/CLI-контрактов, source adapters и import workflows; он установлен через `specify` CLI с Codex integration, skills живут в `.agents/skills/`, а общие шаблоны и scripts - в `.specify/`.
 
-- Используйте `$speckit-constitution`, `$speckit-specify`, `$speckit-plan`, `$speckit-tasks`, `$speckit-implement` и `$speckit-converge` для feature workflow.
+- Для Spec Kit feature workflow используйте `$speckit-constitution`, `$speckit-specify`, `$speckit-plan`, `$speckit-tasks`, `$speckit-implement` и `$speckit-converge`.
 - Для неоднозначных фич используйте `$speckit-clarify` перед планированием.
 - Для проверки согласованности specs/plan/tasks используйте `$speckit-analyze` перед реализацией.
+- Для ограниченного сквозного remediation-, audit-, research-, architecture- или infrastructure-эпика допустим docs plan tracker, если цель и границы уже явно зафиксированы. Причину выбора tracker вместо Spec Kit фиксируйте в самом плане или связанном ADR. Tracker должен содержать scope/out-of-scope, решения и открытые вопросы, зависимости, критерии приемки, статус шагов, валидацию и ссылки на ADR/PR/коммиты; один tracker является каноническим источником статуса эпика.
+- Plan tracker не заменяет ADR. Простые исправления и локальные рефакторинги без изменения внешнего или архитектурного контракта не требуют полного Spec Kit или отдельного tracker.
 - Feature specs по умолчанию пишите на русском с кратким English summary.
 - Spec Kit specs, plans и tasks - project artifacts, но не `data/raw`, не `data/processed` и не `data/generated`.
 - Не помещайте приватные raw-экспорты или чувствительные source data в spec-документы; вместо этого описывайте форму данных, ограничения и provenance.

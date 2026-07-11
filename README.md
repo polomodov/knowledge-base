@@ -48,7 +48,7 @@ Raw-данные, нормализованные данные и generated outpu
 - Подключаемые эмбеддинги: детерминированный `hash` (dim 8, zero-dependency, по умолчанию) и `local` (sentence-transformers, напр. `all-mpnet-base-v2`, 768d); переключение провайдера/модели без re-ingest через `kb index rebuild --target embeddings`.
 - Derived-индексы: `--target related` (similarity-рёбра `item_related_to_item` через ANN) и `--target communities` (Louvain community detection + экстрактивные summaries).
 - Retrieval-команды: `kb search text` (BM25), `kb search semantic` (ANN + relevance-гейт), `kb search hybrid` (BM25 + вектор + **graph_boost**, с расширением кандидатов графом), `kb graph neighbors` (обход графа знаний).
-- GraphRAG-поиск: `kb search local` (подграф вокруг релевантных сущностей) и `kb search global` (ответ поверх community summaries) — экстрактивный цитируемый контекст с провенансом.
+- GraphRAG-поиск: `kb search local` (подграф вокруг релевантных сущностей) и `kb search global` (retrieval-conditioned обзор community summaries из bounded candidate pool) — экстрактивный цитируемый контекст с провенансом.
 - Read-only MCP server `kb-mcp` для локальных агентов и других проектов.
 - `kb export jsonl` для generated exports в gitignored data zone.
 - Unit и integration tests (включая проверку на живой ArangoDB), CI (ruff + mypy + pytest) и SonarCloud.
@@ -162,7 +162,7 @@ uv run kb graph neighbors --author alexander-polomodov --source medium-export --
 uv run kb search hybrid "architecture writing research" --source medium-export
 ```
 
-Medium export должен оставаться в `data/raw/medium/`, который игнорируется git. Адаптер v1 нормализует только опубликованные `posts/*.html`; `profile`, `sessions`, `ips`, `notes`, `bookmarks`, `claps`, following lists и drafts по умолчанию остаются только raw provenance. Если нужно явно импортировать черновики, используйте `--include-drafts`.
+Medium export должен оставаться в `data/raw/medium/`, который игнорируется git. Адаптер v1 нормализует только опубликованные `posts/*.html`; `profile`, `sessions`, `ips`, `notes`, `bookmarks`, `claps`, following lists и drafts по умолчанию остаются только raw provenance. Если нужно явно импортировать черновики, используйте `--include-drafts`. Это ingest-only opt-in: однажды импортированный draft доступен обычным CLI/MCP search и JSONL export без отдельного query-флага; для приватных drafts используйте отдельную БД или не импортируйте их (см. [ADR 0005](docs/adr/0005-define-source-provenance-and-private-archive-boundaries.md)).
 
 Прогнать второй реальный source adapter на локальном snapshot:
 
@@ -227,7 +227,7 @@ uv run --extra mcp kb-mcp --config config/pipeline.local.toml
 }
 ```
 
-MCP v1 работает локально через stdio и открывает только read-only tools/resources/prompts: `kb_search`, `kb_get_document`, `kb_graph_neighbors`, `kb_list_sources`, `kb_health`, `kb://sources`, `kb://documents/{document_key}` и `research_knowledge_base`. `kb_search` поддерживает `text`, `semantic`, `hybrid`, `local` и `global`; embedding-backed режимы используют provider/model/dimension и `retrieval.min_similarity` из того же конфига, что CLI и индекс корпуса. `pipeline.example.toml` настроен на fixture/hash-эмбеддинги; для реального корпуса локальный конфиг обязан совпадать с моделью, которой выполнен `--target embeddings`, а provider `local` требует установленный `sentence-transformers`.
+MCP v1 работает локально через stdio и открывает только read-only tools/resources/prompts: `kb_search`, `kb_get_document`, `kb_graph_neighbors`, `kb_list_sources`, `kb_health`, `kb://sources`, `kb://documents/{document_key}` и `research_knowledge_base`. `kb_search` поддерживает `text`, `semantic`, `hybrid`, `local` и `global`; embedding-backed режимы используют provider/model/dimension и `retrieval.min_similarity` из того же конфига, что CLI и индекс корпуса. `pipeline.example.toml` настроен на fixture/hash-эмбеддинги; для реального корпуса локальный конфиг обязан совпадать с моделью, которой выполнен `--target embeddings`, а provider `local` требует установленный `sentence-transformers`. Stdio/read-only не является per-client access control: любой local process с DB credentials может читать normalized corpus (trust boundary — [ADR 0006](docs/adr/0006-define-the-local-security-and-privacy-trust-boundary.md)).
 
 Проверки:
 
@@ -300,7 +300,7 @@ Integration-тесты работают против выделенной БД `
 
 ## Spec-Driven Development
 
-Проект использует [GitHub Spec Kit](https://github.com/github/spec-kit) с Codex integration для spec-driven development. Инструменты Spec Kit живут в `.specify/`, а Codex skills - в `.agents/skills/`.
+Проект использует scoped hybrid workflow из [ADR 0009](docs/adr/0009-scope-spec-kit-and-plan-tracker-workflows.md). [GitHub Spec Kit](https://github.com/github/spec-kit) с Codex integration остается default для новых пользовательских фич, feature/API/CLI-контрактов, source adapters и import workflows. Инструменты Spec Kit живут в `.specify/`, а Codex skills - в `.agents/skills/`.
 
 Проверить установленный CLI и integration:
 
@@ -309,11 +309,13 @@ specify version
 specify integration status
 ```
 
-Базовый workflow для будущих фич:
+Базовый workflow для таких фич:
 
 ```text
 $speckit-constitution -> $speckit-specify -> $speckit-plan -> $speckit-tasks -> $speckit-implement
 ```
+
+Для ограниченных сквозных remediation-, audit-, research-, architecture- и infrastructure-эпиков с заранее зафиксированным scope допустим docs plan tracker. Причина выбора tracker вместо Spec Kit фиксируется в плане или связанном ADR; один tracker служит каноническим источником статуса и обязан содержать решения, зависимости, критерии приемки и валидацию. Значимые архитектурные решения всё равно оформляются ADR. Простые исправления и локальные рефакторинги без изменения контракта не требуют полного Spec Kit.
 
 Feature specs по умолчанию пишутся на русском с кратким English summary. Specs, plans и tasks являются project artifacts и не должны смешиваться с `data/raw`, `data/processed` или `data/generated`.
 
@@ -352,7 +354,7 @@ npm run check:adr
 - **v1** - production-like ArangoDB fixture pipeline с provenance, search, vector, graph и hybrid retrieval.
 - **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб", включая полный владельческий archive import.
 - **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги, качество retrieval и локальный read-only MCP server — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
-- **v4** - визуализация тем, источников и связей.
+- **v4** - принятый, но ещё не реализованный срез визуализации: node-link JSON/GraphML + самодостаточный offline HTML (см. [ADR 0008](docs/adr/0008-adopt-offline-visualization-and-graph-export.md)).
 - **v5** - writer/research workflow поверх базы знаний.
 
 Подробнее: [docs/roadmap.md](docs/roadmap.md).
