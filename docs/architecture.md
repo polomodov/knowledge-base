@@ -18,6 +18,8 @@ flowchart LR
     DB --> DI["Derived-индексы<br/>related · communities · embeddings"]
     DI --> R["Retrieval<br/>text · semantic · hybrid · graph"]
     R --> GR["GraphRAG-поиск<br/>local · global"]
+    DI --> V["Visualization build<br/>агрегации · layout"]
+    V --> A["Generated artifacts<br/>JSON · GraphML · offline HTML"]
 ```
 
 - **Sources** - внешние или локальные источники личных материалов: "Книжный куб", Medium, заметки, документы, архивы ссылок.
@@ -25,7 +27,8 @@ flowchart LR
 - **Normalize** - преобразование сырого материала в единый формат: текст, метаданные, даты, ссылки, теги, цитаты.
 - **Store** - долговременное хранение raw-данных, обработанных документов, индексов и generated outputs в разных зонах.
 - **Index/Search** - полнотекстовый (BM25) и семантический (ANN) поиск, graph-aware hybrid-ранжирование, community detection и local/global GraphRAG-поиск поверх графа знаний (GraphRAG-эпик GR-0…GR-6 завершён — см. [graphrag-plan.md](graphrag-plan.md)).
-- **Visualize/Write** - графы, карты тем, исследовательские панели и writing workflows для подготовки постов, статей и книг.
+- **Visualize** - реализованные graph exports и offline-представления тем, сообществ, публикаций и ego-связей.
+- **Write** - планируемые research/writing workflows для подготовки постов, статей и книг.
 
 ## Подсистемы
 
@@ -96,7 +99,7 @@ flowchart TD
   - `kb search hybrid` сливает полнотекст (BM25) и вектор и **вкладывает графовый сигнал в ранжирование**: `score_components.graph_boost` — ограниченный буст за общие сущности (GR-1) и similarity-рёбра `item_related_to_item` (GR-3b). `graph_boost = null` только если графовый слой деградировал. Если relevance-гейт оставил пустые слоты, `hybrid` дозаполняет их graph-only соседями топ-хитов (GR-3c, `graph_expanded: true`) — они дописываются после реальных хитов и не могут их перевесить.
   - `kb search local` (GR-5) собирает локальный подграф вокруг сильнейших документов запроса: связывающие сущности, similarity-соседи и сообщества. `kb search global` (GR-5) строит retrieval-conditioned обзор: сопоставляет bounded hybrid candidate pool сообществам и возвращает топ сообществ с summary и документами-цитатами; это не exhaustive проход по всем community summaries. Оба контекста экстрактивные и цитируемые (без LLM). Полный трекинг GraphRAG-подсистемы — [docs/graphrag-plan.md](graphrag-plan.md).
 - `kb-mcp` открывает локальный read-only MCP server поверх тех же retrieval/document/graph/source/health операций для других проектов и агентских клиентов.
-- `kb export jsonl` пишет generated exports в gitignored data zone.
+- `kb export jsonl` пишет generated exports в gitignored data zone; `kb export graph` строит полный doc-level node-link JSON/GraphML, а `kb viz build` — bounded top-K payload и самодостаточный offline HTML.
 
 ### MCP integration
 
@@ -104,7 +107,11 @@ MCP слой является интерфейсом чтения поверх `
 
 ### Visualization
 
-Принятый, но ещё не реализованный v4 scope включает полный doc-level export в node-link JSON/GraphML и самодостаточный offline HTML с картой сообществ/тем, timeline публикаций и ego-графом документов. Вид книг/авторов отложен из-за пустого/малого текущего corpus. Визуализация не становится источником истины: артефакты пересобираются из нормализованных данных и могут раскрывать чувствительные metadata/topology даже без полного текста. Контракт — в [ADR 0008](adr/0008-adopt-offline-visualization-and-graph-export.md), статус — в [visualization-plan.md](visualization-plan.md).
+V4 реализован как отдельный read-only слой поверх ArangoDB. `visualizing.py` канонически дедуплицирует document+chunk topic mentions, сворачивает chunk similarity в doc-pairs через `MAX(weight)` и считает community/timeline/ego агрегации. `viz_layouts.py` вычисляет seeded Fruchterman–Reingold для community/topic map и phyllotaxis для документов. Ни один из этих шагов не изменяет БД.
+
+`kb export graph` отдаёт полный doc-level fold, document-topic membership и topic co-occurrence в node-link JSON/GraphML. `kb viz build` ограничивает similarity payload top-K=10, встраивает данные и координаты в пакетный CSP-защищённый HTML и атомарно пишет generated artifact. В интерфейсе есть карта сообществ/топиков, timeline публикаций и двухкольцевой ego-граф документов. Вид книг/авторов отложен: текущий корпус содержит 0 works и только 2 authors.
+
+По умолчанию допускается только `status=published`; drafts требуют `--include-drafts`. Полный текст не экспортируется, но заголовки, URL, даты, темы, topology и community membership всё равно чувствительны. Артефакты не являются источником истины и несут build/index metadata с ограниченными consistency warnings. Команды и wire-контракты — в [visualization.md](visualization.md), решение — в [ADR 0008](adr/0008-adopt-offline-visualization-and-graph-export.md), исторический трекер — в [visualization-plan.md](visualization-plan.md).
 
 ### Writing assistant
 

@@ -9,15 +9,22 @@ from knowledge_base.config import REPO_ROOT
 from knowledge_base.repository import KnowledgeRepository
 
 
-def _export_zone_warning(output: Path) -> str | None:
-    # The export contains full document and chunk text; warn when it lands outside the
-    # gitignored data/generated zone where it could be committed or shared (finding #39).
+def _export_zone_warning(
+    output: Path,
+    *,
+    content: str = "full personal document and chunk text",
+) -> str | None:
+    """Warn when a derived artifact leaves the repository's gitignored generated zone.
+
+    Different export surfaces disclose different material. JSONL contains normalized text, while
+    graph and visualization artifacts contain titles, URLs and corpus topology. Keeping the content
+    description at the call site makes the warning honest without turning it into a write blocker.
+    """
     generated_zone = (REPO_ROOT / "data" / "generated").resolve()
     if output.resolve().is_relative_to(generated_zone):
         return None
     sys.stderr.write(
-        f"warning: JSONL export contains full personal document and chunk text; writing "
-        f"outside data/generated/ ({output}) risks committing or sharing it.\n",
+        f"warning: export contains {content}; writing outside data/generated/ ({output}) risks committing or sharing it.\n",
     )
     return "output_outside_generated_zone"
 

@@ -156,12 +156,23 @@ class ArangoClient:
                 return {"name": body.get("name"), "created": False}
             raise
 
-    def aql(self, query: str, bind_vars: dict[str, Any] | None = None) -> list[Any]:
+    def aql(
+        self,
+        query: str,
+        bind_vars: dict[str, Any] | None = None,
+        *,
+        batch_size: int | None = None,
+    ) -> list[Any]:
+        if batch_size is not None and batch_size < 1:
+            raise ValueError("batch_size must be at least 1")
+        body: dict[str, Any] = {"query": query, "bindVars": bind_vars or {}}
+        if batch_size is not None:
+            body["batchSize"] = batch_size
         response = self.request(
             "POST",
             "/_api/cursor",
             database=self.settings.arango_database,
-            body={"query": query, "bindVars": bind_vars or {}},
+            body=body,
         )
         results = list(response.get("result", []))
         while response.get("hasMore"):

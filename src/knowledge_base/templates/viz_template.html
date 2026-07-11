@@ -1,0 +1,1927 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Knowledge Base — визуализация</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #08111f;
+      --surface: #101c2e;
+      --surface-2: #17263b;
+      --line: #29405d;
+      --muted: #91a4bd;
+      --text: #edf4ff;
+      --accent: #65d6c4;
+      --accent-2: #f7b267;
+      --danger: #ff7d8a;
+      --shadow: 0 18px 45px rgba(0, 0, 0, .32);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+      background:
+        radial-gradient(circle at 12% -10%, rgba(101, 214, 196, .13), transparent 34rem),
+        radial-gradient(circle at 93% 8%, rgba(127, 126, 255, .11), transparent 30rem),
+        var(--bg);
+      color: var(--text);
+    }
+
+    body { min-width: 320px; }
+    button, input, select { font: inherit; }
+
+    button, input[type="search"], select {
+      border: 1px solid var(--line);
+      border-radius: .72rem;
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    button {
+      padding: .62rem .88rem;
+      cursor: pointer;
+    }
+
+    button:hover, button:focus-visible, input:focus-visible, select:focus-visible {
+      border-color: var(--accent);
+      outline: 2px solid rgba(101, 214, 196, .2);
+      outline-offset: 2px;
+    }
+
+    button[aria-selected="true"], button[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: rgba(101, 214, 196, .14);
+      color: #cffff7;
+    }
+
+    a { color: #86dfd0; }
+
+    .app-shell {
+      width: min(1500px, 100%);
+      margin: 0 auto;
+      padding: clamp(.8rem, 2vw, 1.5rem);
+    }
+
+    .app-header {
+      display: grid;
+      grid-template-columns: minmax(15rem, 1fr) minmax(16rem, 30rem);
+      gap: 1rem;
+      align-items: end;
+      margin-bottom: 1rem;
+    }
+
+    .eyebrow {
+      margin: 0 0 .3rem;
+      color: var(--accent);
+      font-size: .76rem;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(1.35rem, 3vw, 2.15rem);
+      letter-spacing: -.025em;
+    }
+
+    .subtitle {
+      margin: .42rem 0 0;
+      color: var(--muted);
+      font-size: .92rem;
+    }
+
+    .search-wrap { position: relative; }
+
+    #global-search {
+      width: 100%;
+      padding: .78rem 1rem;
+    }
+
+    .search-results {
+      position: absolute;
+      z-index: 40;
+      top: calc(100% + .35rem);
+      right: 0;
+      left: 0;
+      max-height: 23rem;
+      overflow: auto;
+      padding: .36rem;
+      border: 1px solid var(--line);
+      border-radius: .8rem;
+      background: rgba(8, 17, 31, .98);
+      box-shadow: var(--shadow);
+    }
+
+    .search-results[hidden] { display: none; }
+
+    .search-results button {
+      display: block;
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+    }
+
+    .search-results button:hover,
+    .search-results button:focus-visible {
+      background: var(--surface-2);
+    }
+
+    .result-title, .result-meta { display: block; }
+    .result-meta { margin-top: .18rem; color: var(--muted); font-size: .76rem; }
+
+    .tab-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .55rem;
+      margin-bottom: .8rem;
+    }
+
+    .status {
+      margin: 0 0 .8rem;
+      padding: .72rem .9rem;
+      border: 1px solid rgba(247, 178, 103, .42);
+      border-radius: .75rem;
+      background: rgba(247, 178, 103, .1);
+      color: #ffe0b5;
+    }
+
+    .status[hidden] { display: none; }
+
+    .view {
+      min-height: min(72vh, 850px);
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 1rem;
+      background: rgba(16, 28, 46, .9);
+      box-shadow: var(--shadow);
+    }
+
+    .view[hidden] { display: none; }
+
+    .view-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .75rem 1rem;
+      align-items: center;
+      min-height: 3.7rem;
+      padding: .72rem .9rem;
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 17, 31, .42);
+    }
+
+    .view-toolbar label {
+      display: inline-flex;
+      gap: .55rem;
+      align-items: center;
+      color: var(--muted);
+      font-size: .86rem;
+    }
+
+    .view-toolbar input[type="range"] { accent-color: var(--accent); }
+
+    .metric {
+      margin-left: auto;
+      color: var(--muted);
+      font-size: .82rem;
+    }
+
+    .source-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem .7rem;
+      align-items: center;
+    }
+
+    .source-legend-item {
+      display: inline-flex;
+      gap: .32rem;
+      align-items: center;
+      color: var(--muted);
+      font-size: .75rem;
+    }
+
+    .source-swatch {
+      width: .62rem;
+      height: .62rem;
+      border-radius: 50%;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, .22);
+    }
+
+    .map-stage, .chart-stage, .ego-stage {
+      position: relative;
+      width: 100%;
+      height: min(64vh, 760px);
+      min-height: 30rem;
+      overflow: hidden;
+      background:
+        linear-gradient(rgba(41, 64, 93, .12) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(41, 64, 93, .12) 1px, transparent 1px);
+      background-size: 28px 28px;
+      touch-action: none;
+    }
+
+    #map-canvas, #map-svg, #timeline-svg, #ego-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #map-canvas { z-index: 1; }
+    #map-svg { z-index: 2; pointer-events: none; }
+    #map-interaction {
+      position: absolute;
+      z-index: 3;
+      inset: 0;
+      cursor: grab;
+      touch-action: none;
+    }
+    #map-interaction.is-panning { cursor: grabbing; }
+
+    #timeline-svg, #ego-svg {
+      cursor: grab;
+      touch-action: none;
+    }
+
+    #timeline-svg.is-panning, #ego-svg.is-panning { cursor: grabbing; }
+
+    .tooltip {
+      position: fixed;
+      z-index: 100;
+      max-width: min(24rem, calc(100vw - 2rem));
+      padding: .7rem .8rem;
+      border: 1px solid var(--line);
+      border-radius: .72rem;
+      background: rgba(8, 17, 31, .97);
+      box-shadow: var(--shadow);
+      pointer-events: none;
+      font-size: .82rem;
+    }
+
+    .tooltip[hidden] { display: none; }
+    .tooltip strong { display: block; margin-bottom: .25rem; }
+    .tooltip span { display: block; color: var(--muted); }
+    .tooltip a { display: inline-block; margin-top: .42rem; pointer-events: auto; }
+
+    .empty-state {
+      position: absolute;
+      z-index: 5;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 2rem;
+      color: var(--muted);
+      text-align: center;
+      pointer-events: none;
+    }
+
+    .empty-state[hidden] { display: none; }
+
+    .timeline-controls {
+      display: inline-flex;
+      gap: .35rem;
+    }
+
+    .timeline-controls button { padding: .46rem .7rem; }
+
+    .ego-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(15rem, 22rem);
+      min-height: min(64vh, 760px);
+    }
+
+    .ego-stage { height: 100%; }
+
+    .details {
+      padding: 1rem;
+      border-left: 1px solid var(--line);
+      background: rgba(8, 17, 31, .34);
+    }
+
+    .details h2 { margin: 0 0 .75rem; font-size: 1.05rem; }
+    .details dl { margin: 0; }
+    .details dt { margin-top: .72rem; color: var(--muted); font-size: .74rem; text-transform: uppercase; }
+    .details dd { margin: .2rem 0 0; overflow-wrap: anywhere; }
+    .details .provenance-link { display: inline-block; margin-top: 1rem; }
+
+    .honesty-note {
+      margin: 0;
+      color: var(--muted);
+      font-size: .82rem;
+    }
+
+    .app-footer {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .4rem 1.2rem;
+      padding: 1rem .2rem 0;
+      color: var(--muted);
+      font-size: .76rem;
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    @media (max-width: 800px) {
+      .app-header { grid-template-columns: 1fr; }
+      .ego-layout { grid-template-columns: 1fr; }
+      .ego-stage { min-height: 31rem; }
+      .details { border-top: 1px solid var(--line); border-left: 0; }
+      .metric { width: 100%; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">Offline knowledge graph</p>
+        <h1>Карта базы знаний</h1>
+        <p class="subtitle">Самодостаточный срез: сообщества, публикации и связи документов</p>
+      </div>
+      <div class="search-wrap">
+        <label class="sr-only" for="global-search">Поиск по документам и топикам</label>
+        <input id="global-search" type="search" autocomplete="off" placeholder="Найти документ или топик…">
+        <div id="search-results" class="search-results" role="listbox" hidden></div>
+      </div>
+    </header>
+
+    <nav class="tab-list" role="tablist" aria-label="Виды визуализации">
+      <button id="tab-map" role="tab" aria-controls="view-map" aria-selected="true" data-view="map">Карта</button>
+      <button id="tab-timeline" role="tab" aria-controls="view-timeline" aria-selected="false" tabindex="-1" data-view="timeline">Таймлайн</button>
+      <button id="tab-ego" role="tab" aria-controls="view-ego" aria-selected="false" tabindex="-1" data-view="ego">Документ</button>
+    </nav>
+
+    <p id="global-status" class="status" role="status" hidden></p>
+
+    <main>
+      <section id="view-map" class="view" role="tabpanel" aria-labelledby="tab-map">
+        <div class="view-toolbar">
+          <label for="topic-threshold">
+            Связи топиков от
+            <input id="topic-threshold" type="range" min="2" max="10" value="5" step="1">
+            <output id="topic-threshold-value" for="topic-threshold">5</output>
+          </label>
+          <button id="map-reset" type="button">Сбросить масштаб</button>
+          <div id="source-legend" class="source-legend" aria-label="Цвета источников"></div>
+          <span id="map-metric" class="metric"></span>
+        </div>
+        <div id="map-stage" class="map-stage">
+          <canvas id="map-canvas" aria-label="Точки документов"></canvas>
+          <svg id="map-svg" aria-hidden="true"></svg>
+          <div id="map-interaction" role="application" aria-label="Интерактивная карта; колесо — масштаб, перетаскивание — панорама"></div>
+          <p id="map-empty" class="empty-state" hidden>Нет данных для карты.</p>
+        </div>
+      </section>
+
+      <section id="view-timeline" class="view" role="tabpanel" aria-labelledby="tab-timeline" hidden>
+        <div class="view-toolbar">
+          <div class="timeline-controls" role="group" aria-label="Режим таймлайна">
+            <button id="timeline-sources" type="button" aria-pressed="true">Источники</button>
+            <button id="timeline-topics" type="button" aria-pressed="false">Топики</button>
+          </div>
+          <button id="timeline-reset" type="button">Сбросить масштаб</button>
+          <span id="timeline-metric" class="metric"></span>
+        </div>
+        <div id="timeline-stage" class="chart-stage">
+          <svg id="timeline-svg" role="application" aria-label="Публикации по месяцам; колесо — масштаб, перетаскивание — панорама"></svg>
+          <p id="timeline-empty" class="empty-state" hidden>Нет датированных публикаций для таймлайна.</p>
+        </div>
+      </section>
+
+      <section id="view-ego" class="view" role="tabpanel" aria-labelledby="tab-ego" hidden>
+        <div class="view-toolbar">
+          <p class="honesty-note">Показаны топ-10 соседей; полный граф — <code>kb export graph</code>.</p>
+          <button id="ego-reset" type="button">Сбросить масштаб</button>
+          <span id="ego-metric" class="metric"></span>
+        </div>
+        <div class="ego-layout">
+          <div id="ego-stage" class="ego-stage">
+            <svg id="ego-svg" role="application" aria-label="Ego-граф документа; колесо — масштаб, перетаскивание фона — панорама"></svg>
+            <p id="ego-empty" class="empty-state">Выберите документ через поиск или на карте.</p>
+          </div>
+          <aside id="document-details" class="details" aria-live="polite">
+            <h2>Документ не выбран</h2>
+            <p class="subtitle">Найдите документ по заголовку или нажмите на его точку на карте.</p>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer id="artifact-meta" class="app-footer" aria-label="Провенанс артефакта"></footer>
+  </div>
+
+  <div id="viz-tooltip" class="tooltip" role="tooltip" hidden></div>
+
+  <script type="application/json" id="kb-data">__KB_DATA__</script>
+  <script>
+  (function () {
+    "use strict";
+
+    var SVG_NS = "http://www.w3.org/2000/svg";
+    var POINT_BATCH = 500;
+    var GRID_SIZE = 18;
+    var EGO_FIRST_RING = 10;
+    var EGO_NODE_CAP = 60;
+    var palette = [
+      "#65d6c4", "#f7b267", "#7f8cff", "#ef709d", "#78c6f7",
+      "#b8e986", "#d29bf4", "#ffd166", "#55c1ff", "#ff8c69",
+      "#87d8a2", "#c7a7ff"
+    ];
+
+    var data = parsePayload();
+    var documents = Array.isArray(data.documents) ? data.documents : [];
+    var communities = Array.isArray(data.communities) ? data.communities : [];
+    var topics = Array.isArray(data.topics) ? data.topics : [];
+    var similarityEdges = Array.isArray(data.similarity_edges) ? data.similarity_edges : [];
+    var egoNeighbors = Array.isArray(data.ego_neighbors) ? data.ego_neighbors : [];
+    var topicEdges = Array.isArray(data.topic_edges) ? data.topic_edges : [];
+    var communityTopicEdges = Array.isArray(data.community_topic_edges) ? data.community_topic_edges : [];
+    var timeline = data.timeline && typeof data.timeline === "object" ? data.timeline : {};
+    var sourceColorMap = buildSourceColors();
+    var searchIndex = null;
+    var adjacency = null;
+    var selectedDocumentIndex = null;
+    var activeView = "map";
+    var timelineMode = "sources";
+    var mapTransform = { x: 0, y: 0, scale: 1 };
+    var svgTransforms = {
+      timeline: { x: 0, y: 0, scale: 1 },
+      ego: { x: 0, y: 0, scale: 1 }
+    };
+    var mapRenderRequest = null;
+    var mapFrameToken = 0;
+    var mapHitGrid = new Map();
+    var mapScreenPoints = [];
+    var resizeTimer = null;
+
+    var elements = {
+      tabs: Array.from(document.querySelectorAll("[role=tab]")),
+      views: Array.from(document.querySelectorAll("[role=tabpanel]")),
+      search: document.getElementById("global-search"),
+      searchResults: document.getElementById("search-results"),
+      status: document.getElementById("global-status"),
+      threshold: document.getElementById("topic-threshold"),
+      thresholdValue: document.getElementById("topic-threshold-value"),
+      mapReset: document.getElementById("map-reset"),
+      sourceLegend: document.getElementById("source-legend"),
+      mapStage: document.getElementById("map-stage"),
+      mapCanvas: document.getElementById("map-canvas"),
+      mapSvg: document.getElementById("map-svg"),
+      mapInteraction: document.getElementById("map-interaction"),
+      mapMetric: document.getElementById("map-metric"),
+      mapEmpty: document.getElementById("map-empty"),
+      timelineSources: document.getElementById("timeline-sources"),
+      timelineTopics: document.getElementById("timeline-topics"),
+      timelineReset: document.getElementById("timeline-reset"),
+      timelineStage: document.getElementById("timeline-stage"),
+      timelineSvg: document.getElementById("timeline-svg"),
+      timelineMetric: document.getElementById("timeline-metric"),
+      timelineEmpty: document.getElementById("timeline-empty"),
+      egoStage: document.getElementById("ego-stage"),
+      egoSvg: document.getElementById("ego-svg"),
+      egoMetric: document.getElementById("ego-metric"),
+      egoReset: document.getElementById("ego-reset"),
+      egoEmpty: document.getElementById("ego-empty"),
+      details: document.getElementById("document-details"),
+      footer: document.getElementById("artifact-meta"),
+      tooltip: document.getElementById("viz-tooltip")
+    };
+
+    init();
+
+    function init() {
+      bindTabs();
+      bindSearch();
+      bindMapControls();
+      bindTimelineControls();
+      bindSvgPanZoom(elements.timelineSvg, "timeline");
+      bindSvgPanZoom(elements.egoSvg, "ego");
+      renderSourceLegend();
+      renderMeta();
+      renderMap();
+      renderTimeline();
+      window.addEventListener("resize", scheduleResize);
+      document.addEventListener("pointerdown", function (event) {
+        if (!event.target.closest(".search-wrap")) {
+          hideSearchResults();
+        }
+      });
+      var metadataWarnings = data.meta && Array.isArray(data.meta.warnings) ? data.meta.warnings : [];
+      if (metadataWarnings.length > 0) {
+        showStatus(metadataWarnings.map(function (warning) {
+          return warning && typeof warning === "object" ? warning.message : String(warning);
+        }).filter(Boolean).join(" "));
+      }
+      if (documents.length === 0) {
+        showStatus("В артефакте нет документов. Пересоберите визуализацию после импорта данных.");
+      } else if (similarityEdges.length === 0) {
+        showStatus("Связи документов отсутствуют. Перестройте related-индекс и снова выполните kb viz build.");
+      }
+    }
+
+    function parsePayload() {
+      var marker = document.getElementById("kb-data");
+      if (!marker) {
+        return {};
+      }
+      try {
+        var parsed = JSON.parse(marker.textContent || "{}");
+        return parsed && typeof parsed === "object" ? parsed : {};
+      } catch (error) {
+        var status = document.getElementById("global-status");
+        status.hidden = false;
+        status.textContent = "Не удалось прочитать встроенные данные: " + error.message;
+        return {};
+      }
+    }
+
+    function showStatus(message) {
+      elements.status.hidden = false;
+      elements.status.textContent = message;
+    }
+
+    function bindTabs() {
+      elements.tabs.forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          activateView(tab.dataset.view);
+        });
+        tab.addEventListener("keydown", function (event) {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+            return;
+          }
+          event.preventDefault();
+          var index = elements.tabs.indexOf(tab);
+          var delta = event.key === "ArrowRight" ? 1 : -1;
+          elements.tabs[(index + delta + elements.tabs.length) % elements.tabs.length].focus();
+        });
+      });
+    }
+
+    function activateView(name) {
+      activeView = name;
+      elements.tabs.forEach(function (tab) {
+        var active = tab.dataset.view === name;
+        tab.setAttribute("aria-selected", active ? "true" : "false");
+        tab.tabIndex = active ? 0 : -1;
+      });
+      elements.views.forEach(function (view) {
+        view.hidden = view.id !== "view-" + name;
+      });
+      hideTooltip();
+      requestAnimationFrame(function () {
+        if (name === "map") {
+          renderMap();
+        } else if (name === "timeline") {
+          renderTimeline();
+        } else {
+          renderEgo();
+        }
+      });
+    }
+
+    function bindSearch() {
+      elements.search.addEventListener("focus", ensureSearchIndex);
+      elements.search.addEventListener("input", function () {
+        ensureSearchIndex();
+        renderSearchResults(elements.search.value);
+      });
+      elements.search.addEventListener("keydown", function (event) {
+        if (event.key === "Escape") {
+          hideSearchResults();
+        }
+      });
+    }
+
+    function ensureSearchIndex() {
+      if (searchIndex) {
+        return;
+      }
+      searchIndex = documents.map(function (doc, index) {
+        var topicLabels = documentTopicLabels(doc);
+        return {
+          index: index,
+          text: normalizeSearch([doc.title, doc.key, doc.source_key].concat(topicLabels).join(" ")),
+          topics: topicLabels
+        };
+      });
+    }
+
+    function normalizeSearch(value) {
+      return String(value || "").normalize("NFKC").toLocaleLowerCase("ru");
+    }
+
+    function renderSearchResults(query) {
+      var normalized = normalizeSearch(query).trim();
+      elements.searchResults.replaceChildren();
+      if (!normalized) {
+        hideSearchResults();
+        return;
+      }
+      var terms = normalized.split(/\s+/);
+      var matches = searchIndex.filter(function (entry) {
+        return terms.every(function (term) {
+          return entry.text.indexOf(term) !== -1;
+        });
+      }).slice(0, 12);
+      if (matches.length === 0) {
+        var empty = document.createElement("p");
+        empty.className = "result-meta";
+        empty.textContent = "Ничего не найдено";
+        elements.searchResults.appendChild(empty);
+      } else {
+        matches.forEach(function (entry) {
+          var doc = documents[entry.index];
+          var button = document.createElement("button");
+          button.type = "button";
+          button.setAttribute("role", "option");
+          var title = document.createElement("span");
+          title.className = "result-title";
+          title.textContent = truncateCodePoints(doc.title || doc.key || "Без названия", 90);
+          var meta = document.createElement("span");
+          meta.className = "result-meta";
+          meta.textContent = [doc.source_key || "unknown", entry.topics.slice(0, 3).join(" · ")].filter(Boolean).join(" — ");
+          button.append(title, meta);
+          button.addEventListener("click", function () {
+            selectDocument(entry.index);
+            elements.search.value = doc.title || doc.key || "";
+            hideSearchResults();
+          });
+          elements.searchResults.appendChild(button);
+        });
+      }
+      elements.searchResults.hidden = false;
+    }
+
+    function hideSearchResults() {
+      elements.searchResults.hidden = true;
+    }
+
+    function truncateCodePoints(value, maximum) {
+      var points = Array.from(String(value || ""));
+      return points.length > maximum ? points.slice(0, maximum - 1).join("") + "…" : points.join("");
+    }
+
+    function bindMapControls() {
+      elements.threshold.addEventListener("input", function () {
+        elements.thresholdValue.textContent = elements.threshold.value;
+        renderMapSvg();
+      });
+      elements.mapReset.addEventListener("click", function () {
+        mapTransform = { x: 0, y: 0, scale: 1 };
+        requestMapRender();
+      });
+
+      var drag = null;
+      elements.mapInteraction.addEventListener("pointerdown", function (event) {
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
+        elements.mapInteraction.setPointerCapture(event.pointerId);
+        elements.mapInteraction.classList.add("is-panning");
+      });
+      elements.mapInteraction.addEventListener("pointermove", function (event) {
+        if (drag && drag.id === event.pointerId) {
+          var dx = event.clientX - drag.x;
+          var dy = event.clientY - drag.y;
+          if (Math.abs(dx) + Math.abs(dy) > 2) {
+            drag.moved = true;
+          }
+          mapTransform.x += dx;
+          mapTransform.y += dy;
+          drag.x = event.clientX;
+          drag.y = event.clientY;
+          requestMapRender();
+          return;
+        }
+        handleMapHover(event);
+      });
+      elements.mapInteraction.addEventListener("pointerup", function (event) {
+        if (!drag || drag.id !== event.pointerId) {
+          return;
+        }
+        if (!drag.moved) {
+          var hit = hitTestDocument(event);
+          if (hit !== null) {
+            selectDocument(hit);
+          }
+        }
+        drag = null;
+        elements.mapInteraction.classList.remove("is-panning");
+      });
+      elements.mapInteraction.addEventListener("pointercancel", function () {
+        drag = null;
+        elements.mapInteraction.classList.remove("is-panning");
+      });
+      elements.mapInteraction.addEventListener("pointerleave", hideTooltip);
+      elements.mapInteraction.addEventListener("wheel", function (event) {
+        event.preventDefault();
+        var rect = elements.mapStage.getBoundingClientRect();
+        var px = event.clientX - rect.left;
+        var py = event.clientY - rect.top;
+        var oldScale = mapTransform.scale;
+        var factor = event.deltaY < 0 ? 1.14 : 1 / 1.14;
+        var nextScale = clamp(oldScale * factor, .45, 8);
+        mapTransform.x = px - (px - mapTransform.x) * (nextScale / oldScale);
+        mapTransform.y = py - (py - mapTransform.y) * (nextScale / oldScale);
+        mapTransform.scale = nextScale;
+        requestMapRender();
+      }, { passive: false });
+    }
+
+    function requestMapRender() {
+      if (mapRenderRequest !== null) {
+        return;
+      }
+      mapRenderRequest = requestAnimationFrame(function () {
+        mapRenderRequest = null;
+        renderMap();
+      });
+    }
+
+    function renderMap() {
+      if (mapRenderRequest !== null) {
+        cancelAnimationFrame(mapRenderRequest);
+        mapRenderRequest = null;
+      }
+      var size = stageSize(elements.mapStage);
+      configureCanvas(elements.mapCanvas, size);
+      configureSvg(elements.mapSvg, size);
+      elements.mapEmpty.hidden = documents.length > 0 || communities.length > 0 || topics.length > 0;
+      if (!elements.mapEmpty.hidden) {
+        elements.mapMetric.textContent = "";
+        elements.mapSvg.replaceChildren();
+        clearCanvas(elements.mapCanvas);
+        return;
+      }
+      renderMapSvg();
+      renderDocumentPoints();
+    }
+
+    function mapBounds() {
+      var values = communities.concat(topics).concat(documents);
+      var xs = values.map(function (item) { return number(item.x, 0); });
+      var ys = values.map(function (item) { return number(item.y, 0); });
+      if (xs.length === 0) {
+        return { minX: -1, maxX: 1, minY: -1, maxY: 1 };
+      }
+      var minX = Math.min.apply(null, xs);
+      var maxX = Math.max.apply(null, xs);
+      var minY = Math.min.apply(null, ys);
+      var maxY = Math.max.apply(null, ys);
+      if (minX === maxX) {
+        minX -= 1;
+        maxX += 1;
+      }
+      if (minY === maxY) {
+        minY -= 1;
+        maxY += 1;
+      }
+      return { minX: minX, maxX: maxX, minY: minY, maxY: maxY };
+    }
+
+    function mapProjector() {
+      var size = stageSize(elements.mapStage);
+      var bounds = mapBounds();
+      var padding = 54;
+      var scale = Math.min(
+        Math.max(1, size.width - padding * 2) / (bounds.maxX - bounds.minX),
+        Math.max(1, size.height - padding * 2) / (bounds.maxY - bounds.minY)
+      );
+      var contentWidth = (bounds.maxX - bounds.minX) * scale;
+      var contentHeight = (bounds.maxY - bounds.minY) * scale;
+      var baseX = (size.width - contentWidth) / 2 - bounds.minX * scale;
+      var baseY = (size.height - contentHeight) / 2 - bounds.minY * scale;
+      var project = function (x, y) {
+        var px = baseX + number(x, 0) * scale;
+        var py = baseY + number(y, 0) * scale;
+        return {
+          x: px * mapTransform.scale + mapTransform.x,
+          y: py * mapTransform.scale + mapTransform.y
+        };
+      };
+      project.baseScale = scale;
+      return project;
+    }
+
+    function renderMapSvg() {
+      var project = mapProjector();
+      var threshold = Number(elements.threshold.value);
+      var visibleTopicEdges = topicEdges.filter(function (edge) {
+        return edgeWeight(edge) >= threshold;
+      });
+      var topicById = indexNodes(topics);
+      var communityById = indexNodes(communities);
+      var fragment = document.createDocumentFragment();
+      var edgeGroup = svg("g", { "stroke-linecap": "round" });
+
+      communityTopicEdges.forEach(function (edge) {
+        var pair = edgeEndpoints(edge);
+        var source = communityById.get(String(pair[0])) || topicById.get(String(pair[0]));
+        var target = topicById.get(String(pair[1])) || communityById.get(String(pair[1]));
+        appendMapLine(edgeGroup, source, target, project, "rgba(101,214,196,.18)", Math.max(.5, Math.log1p(edgeWeight(edge))));
+      });
+      visibleTopicEdges.forEach(function (edge) {
+        var pair = edgeEndpoints(edge);
+        var source = topicById.get(String(pair[0]));
+        var target = topicById.get(String(pair[1]));
+        appendMapLine(edgeGroup, source, target, project, "rgba(145,164,189,.28)", Math.max(.45, Math.log1p(edgeWeight(edge)) * .72));
+      });
+      fragment.appendChild(edgeGroup);
+
+      var communityGroup = svg("g", {});
+      communities.forEach(function (community, index) {
+        var point = project(community.x, community.y);
+        var radius = clamp(number(community.radius, 16) * project.baseScale * mapTransform.scale, 9, 150);
+        communityGroup.appendChild(svg("circle", {
+          cx: point.x,
+          cy: point.y,
+          r: radius,
+          fill: withAlpha(palette[index % palette.length], .11),
+          stroke: withAlpha(palette[index % palette.length], .72),
+          "stroke-width": 1.2
+        }));
+        var label = svg("text", {
+          x: point.x,
+          y: point.y - radius - 6,
+          fill: palette[index % palette.length],
+          "font-size": 11,
+          "text-anchor": "middle"
+        });
+        label.textContent = truncateCodePoints(community.label || community.key || community.id, 34);
+        communityGroup.appendChild(label);
+      });
+      fragment.appendChild(communityGroup);
+
+      var topicGroup = svg("g", {});
+      topics.forEach(function (topic) {
+        var point = project(topic.x, topic.y);
+        topicGroup.appendChild(svg("circle", {
+          cx: point.x,
+          cy: point.y,
+          r: 3.2,
+          fill: "#f7b267",
+          stroke: "#08111f",
+          "stroke-width": 1
+        }));
+        if (mapTransform.scale >= 1.25) {
+          var label = svg("text", {
+            x: point.x + 5,
+            y: point.y - 5,
+            fill: "#dce8f7",
+            "font-size": 9
+          });
+          label.textContent = truncateCodePoints(topic.label || topic.key || topic.id, 26);
+          topicGroup.appendChild(label);
+        }
+      });
+      fragment.appendChild(topicGroup);
+
+      elements.mapSvg.replaceChildren(fragment);
+      var storedCommunityCount = data.meta && data.meta.counts && data.meta.counts.communities !== undefined
+        ? number(data.meta.counts.communities, 0)
+        : communities.filter(function (community) { return String(community.key) !== "unclustered"; }).length;
+      var metricParts = [
+        documents.length + " документов",
+        storedCommunityCount + " сообществ",
+        visibleTopicEdges.length + " связей топиков"
+      ];
+      if (communities.some(function (community) { return String(community.key) === "unclustered"; })) {
+        metricParts.push("зона unclustered");
+      }
+      elements.mapMetric.textContent = metricParts.join(" · ");
+    }
+
+    function appendMapLine(group, source, target, project, color, width) {
+      if (!source || !target) {
+        return;
+      }
+      var from = project(source.x, source.y);
+      var to = project(target.x, target.y);
+      group.appendChild(svg("line", {
+        x1: from.x,
+        y1: from.y,
+        x2: to.x,
+        y2: to.y,
+        stroke: color,
+        "stroke-width": width
+      }));
+    }
+
+    function renderDocumentPoints() {
+      mapFrameToken += 1;
+      var token = mapFrameToken;
+      var canvas = elements.mapCanvas;
+      var context = canvas.getContext("2d");
+      var ratio = window.devicePixelRatio || 1;
+      var project = mapProjector();
+      var index = 0;
+      mapHitGrid = new Map();
+      mapScreenPoints = new Array(documents.length);
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      context.clearRect(0, 0, canvas.width / ratio, canvas.height / ratio);
+
+      function drawBatch() {
+        if (token !== mapFrameToken) {
+          return;
+        }
+        var stop = Math.min(index + POINT_BATCH, documents.length);
+        for (; index < stop; index += 1) {
+          var doc = documents[index];
+          var point = project(doc.x, doc.y);
+          mapScreenPoints[index] = point;
+          var radius = selectedDocumentIndex === index ? 4.5 : 2.15;
+          context.beginPath();
+          context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+          context.fillStyle = sourceColor(doc.source_key);
+          context.fill();
+          if (selectedDocumentIndex === index) {
+            context.lineWidth = 1.5;
+            context.strokeStyle = "#ffffff";
+            context.stroke();
+          }
+          addHitGrid(index, point);
+        }
+        if (index < documents.length) {
+          requestAnimationFrame(drawBatch);
+        }
+      }
+      requestAnimationFrame(drawBatch);
+    }
+
+    function addHitGrid(index, point) {
+      var key = Math.floor(point.x / GRID_SIZE) + ":" + Math.floor(point.y / GRID_SIZE);
+      var bucket = mapHitGrid.get(key);
+      if (!bucket) {
+        bucket = [];
+        mapHitGrid.set(key, bucket);
+      }
+      bucket.push(index);
+    }
+
+    function handleMapHover(event) {
+      var hit = hitTestDocument(event);
+      if (hit === null) {
+        hideTooltip();
+        return;
+      }
+      showDocumentTooltip(documents[hit], event.clientX, event.clientY);
+    }
+
+    function hitTestDocument(event) {
+      var rect = elements.mapStage.getBoundingClientRect();
+      var x = event.clientX - rect.left;
+      var y = event.clientY - rect.top;
+      var gx = Math.floor(x / GRID_SIZE);
+      var gy = Math.floor(y / GRID_SIZE);
+      var best = null;
+      var bestDistance = 9;
+      for (var dx = -1; dx <= 1; dx += 1) {
+        for (var dy = -1; dy <= 1; dy += 1) {
+          var bucket = mapHitGrid.get((gx + dx) + ":" + (gy + dy)) || [];
+          bucket.forEach(function (index) {
+            var point = mapScreenPoints[index];
+            if (!point) {
+              return;
+            }
+            var distance = Math.hypot(point.x - x, point.y - y);
+            if (distance < bestDistance) {
+              bestDistance = distance;
+              best = index;
+            }
+          });
+        }
+      }
+      return best;
+    }
+
+    function bindTimelineControls() {
+      elements.timelineSources.addEventListener("click", function () {
+        timelineMode = "sources";
+        elements.timelineSources.setAttribute("aria-pressed", "true");
+        elements.timelineTopics.setAttribute("aria-pressed", "false");
+        renderTimeline();
+      });
+      elements.timelineTopics.addEventListener("click", function () {
+        timelineMode = "topics";
+        elements.timelineSources.setAttribute("aria-pressed", "false");
+        elements.timelineTopics.setAttribute("aria-pressed", "true");
+        renderTimeline();
+      });
+      elements.timelineReset.addEventListener("click", function () {
+        resetSvgTransform("timeline");
+      });
+      elements.egoReset.addEventListener("click", function () {
+        resetSvgTransform("ego");
+      });
+    }
+
+    function renderTimeline() {
+      var months = Array.isArray(timeline.months) ? timeline.months : [];
+      var series = timelineSeries(timelineMode, months);
+      var size = stageSize(elements.timelineStage);
+      configureSvg(elements.timelineSvg, size);
+      elements.timelineSvg.replaceChildren();
+      elements.timelineEmpty.hidden = months.length > 0 && series.length > 0;
+      if (!elements.timelineEmpty.hidden) {
+        elements.timelineMetric.textContent = "";
+        return;
+      }
+      if (timelineMode === "sources") {
+        renderSourceBars(months, series, size);
+      } else {
+        renderTopicLines(months, series, size);
+      }
+      elements.timelineMetric.textContent = months.length + " мес. · " + series.length + (timelineMode === "sources" ? " источников" : " топиков");
+    }
+
+    function renderSourceBars(months, series, size) {
+      var margin = { top: 30, right: 24, bottom: 58, left: 48 };
+      var width = Math.max(1, size.width - margin.left - margin.right);
+      var height = Math.max(1, size.height - margin.top - margin.bottom);
+      var totals = months.map(function (_, monthIndex) {
+        return series.reduce(function (sum, entry) {
+          return sum + number(entry.values[monthIndex], 0);
+        }, 0);
+      });
+      var maximum = Math.max(1, Math.max.apply(null, totals));
+      var group = svg("g", { id: "timeline-world" });
+      setSvgTransform(group, svgTransforms.timeline);
+      addAxes(group, months, size, margin, maximum);
+      var slot = width / Math.max(1, months.length);
+      var barWidth = Math.max(1, slot * .72);
+      months.forEach(function (_, monthIndex) {
+        var stack = 0;
+        series.forEach(function (entry) {
+          var value = number(entry.values[monthIndex], 0);
+          if (value <= 0) {
+            return;
+          }
+          var barHeight = value / maximum * height;
+          var y = margin.top + height - (stack + value) / maximum * height;
+          var rect = svg("rect", {
+            x: margin.left + monthIndex * slot + (slot - barWidth) / 2,
+            y: y,
+            width: barWidth,
+            height: Math.max(.5, barHeight),
+            rx: 1,
+            fill: sourceColor(entry.key)
+          });
+          attachSvgTooltip(rect, entry.label + " · " + months[monthIndex] + ": " + value);
+          group.appendChild(rect);
+          stack += value;
+        });
+      });
+      addLegend(group, series, size.width, function (entry) {
+        return sourceColor(entry.key);
+      });
+      elements.timelineSvg.appendChild(group);
+    }
+
+    function renderTopicLines(months, series, size) {
+      var margin = { top: 30, right: 24, bottom: 58, left: 48 };
+      var width = Math.max(1, size.width - margin.left - margin.right);
+      var height = Math.max(1, size.height - margin.top - margin.bottom);
+      var maximum = Math.max(1, series.reduce(function (max, entry) {
+        return Math.max(max, Math.max.apply(null, entry.values.map(function (value) { return number(value, 0); })));
+      }, 0));
+      var group = svg("g", { id: "timeline-world" });
+      setSvgTransform(group, svgTransforms.timeline);
+      addAxes(group, months, size, margin, maximum);
+      series.forEach(function (entry, seriesIndex) {
+        var points = entry.values.map(function (value, monthIndex) {
+          var x = margin.left + (months.length === 1 ? width / 2 : monthIndex / (months.length - 1) * width);
+          var y = margin.top + height - number(value, 0) / maximum * height;
+          return x + "," + y;
+        }).join(" ");
+        var line = svg("polyline", {
+          points: points,
+          fill: "none",
+          stroke: palette[seriesIndex % palette.length],
+          "stroke-width": 2,
+          "stroke-linejoin": "round",
+          "stroke-linecap": "round"
+        });
+        attachSvgTooltip(line, entry.label);
+        group.appendChild(line);
+        entry.values.forEach(function (value, monthIndex) {
+          var numericValue = number(value, 0);
+          if (numericValue <= 0) {
+            return;
+          }
+          var x = margin.left + (months.length === 1 ? width / 2 : monthIndex / (months.length - 1) * width);
+          var y = margin.top + height - numericValue / maximum * height;
+          var point = svg("circle", {
+            cx: x,
+            cy: y,
+            r: 3.2,
+            fill: palette[seriesIndex % palette.length],
+            stroke: "#08111f",
+            "stroke-width": 1
+          });
+          attachSvgTooltip(point, entry.label + " · " + months[monthIndex] + ": " + numericValue);
+          group.appendChild(point);
+        });
+      });
+      addLegend(group, series, size.width, function (_, index) {
+        return palette[index % palette.length];
+      });
+      elements.timelineSvg.appendChild(group);
+    }
+
+    function addAxes(group, months, size, margin, maximum) {
+      var width = Math.max(1, size.width - margin.left - margin.right);
+      var height = Math.max(1, size.height - margin.top - margin.bottom);
+      group.appendChild(svg("line", {
+        x1: margin.left, y1: margin.top + height,
+        x2: margin.left + width, y2: margin.top + height,
+        stroke: "#4a617d"
+      }));
+      group.appendChild(svg("line", {
+        x1: margin.left, y1: margin.top,
+        x2: margin.left, y2: margin.top + height,
+        stroke: "#4a617d"
+      }));
+      [0, .5, 1].forEach(function (ratio) {
+        var value = Math.round(maximum * ratio);
+        var y = margin.top + height - height * ratio;
+        group.appendChild(svg("line", {
+          x1: margin.left, y1: y,
+          x2: margin.left + width, y2: y,
+          stroke: "rgba(74,97,125,.25)"
+        }));
+        var label = svg("text", {
+          x: margin.left - 8, y: y + 3,
+          fill: "#91a4bd", "font-size": 9, "text-anchor": "end"
+        });
+        label.textContent = String(value);
+        group.appendChild(label);
+      });
+      var labelStep = Math.max(1, Math.ceil(months.length / Math.max(4, Math.floor(width / 80))));
+      months.forEach(function (month, index) {
+        if (index % labelStep !== 0 && index !== months.length - 1) {
+          return;
+        }
+        var x = margin.left + (months.length === 1 ? width / 2 : index / (months.length - 1) * width);
+        var label = svg("text", {
+          x: x, y: margin.top + height + 22,
+          fill: "#91a4bd", "font-size": 9,
+          "text-anchor": "end",
+          transform: "rotate(-35 " + x + " " + (margin.top + height + 22) + ")"
+        });
+        label.textContent = String(month);
+        group.appendChild(label);
+      });
+    }
+
+    function addLegend(group, series, totalWidth, colorForEntry) {
+      var x = 54;
+      var y = 16;
+      series.slice(0, 12).forEach(function (entry, index) {
+        var width = Math.min(150, 28 + Array.from(entry.label).length * 6);
+        if (x + width > totalWidth - 20) {
+          return;
+        }
+        group.appendChild(svg("circle", {
+          cx: x, cy: y - 3, r: 4,
+          fill: colorForEntry(entry, index)
+        }));
+        var label = svg("text", {
+          x: x + 8, y: y,
+          fill: "#c8d6e8", "font-size": 9
+        });
+        label.textContent = truncateCodePoints(entry.label, 18);
+        group.appendChild(label);
+        x += width;
+      });
+    }
+
+    function selectDocument(index) {
+      if (!Number.isInteger(index) || index < 0 || index >= documents.length) {
+        return;
+      }
+      selectedDocumentIndex = index;
+      activateView("ego");
+      renderDocumentPoints();
+    }
+
+    function renderEgo() {
+      var size = stageSize(elements.egoStage);
+      configureSvg(elements.egoSvg, size);
+      elements.egoSvg.replaceChildren();
+      if (selectedDocumentIndex === null || !documents[selectedDocumentIndex]) {
+        elements.egoEmpty.hidden = false;
+        elements.egoMetric.textContent = "";
+        renderDocumentDetails(null);
+        return;
+      }
+      elements.egoEmpty.hidden = true;
+      ensureAdjacency();
+      var graph = egoGraph(selectedDocumentIndex);
+      var positions = radialPositions(graph, size);
+      var visible = new Set(graph.nodes);
+      var fragment = document.createDocumentFragment();
+      var edgeGroup = svg("g", {});
+      similarityEdges.forEach(function (edge) {
+        var parsed = similarityEdge(edge);
+        if (!visible.has(parsed.source) || !visible.has(parsed.target)) {
+          return;
+        }
+        var from = positions.get(parsed.source);
+        var to = positions.get(parsed.target);
+        if (!from || !to) {
+          return;
+        }
+        edgeGroup.appendChild(svg("line", {
+          x1: from.x, y1: from.y,
+          x2: to.x, y2: to.y,
+          stroke: "rgba(145,164,189,.28)",
+          "stroke-width": clamp(parsed.weight * 2, .5, 2.4)
+        }));
+      });
+      fragment.appendChild(edgeGroup);
+
+      var nodeGroup = svg("g", {});
+      graph.nodes.forEach(function (index) {
+        var doc = documents[index];
+        var point = positions.get(index);
+        var isCenter = index === selectedDocumentIndex;
+        var isFirstRing = graph.firstRing.indexOf(index) !== -1;
+        var circle = svg("circle", {
+          cx: point.x,
+          cy: point.y,
+          r: isCenter ? 11 : (isFirstRing ? 7 : 4.2),
+          fill: sourceColor(doc.source_key),
+          stroke: isCenter ? "#ffffff" : "#08111f",
+          "stroke-width": isCenter ? 2.2 : 1.2,
+          tabindex: 0,
+          role: "button",
+          "aria-label": doc.title || doc.key || "Документ"
+        });
+        circle.style.cursor = "pointer";
+        circle.addEventListener("click", function () { selectDocument(index); });
+        circle.addEventListener("keydown", function (event) {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            selectDocument(index);
+          }
+        });
+        circle.addEventListener("pointerenter", function (event) {
+          showDocumentTooltip(doc, event.clientX, event.clientY);
+        });
+        circle.addEventListener("pointerleave", hideTooltip);
+        nodeGroup.appendChild(circle);
+        if (isCenter || isFirstRing) {
+          var label = svg("text", {
+            x: point.x,
+            y: point.y + (isCenter ? 25 : 17),
+            fill: isCenter ? "#ffffff" : "#c8d6e8",
+            "font-size": isCenter ? 11 : 9,
+            "text-anchor": "middle",
+            "pointer-events": "none"
+          });
+          label.textContent = truncateCodePoints(doc.title || doc.key, isCenter ? 42 : 24);
+          nodeGroup.appendChild(label);
+        }
+      });
+      fragment.appendChild(nodeGroup);
+      var world = svg("g", { id: "ego-world" });
+      setSvgTransform(world, svgTransforms.ego);
+      world.appendChild(fragment);
+      elements.egoSvg.appendChild(world);
+      elements.egoMetric.textContent = graph.nodes.length + " узлов · " + graph.firstRing.length + " ближайших соседей";
+      renderDocumentDetails(documents[selectedDocumentIndex]);
+    }
+
+    function ensureAdjacency() {
+      if (adjacency) {
+        return;
+      }
+      adjacency = documents.map(function () { return []; });
+      similarityEdges.forEach(function (edge) {
+        var parsed = similarityEdge(edge);
+        if (!documents[parsed.source] || !documents[parsed.target] || parsed.source === parsed.target) {
+          return;
+        }
+        adjacency[parsed.source].push({ index: parsed.target, weight: parsed.weight, chunkPairs: parsed.chunkPairs });
+        adjacency[parsed.target].push({ index: parsed.source, weight: parsed.weight, chunkPairs: parsed.chunkPairs });
+      });
+      adjacency.forEach(function (neighbors) {
+        neighbors.sort(function (left, right) {
+          return right.weight - left.weight || compareDocumentIndices(left.index, right.index);
+        });
+      });
+    }
+
+    function egoGraph(center) {
+      var configured = Array.isArray(egoNeighbors[center]) ? egoNeighbors[center] : null;
+      var firstRing = configured
+        ? uniqueDocumentIndices(configured, center).slice(0, EGO_FIRST_RING)
+        : uniqueNeighbors(adjacency[center]).slice(0, EGO_FIRST_RING);
+      var included = new Set([center].concat(firstRing));
+      var candidates = new Map();
+      firstRing.forEach(function (neighborIndex) {
+        adjacency[neighborIndex].forEach(function (neighbor) {
+          if (included.has(neighbor.index)) {
+            return;
+          }
+          var previous = candidates.get(neighbor.index);
+          if (!previous || neighbor.weight > previous.weight) {
+            candidates.set(neighbor.index, neighbor);
+          }
+        });
+      });
+      var secondRing = Array.from(candidates.values()).sort(function (left, right) {
+        return right.weight - left.weight || compareDocumentIndices(left.index, right.index);
+      }).slice(0, Math.max(0, EGO_NODE_CAP - 1 - firstRing.length)).map(function (entry) {
+        return entry.index;
+      });
+      return {
+        nodes: [center].concat(firstRing, secondRing),
+        firstRing: firstRing,
+        secondRing: secondRing
+      };
+    }
+
+    function uniqueDocumentIndices(indices, center) {
+      var seen = new Set();
+      return indices.map(Number).filter(function (index) {
+        if (!Number.isInteger(index) || index < 0 || index >= documents.length || index === center || seen.has(index)) {
+          return false;
+        }
+        seen.add(index);
+        return true;
+      });
+    }
+
+    function uniqueNeighbors(neighbors) {
+      var seen = new Set();
+      return neighbors.filter(function (neighbor) {
+        if (seen.has(neighbor.index)) {
+          return false;
+        }
+        seen.add(neighbor.index);
+        return true;
+      }).map(function (neighbor) {
+        return neighbor.index;
+      });
+    }
+
+    function radialPositions(graph, size) {
+      var centerX = size.width / 2;
+      var centerY = size.height / 2;
+      var maximumRadius = Math.max(75, Math.min(size.width, size.height) * .43);
+      var firstRadius = Math.min(maximumRadius * .48, 170);
+      var positions = new Map();
+      positions.set(graph.nodes[0], { x: centerX, y: centerY });
+      placeRing(graph.firstRing, firstRadius, centerX, centerY, positions, -Math.PI / 2);
+      placeRing(graph.secondRing, maximumRadius, centerX, centerY, positions, -Math.PI / 2 + .19);
+      return positions;
+    }
+
+    function placeRing(indices, radius, centerX, centerY, positions, offset) {
+      indices.forEach(function (index, position) {
+        var angle = offset + position / Math.max(1, indices.length) * Math.PI * 2;
+        positions.set(index, {
+          x: centerX + Math.cos(angle) * radius,
+          y: centerY + Math.sin(angle) * radius
+        });
+      });
+    }
+
+    function renderDocumentDetails(doc) {
+      elements.details.replaceChildren();
+      var heading = document.createElement("h2");
+      if (!doc) {
+        heading.textContent = "Документ не выбран";
+        var help = document.createElement("p");
+        help.className = "subtitle";
+        help.textContent = "Найдите документ по заголовку или нажмите на его точку на карте.";
+        elements.details.append(heading, help);
+        return;
+      }
+      heading.textContent = doc.title || doc.key || "Без названия";
+      elements.details.appendChild(heading);
+      var list = document.createElement("dl");
+      appendDefinition(list, "Источник", doc.source_key || "unknown");
+      appendDefinition(list, "Дата", doc.published_at || "не указана");
+      appendDefinition(list, "Ключ", doc.key || "не указан");
+      appendDefinition(list, "Сообщество", communityLabel(doc.community));
+      appendDefinition(list, "Топики", documentTopicLabels(doc).join(" · ") || "нет");
+      elements.details.appendChild(list);
+      var url = safeHttpUrl(doc.url);
+      if (url) {
+        var link = document.createElement("a");
+        link.className = "provenance-link";
+        link.href = url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "Открыть источник ↗";
+        elements.details.appendChild(link);
+      }
+    }
+
+    function appendDefinition(list, term, description) {
+      var dt = document.createElement("dt");
+      dt.textContent = term;
+      var dd = document.createElement("dd");
+      dd.textContent = String(description);
+      list.append(dt, dd);
+    }
+
+    function showDocumentTooltip(doc, clientX, clientY) {
+      elements.tooltip.replaceChildren();
+      var title = document.createElement("strong");
+      title.textContent = truncateCodePoints(doc.title || doc.key || "Без названия", 110);
+      var meta = document.createElement("span");
+      meta.textContent = [doc.source_key || "unknown", doc.published_at || "дата не указана"].join(" · ");
+      elements.tooltip.append(title, meta);
+      var href = safeHttpUrl(doc.url);
+      if (href) {
+        var link = document.createElement("a");
+        link.href = href;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "Открыть источник";
+        elements.tooltip.appendChild(link);
+      }
+      elements.tooltip.hidden = false;
+      positionTooltip(clientX, clientY);
+    }
+
+    function attachSvgTooltip(node, label) {
+      node.addEventListener("pointerenter", function (event) {
+        elements.tooltip.replaceChildren(document.createTextNode(label));
+        elements.tooltip.hidden = false;
+        positionTooltip(event.clientX, event.clientY);
+      });
+      node.addEventListener("pointermove", function (event) {
+        positionTooltip(event.clientX, event.clientY);
+      });
+      node.addEventListener("pointerleave", hideTooltip);
+    }
+
+    function positionTooltip(clientX, clientY) {
+      var gap = 14;
+      var width = elements.tooltip.offsetWidth;
+      var height = elements.tooltip.offsetHeight;
+      elements.tooltip.style.left = Math.min(clientX + gap, window.innerWidth - width - gap) + "px";
+      elements.tooltip.style.top = Math.min(clientY + gap, window.innerHeight - height - gap) + "px";
+    }
+
+    function hideTooltip() {
+      elements.tooltip.hidden = true;
+    }
+
+    function renderMeta() {
+      elements.footer.replaceChildren();
+      var meta = data.meta && typeof data.meta === "object" ? data.meta : {};
+      var counts = meta.counts && typeof meta.counts === "object" ? meta.counts : {};
+      var statusCounts = Array.isArray(meta.status_counts) ? meta.status_counts.map(function (entry) {
+        return String(entry.status || "unknown") + ": " + number(entry.documents, 0);
+      }).join(" · ") : "";
+      var items = [
+        ["Собрано", meta.built_at],
+        ["База", meta.database || meta.db],
+        ["Embeddings", embeddingSummary(meta)],
+        ["Черновики включены", meta.include_drafts === true ? "да" : "нет"],
+        ["Документы", counts.documents !== undefined ? counts.documents : documents.length],
+        ["Статусы", statusCounts],
+        ["Чанки", counts.chunks],
+        ["Топики", counts.topics !== undefined ? counts.topics : topics.length],
+        ["Сообщества", counts.communities !== undefined ? counts.communities : communities.length],
+        ["Similarity-рёбра", counts.similarity_edges !== undefined ? counts.similarity_edges : similarityEdges.length],
+        ["Изолированные", meta.isolated_documents],
+        ["Источники", sourceCount()]
+      ];
+      items.forEach(function (item) {
+        if (item[1] === undefined || item[1] === null || item[1] === "") {
+          return;
+        }
+        var span = document.createElement("span");
+        span.textContent = item[0] + ": " + item[1];
+        elements.footer.appendChild(span);
+      });
+      var runs = meta.index_runs;
+      if (runs && typeof runs === "object") {
+        Object.keys(runs).sort().forEach(function (target) {
+          var run = runs[target];
+          var value = run && typeof run === "object" ? (run.finished_at || run.started_at || run.status) : run;
+          if (!value) {
+            return;
+          }
+          var span = document.createElement("span");
+          span.textContent = "Индекс " + target + ": " + value;
+          elements.footer.appendChild(span);
+        });
+      }
+    }
+
+    function embeddingSummary(meta) {
+      if (meta.embedding_model) {
+        return String(meta.embedding_model);
+      }
+      if (!Array.isArray(meta.embedding_models) || meta.embedding_models.length === 0) {
+        return null;
+      }
+      return "mixed: " + meta.embedding_models.map(function (entry) {
+        if (!entry || typeof entry !== "object") {
+          return String(entry);
+        }
+        var model = entry.model || "unknown";
+        return entry.chunks === undefined ? String(model) : model + " (" + entry.chunks + ")";
+      }).join(", ");
+    }
+
+    function scheduleResize() {
+      window.clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(function () {
+        if (activeView === "map") {
+          renderMap();
+        } else if (activeView === "timeline") {
+          renderTimeline();
+        } else {
+          renderEgo();
+        }
+      }, 100);
+    }
+
+    function bindSvgPanZoom(node, name) {
+      var drag = null;
+      node.addEventListener("pointerdown", function (event) {
+        if (name === "ego" && event.target.closest("[role=button]")) {
+          return;
+        }
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY };
+        node.setPointerCapture(event.pointerId);
+        node.classList.add("is-panning");
+        hideTooltip();
+      });
+      node.addEventListener("pointermove", function (event) {
+        if (!drag || drag.id !== event.pointerId) {
+          return;
+        }
+        var transform = svgTransforms[name];
+        transform.x += event.clientX - drag.x;
+        transform.y += event.clientY - drag.y;
+        drag.x = event.clientX;
+        drag.y = event.clientY;
+        applySvgTransform(name);
+      });
+      node.addEventListener("pointerup", stopDragging);
+      node.addEventListener("pointercancel", stopDragging);
+      node.addEventListener("wheel", function (event) {
+        event.preventDefault();
+        var rect = node.getBoundingClientRect();
+        var px = event.clientX - rect.left;
+        var py = event.clientY - rect.top;
+        var transform = svgTransforms[name];
+        var oldScale = transform.scale;
+        var factor = event.deltaY < 0 ? 1.14 : 1 / 1.14;
+        var nextScale = clamp(oldScale * factor, .55, 8);
+        transform.x = px - (px - transform.x) * (nextScale / oldScale);
+        transform.y = py - (py - transform.y) * (nextScale / oldScale);
+        transform.scale = nextScale;
+        applySvgTransform(name);
+      }, { passive: false });
+
+      function stopDragging(event) {
+        if (!drag || drag.id !== event.pointerId) {
+          return;
+        }
+        drag = null;
+        node.classList.remove("is-panning");
+      }
+    }
+
+    function resetSvgTransform(name) {
+      svgTransforms[name].x = 0;
+      svgTransforms[name].y = 0;
+      svgTransforms[name].scale = 1;
+      applySvgTransform(name);
+    }
+
+    function applySvgTransform(name) {
+      var world = document.getElementById(name + "-world");
+      if (world) {
+        setSvgTransform(world, svgTransforms[name]);
+      }
+    }
+
+    function setSvgTransform(node, transform) {
+      node.setAttribute(
+        "transform",
+        "translate(" + transform.x + " " + transform.y + ") scale(" + transform.scale + ")"
+      );
+    }
+
+    function buildSourceColors() {
+      var map = new Map();
+      var sources = [];
+      if (Array.isArray(data.sources)) {
+        data.sources.forEach(function (source) {
+          sources.push(typeof source === "string" ? source : source.key || source.id || source.label);
+        });
+      } else if (data.sources && typeof data.sources === "object") {
+        sources = Object.keys(data.sources);
+      }
+      documents.forEach(function (doc) {
+        if (doc.source_key) {
+          sources.push(doc.source_key);
+        }
+      });
+      Array.from(new Set(sources.filter(Boolean))).sort().forEach(function (source, index) {
+        map.set(String(source), palette[index % palette.length]);
+      });
+      return map;
+    }
+
+    function renderSourceLegend() {
+      elements.sourceLegend.replaceChildren();
+      var labels = new Map();
+      if (Array.isArray(data.sources)) {
+        data.sources.forEach(function (source) {
+          if (source && typeof source === "object" && source.key !== undefined) {
+            labels.set(String(source.key), String(source.label || source.key));
+          }
+        });
+      }
+      sourceColorMap.forEach(function (color, key) {
+        var item = document.createElement("span");
+        item.className = "source-legend-item";
+        var swatch = document.createElement("span");
+        swatch.className = "source-swatch";
+        swatch.style.backgroundColor = color;
+        swatch.setAttribute("aria-hidden", "true");
+        item.append(swatch, document.createTextNode(labels.get(key) || key));
+        elements.sourceLegend.appendChild(item);
+      });
+    }
+
+    function sourceColor(source) {
+      return sourceColorMap.get(String(source || "")) || "#91a4bd";
+    }
+
+    function sourceCount() {
+      return sourceColorMap.size;
+    }
+
+    function documentTopicLabels(doc) {
+      var topicById = indexNodes(topics);
+      var raw = Array.isArray(doc.topics) ? doc.topics : [];
+      return raw.map(function (value) {
+        if (value && typeof value === "object") {
+          return String(value.label || value.key || value.id || "");
+        }
+        var topic = topicById.get(String(value));
+        return String(topic ? (topic.label || topic.key || topic.id) : value);
+      }).filter(Boolean);
+    }
+
+    function communityLabel(value) {
+      if (value === -1 || value === "-1" || value === null || value === undefined) {
+        return "unclustered";
+      }
+      var indexed = indexNodes(communities).get(String(value));
+      return indexed ? String(indexed.label || indexed.key || indexed.id) : String(value);
+    }
+
+    function indexNodes(nodes) {
+      var map = new Map();
+      nodes.forEach(function (node) {
+        var key = node.key !== undefined && node.key !== null ? node.key : node.id;
+        if (key !== undefined && key !== null) {
+          map.set(String(key), node);
+        }
+      });
+      return map;
+    }
+
+    function edgeEndpoints(edge) {
+      if (Array.isArray(edge)) {
+        return [edge[0], edge[1]];
+      }
+      return [edge.source !== undefined ? edge.source : edge.from, edge.target !== undefined ? edge.target : edge.to];
+    }
+
+    function edgeWeight(edge) {
+      if (Array.isArray(edge)) {
+        return number(edge[2], 0);
+      }
+      return number(
+        edge.weight !== undefined
+          ? edge.weight
+          : (edge.document_count !== undefined
+            ? edge.document_count
+            : (edge.count !== undefined ? edge.count : edge.value)),
+        0
+      );
+    }
+
+    function similarityEdge(edge) {
+      if (Array.isArray(edge)) {
+        return {
+          source: Number(edge[0]),
+          target: Number(edge[1]),
+          weight: number(edge[2], 0),
+          chunkPairs: number(edge[3], 0)
+        };
+      }
+      return {
+        source: Number(edge.source),
+        target: Number(edge.target),
+        weight: number(edge.weight, 0),
+        chunkPairs: number(edge.chunk_pairs, 0)
+      };
+    }
+
+    function timelineSeries(mode, months) {
+      var direct = mode === "sources" ? timeline.source_series : timeline.topic_series;
+      var normalized = seriesEntries(direct);
+      if (normalized.length > 0) {
+        return normalized;
+      }
+      var rows = mode === "sources" ? timeline.by_source : timeline.by_topic;
+      if (!Array.isArray(rows)) {
+        return [];
+      }
+      var monthIndex = new Map(months.map(function (month, index) {
+        return [String(month), index];
+      }));
+      var labelByKey = new Map();
+      if (mode === "sources" && Array.isArray(data.sources)) {
+        data.sources.forEach(function (source) {
+          if (source && typeof source === "object" && source.key !== undefined) {
+            labelByKey.set(String(source.key), String(source.label || source.key));
+          }
+        });
+      }
+      if (mode === "topics" && Array.isArray(timeline.topics)) {
+        timeline.topics.forEach(function (topic) {
+          if (topic && typeof topic === "object" && topic.topic_key !== undefined) {
+            labelByKey.set(String(topic.topic_key), String(topic.label || topic.topic_key));
+          }
+        });
+      }
+      var grouped = new Map();
+      rows.forEach(function (row) {
+        if (!row || typeof row !== "object") {
+          return;
+        }
+        var rawKey = mode === "sources" ? row.source_key : row.topic_key;
+        var position = monthIndex.get(String(row.month));
+        if (rawKey === undefined || position === undefined) {
+          return;
+        }
+        var key = String(rawKey);
+        var entry = grouped.get(key);
+        if (!entry) {
+          entry = {
+            key: key,
+            label: labelByKey.get(key) || String(row.label || key),
+            values: months.map(function () { return 0; })
+          };
+          grouped.set(key, entry);
+        }
+        entry.values[position] += number(row.documents, 0);
+      });
+      return Array.from(grouped.values()).sort(function (left, right) {
+        if (left.key < right.key) {
+          return -1;
+        }
+        if (left.key > right.key) {
+          return 1;
+        }
+        return 0;
+      });
+    }
+
+    function seriesEntries(raw) {
+      if (Array.isArray(raw)) {
+        return raw.map(function (entry, index) {
+          if (Array.isArray(entry)) {
+            return { key: String(index), label: String(index + 1), values: entry };
+          }
+          return {
+            key: String(entry.key || entry.source_key || entry.topic_key || entry.id || index),
+            label: String(entry.label || entry.key || entry.source_key || entry.topic_key || entry.id || index + 1),
+            values: Array.isArray(entry.values) ? entry.values : (Array.isArray(entry.counts) ? entry.counts : [])
+          };
+        });
+      }
+      if (raw && typeof raw === "object") {
+        return Object.keys(raw).sort().map(function (key) {
+          var value = raw[key];
+          return {
+            key: key,
+            label: key,
+            values: Array.isArray(value) ? value : (Array.isArray(value.values) ? value.values : [])
+          };
+        });
+      }
+      return [];
+    }
+
+    function compareDocumentIndices(leftIndex, rightIndex) {
+      var leftDocument = documents[leftIndex] || {};
+      var rightDocument = documents[rightIndex] || {};
+      var leftKey = String(leftDocument.key !== undefined ? leftDocument.key : leftIndex);
+      var rightKey = String(rightDocument.key !== undefined ? rightDocument.key : rightIndex);
+      if (leftKey < rightKey) {
+        return -1;
+      }
+      if (leftKey > rightKey) {
+        return 1;
+      }
+      return leftIndex - rightIndex;
+    }
+
+    function safeHttpUrl(value) {
+      if (!value) {
+        return null;
+      }
+      try {
+        var parsed = new URL(String(value));
+        return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function stageSize(stage) {
+      var rect = stage.getBoundingClientRect();
+      return {
+        width: Math.max(320, Math.round(rect.width || stage.clientWidth || 900)),
+        height: Math.max(320, Math.round(rect.height || stage.clientHeight || 600))
+      };
+    }
+
+    function configureCanvas(canvas, size) {
+      var ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.round(size.width * ratio);
+      canvas.height = Math.round(size.height * ratio);
+      canvas.style.width = size.width + "px";
+      canvas.style.height = size.height + "px";
+    }
+
+    function clearCanvas(canvas) {
+      var context = canvas.getContext("2d");
+      context.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    function configureSvg(node, size) {
+      node.setAttribute("viewBox", "0 0 " + size.width + " " + size.height);
+      node.setAttribute("width", String(size.width));
+      node.setAttribute("height", String(size.height));
+    }
+
+    function svg(tag, attributes) {
+      var node = document.createElementNS(SVG_NS, tag);
+      Object.keys(attributes).forEach(function (name) {
+        node.setAttribute(name, String(attributes[name]));
+      });
+      return node;
+    }
+
+    function number(value, fallback) {
+      var parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function clamp(value, minimum, maximum) {
+      return Math.min(maximum, Math.max(minimum, value));
+    }
+
+    function withAlpha(hex, alpha) {
+      var value = String(hex).replace("#", "");
+      if (value.length !== 6) {
+        return hex;
+      }
+      var red = parseInt(value.slice(0, 2), 16);
+      var green = parseInt(value.slice(2, 4), 16);
+      var blue = parseInt(value.slice(4, 6), 16);
+      return "rgba(" + red + "," + green + "," + blue + "," + alpha + ")";
+    }
+
+  }());
+  </script>
+</body>
+</html>
