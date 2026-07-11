@@ -145,6 +145,7 @@ def _graph_body() -> dict[str, Any]:
             {"collection": "document_references_work", "from": ["documents", "chunks"], "to": ["works"]},
             {"collection": "chunk_derived_from_raw", "from": ["chunks"], "to": ["raw_snapshots"]},
             {"collection": "item_related_to_item", "from": ["documents", "chunks"], "to": ["documents", "chunks"]},
+            {"collection": "document_in_community", "from": ["documents"], "to": ["communities"]},
         ],
         "orphanCollections": ["import_runs", "index_runs"],
     }

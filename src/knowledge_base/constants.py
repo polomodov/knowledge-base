@@ -10,6 +10,13 @@ RELATED_TOP_K = 5
 RELATED_MIN_SCORE = 0.5
 RELATED_EDGE_METHOD = "embedding-similarity"
 
+# GR-4: community detection over the item_related_to_item similarity graph (label propagation).
+# Only communities of at least COMMUNITY_MIN_SIZE documents are stored; summaries list the top
+# shared topics. COMMUNITY_METHOD tags the derived community nodes/edges.
+COMMUNITY_MIN_SIZE = 2
+COMMUNITY_TOP_TOPICS = 5
+COMMUNITY_METHOD = "label-propagation"
+
 DOCUMENT_COLLECTIONS = [
     "sources",
     "raw_snapshots",
@@ -18,6 +25,7 @@ DOCUMENT_COLLECTIONS = [
     "topics",
     "authors",
     "works",
+    "communities",
     "import_runs",
     "index_runs",
 ]
@@ -30,4 +38,5 @@ EDGE_COLLECTIONS = [
     "document_references_work",
     "chunk_derived_from_raw",
     "item_related_to_item",
+    "document_in_community",
 ]
