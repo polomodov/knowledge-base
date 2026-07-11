@@ -56,18 +56,19 @@
 - provenance для source/raw/document/chunk/topic/author edges;
 - unit/integration tests на synthetic Medium-like, Medium export и Telegram fixtures.
 
-## v3 - Поиск, embeddings и GraphRAG
+## v3 - Поиск, embeddings и GraphRAG ✅
 
 Цель: сделать базу полезной для исследования и RAG-сценариев.
 
-- полнотекстовый поиск по нормализованным документам;
-- подготовка chunks или фрагментов для retrieval;
-- эмбеддинги с привязкой к document/item и provenance;
-- graph-neighborhood boosts и GraphRAG context;
-- простой CLI или notebook для поиска по базе;
-- тесты на воспроизводимость индексации.
+Реализовано (GraphRAG-эпик GR-0…GR-6, PR #22–#33; детальный трекер и диаграммы — [docs/graphrag-plan.md](graphrag-plan.md)):
 
-Детальный план перехода от текущего субстрата (граф + вектор + полнотекст) к работающему GraphRAG, разбитый на отдельные PR, — в [docs/graphrag-plan.md](graphrag-plan.md).
+- полнотекстовый (BM25) и семантический (ANN, `APPROX_NEAR_COSINE`) поиск по нормализованным документам;
+- подключаемые эмбеддинги: детерминированный `hash` и локальная модель (`all-mpnet-base-v2`, 768d) с привязкой к chunk/document и provenance; переключение провайдера без re-ingest (`--target embeddings`);
+- граф знаний: similarity-рёбра `item_related_to_item` (`--target related`), graph-neighborhood boosts в hybrid-ранжировании (`graph_boost`) и расширение кандидатов графом;
+- community detection (Louvain) и экстрактивные community summaries (`--target communities`);
+- GraphRAG local/global поиск поверх графа и сообществ (`kb search local` / `global`);
+- relevance-gated recall и CLI-команды поиска;
+- unit/integration-тесты на воспроизводимость индексации и ранжирования.
 
 ## v4 - Визуализация
 
@@ -90,8 +91,8 @@
 
 ## Текущий статус
 
-Завершены v1 fixture pipeline и v2 source adapters: `tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import.
+Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); и **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection и local/global GraphRAG-поиск на реальном корпусе** (детали и диаграммы — [docs/graphrag-plan.md](graphrag-plan.md)).
 
 **Аудит реализации (июль 2026) полностью отработан:** все 46 находок устранены и смерджены в `main` — единый `topic_key`, провенанс и честный дедуп (`created_at`, корректные счётчики), качество retrieval (дедуп выдачи, корректный фьюжн скора, реальное использование vector index, устранение N+1), безопасность и приватность (учётные данные, валидация fetch-URL/SSRF, path traversal, зона экспорта), инженерная гигиена (общий `ingest_core`, ruff + mypy + pytest-cov, CI против ArangoDB service-container) и робастность парсеров источников. Подробности и трекер MR - в [docs/implementation-audit-plan.md](implementation-audit-plan.md).
 
-Следующий фокус - прогон реальных локальных archives/snapshots из `data/raw/`, расширение GraphRAG и качества retrieval (v3, план - [docs/graphrag-plan.md](graphrag-plan.md)) и визуализация связей (v4).
+Следующий фокус - визуализация тем, источников и связей внутри базы знаний (v4) и writer/research workflow поверх неё (v5).
