@@ -38,6 +38,8 @@ flowchart LR
 - ограничения: rate limits, приватность, неполные метаданные, ручные шаги;
 - provenance: какие поля позволяют восстановить происхождение материала.
 
+В v1 live URL validation подтверждает public network destination, но не expected host/source authenticity; operator-selected URL доверяется для фиксированного `source_key`. Directory archives считаются trusted owner inputs и не имеют symlink/resource-isolation guarantees. Новые unattended или недоверенные source workflows требуют отдельной host allowlist, filesystem containment и size/quota policy по [ADR 0005](adr/0005-define-source-provenance-and-private-archive-boundaries.md) и [ADR 0006](adr/0006-define-the-local-security-and-privacy-trust-boundary.md).
+
 ### Storage
 
 Хранилище должно разделять:
@@ -48,7 +50,7 @@ flowchart LR
 
 Это разделение важно, чтобы можно было пересобрать базу после изменения нормализации или индексации.
 
-**Как это реализовано в v1.** ArangoDB сейчас является единой зоной хранения: raw snapshot (полный payload или manifest), нормализованные documents/chunks и derived индексы живут в одной базе. Разделение `data/raw` / `data/processed` / `data/generated` в репозитории - это соглашение для on-disk артефактов: `data/raw/` хранит исходные экспорты/снимки, которые вы передаёте адаптерам, а `data/generated/` - выходы `kb export`. `data/processed/` пока не используется (нормализованные данные живут в ArangoDB). При live-ingest по URL сырьё сохраняется только внутри базы (`raw_snapshots.payload`), поэтому для воспроизводимости «пересобрать processed из raw» держите исходные снимки в `data/raw/` и импортируйте их через `--input`/`--archive`.
+**Как это реализовано в v1.** ArangoDB сейчас является единой зоной хранения: raw snapshot (полный payload или manifest), нормализованные documents/chunks и derived индексы живут в одной базе. Разделение `data/raw` / `data/processed` / `data/generated` в репозитории - это соглашение для on-disk артефактов: `data/raw/` хранит исходные экспорты/снимки, которые вы передаёте адаптерам, а `data/generated/` - выходы `kb export`. `data/processed/` пока не используется (нормализованные данные живут в ArangoDB). При live-ingest по URL сырьё сохраняется только внутри базы (`raw_snapshots.payload`), поэтому для повторного ingest держите исходные снимки в `data/raw/` и передавайте их через `--input`/`--archive`. Provenance сохраняет source traceability, но v1 не фиксирует полный code/config fingerprint и не гарантирует точный historical replay; детали — в [ADR 0005](adr/0005-define-source-provenance-and-private-archive-boundaries.md).
 
 **Модель данных (граф `knowledge_graph`).** Узлы — коллекции документов/сущностей; рёбра — типизированные связи. Similarity-рёбра `item_related_to_item` (chunk↔chunk) и членство `document_in_community` — производные (derived), перестраиваемые.
 
@@ -79,7 +81,7 @@ flowchart TD
 
 Первый production-like pipeline проектируется вокруг ArangoDB: documents/chunks, graph edges, ArangoSearch full-text и vector indexes живут в одном multi-model ядре. Это снижает количество движущихся частей в v1, но сохраняет явные границы storage/search/vector/graph, чтобы позже вынести отдельный движок при bottleneck.
 
-Эмбеддинги подключаемы через `EmbeddingProvider` (`embedding.provider`): дефолт `hash` — детерминированный, offline, без зависимостей (ingest и запрос используют один провайдер, поэтому векторы в одном пространстве). Провайдер `local` даёт реальные семантические эмбеддинги через `sentence-transformers` (ставится вручную, вне locked-зависимостей). `embedding.dimension` — единый источник размерности для vector index. См. [docs/graphrag-plan.md](graphrag-plan.md) (GR-2).
+Эмбеддинги подключаемы через `EmbeddingProvider` (`embedding.provider`): дефолт `hash` — детерминированный, offline, без зависимостей; ingest и запрос строят provider из одного конфига. Провайдер `local` даёт реальные семантические эмбеддинги через `sentence-transformers` (ставится вручную, вне locked-зависимостей). `embedding.dimension` задаёт желаемую размерность, но однородность persisted embedding space и параметры уже существующего vector index не проверяются обычным bootstrap: при смене provider/model/dimension обязателен полный `kb index rebuild --target embeddings`. Revision/fingerprint весов модели пока не хранится. Контракт и ограничения зафиксированы в [ADR 0007](adr/0007-adopt-rebuildable-embeddings-and-extractive-graphrag.md) и [GraphRAG-плане](graphrag-plan.md).
 
 Текущий v1 fixture slice реализует этот контур через Python CLI `kb`:
 
@@ -92,17 +94,17 @@ flowchart TD
 - `kb index rebuild --target all` идемпотентно проверяет derived search/vector/graph слой; `--target related` отдельно строит `item_related_to_item` — взвешенные similarity-рёбра между похожими чанками из разных документов (GR-3), превращая дерево провенанса в граф знаний. Качество связей максимально с реальной моделью эмбеддингов (`embedding.provider = local`). `--target communities` кластеризует этот similarity-граф Louvain-оптимизацией модулярности (чистый Python, без зависимостей; параметр гранулярности `[community] resolution`) в узлы `communities` с экстрактивными summaries (GR-4) — основа для global-search GraphRAG.
 - `kb search text`, `kb search semantic`, `kb graph neighbors`, `kb search hybrid`, `kb search local` и `kb search global` возвращают результаты с provenance; retrieval-команды поддерживают optional source filter для исследования одного источника.
   - `kb search hybrid` сливает полнотекст (BM25) и вектор и **вкладывает графовый сигнал в ранжирование**: `score_components.graph_boost` — ограниченный буст за общие сущности (GR-1) и similarity-рёбра `item_related_to_item` (GR-3b). `graph_boost = null` только если графовый слой деградировал. Если relevance-гейт оставил пустые слоты, `hybrid` дозаполняет их graph-only соседями топ-хитов (GR-3c, `graph_expanded: true`) — они дописываются после реальных хитов и не могут их перевесить.
-  - `kb search local` (GR-5) собирает локальный подграф вокруг сильнейших документов запроса: связывающие сущности, similarity-соседи и сообщества. `kb search global` (GR-5) отвечает на уровне корпуса поверх community summaries (GR-4): сопоставляет retrieval-хиты сообществам и возвращает топ сообществ с summary и документами-цитатами. Оба контекста экстрактивные и цитируемые (без LLM). Полный трекинг GraphRAG-подсистемы — [docs/graphrag-plan.md](graphrag-plan.md).
+  - `kb search local` (GR-5) собирает локальный подграф вокруг сильнейших документов запроса: связывающие сущности, similarity-соседи и сообщества. `kb search global` (GR-5) строит retrieval-conditioned обзор: сопоставляет bounded hybrid candidate pool сообществам и возвращает топ сообществ с summary и документами-цитатами; это не exhaustive проход по всем community summaries. Оба контекста экстрактивные и цитируемые (без LLM). Полный трекинг GraphRAG-подсистемы — [docs/graphrag-plan.md](graphrag-plan.md).
 - `kb-mcp` открывает локальный read-only MCP server поверх тех же retrieval/document/graph/source/health операций для других проектов и агентских клиентов.
 - `kb export jsonl` пишет generated exports в gitignored data zone.
 
 ### MCP integration
 
-MCP слой является интерфейсом чтения поверх `processed`/indexed data. Он не запускает ingest, index rebuild или export, не получает raw snapshot payloads и не выдаёт локальные archive/file paths; document metadata и вложенный provenance проходят явные allowlist-проекции. Сервер работает только через локальный stdio transport. `kb_search` открывает text/semantic/hybrid и local/global GraphRAG режимы; embedding-backed запросы используют тот же configured `EmbeddingProvider` и `retrieval.min_similarity`, что CLI. Tools возвращают agent-ready snippets с `source_key`, `document_key`, `chunk_key`, URL и безопасным raw/import provenance; resources дают `kb://sources` и `kb://documents/{document_key}`. Синхронные handlers и один stdio-клиент за процесс являются принятым ограничением v1; shared/remote concurrency требует отдельного решения с auth/audit моделью.
+MCP слой является интерфейсом чтения поверх `processed`/indexed data. Он не запускает ingest, index rebuild или export, не получает raw snapshot payloads и не выдаёт локальные archive/file paths; document metadata и вложенный provenance проходят явные allowlist-проекции. Сервер работает только через локальный stdio transport. `kb_search` открывает text/semantic/hybrid и local/global GraphRAG режимы; embedding-backed запросы используют тот же configured `EmbeddingProvider` и `retrieval.min_similarity`, что CLI. Tools возвращают agent-ready snippets с `source_key`, `document_key`, `chunk_key`, URL и безопасным raw/import provenance; resources дают `kb://sources` и `kb://documents/{document_key}`. Синхронные handlers и один stdio-клиент за процесс являются принятым ограничением v1. Stdio/read-only не является per-client authorization: local OS user/process с credentials считается доверенным, а imported drafts доступны обычным read surfaces. Shared/remote concurrency или разные local identities требуют отдельного решения с auth/audit моделью; trust boundary — в [ADR 0006](adr/0006-define-the-local-security-and-privacy-trust-boundary.md).
 
 ### Visualization
 
-Визуализация должна помогать исследовать связи между источниками, темами, книгами, авторами, датами и собственными текстами. Она не должна становиться источником истины: визуальные представления пересобираются из нормализованных данных.
+Принятый, но ещё не реализованный v4 scope включает полный doc-level export в node-link JSON/GraphML и самодостаточный offline HTML с картой сообществ/тем, timeline публикаций и ego-графом документов. Вид книг/авторов отложен из-за пустого/малого текущего corpus. Визуализация не становится источником истины: артефакты пересобираются из нормализованных данных и могут раскрывать чувствительные metadata/topology даже без полного текста. Контракт — в [ADR 0008](adr/0008-adopt-offline-visualization-and-graph-export.md), статус — в [visualization-plan.md](visualization-plan.md).
 
 ### Writing assistant
 
@@ -120,7 +122,7 @@ Architecture Decision Records живут в [docs/adr](adr/README.md). Они ф
 
 ### Spec-driven development
 
-Feature workflow строится через GitHub Spec Kit: `.specify/` хранит upstream templates/scripts/memory, `.agents/skills/` хранит Codex skills, а будущие `specs/` содержат спецификации, планы и задачи фичей. Эти документы являются project artifacts и не входят в data zones.
+По умолчанию новые пользовательские фичи, контракты и source adapters проходят через GitHub Spec Kit: `.specify/` хранит upstream templates/scripts/memory, `.agents/skills/` хранит Codex skills, а `specs/` — спецификации, планы и задачи фичей. Для ограниченных сквозных remediation-, audit-, research-, architecture- и infrastructure-эпиков допустим проверяемый docs plan tracker; значимые решения в обоих workflow требуют ADR. Границы определены в [ADR 0009](adr/0009-scope-spec-kit-and-plan-tracker-workflows.md). Все эти документы являются project artifacts и не входят в data zones.
 
 ## Минимальные сущности
 

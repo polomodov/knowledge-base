@@ -11,7 +11,7 @@
 - `docs/architecture.md` описывает подсистемы и ключевые сущности.
 - `docs/roadmap.md` фиксирует этапы развития.
 - `docs/adr/` фиксирует архитектурные решения и компромиссы.
-- GitHub Spec Kit подключен как официальный spec-driven development workflow для будущих фич.
+- GitHub Spec Kit подключен как default workflow для новых пользовательских фич и source contracts; для ограниченных сквозных эпиков разрешены проверяемые docs plan trackers по [ADR 0009](adr/0009-scope-spec-kit-and-plan-tracker-workflows.md).
 
 ## v1 - Production knowledge pipeline
 
@@ -75,12 +75,15 @@
 
 Цель: увидеть связи внутри базы знаний.
 
-- карта тем и тегов;
-- связи между источниками, книгами, авторами и собственными текстами;
-- временная шкала публикаций и заметок;
-- экспорт графа или простой frontend для исследования.
+- карта сообществ и тем, где источник используется как цвет или фасет;
+- временная шкала публикаций;
+- выборочный ego-граф документов;
+- экспорт полного doc-level графа в node-link JSON и GraphML;
+- самодостаточный офлайн-HTML без CDN, сервера и npm-сборки.
 
-Детальный план реализации (форма: `kb export graph` + самодостаточный статический HTML `kb viz build`; шаги V4-0…V4-6 отдельными PR) — в [docs/visualization-plan.md](visualization-plan.md).
+Вид «книги/авторы» отложен: текущий корпус содержит 0 works и только 2 authors, поэтому он не входит в принятый v4 scope.
+
+Архитектурный выбор зафиксирован в [ADR 0008](adr/0008-adopt-offline-visualization-and-graph-export.md), детальный план реализации (шаги V4-0…V4-6 отдельными PR) — в [docs/visualization-plan.md](visualization-plan.md).
 
 ## v5 - Writer/research workflow
 
