@@ -41,17 +41,54 @@
 - `communities` — Louvain-кластеризация similarity-графа (чистый Python, параметр `[community] resolution`) → узлы `communities` с экстрактивными summaries. **11 тематических сообществ** (architecture / AI-ML / management-books / eng-process).
 - `embeddings` — переэмбеддинг (см. выше).
 
+Порядок сборки derived-слоя на реальном корпусе:
+
+```mermaid
+flowchart LR
+    ING["kb ingest"] --> EMB["--target embeddings<br/>mpnet 768d"]
+    EMB --> REL["--target related<br/>ANN similarity-рёбра"]
+    REL --> COM["--target communities<br/>Louvain"]
+    COM --> USE["готово для<br/>hybrid / local / global"]
+```
+
 ### 5. Retrieval (`kb search …`)
 - `text` — BM25 по view.
 - `semantic` — ANN по vector index; relevance-гейт `min_similarity` отсекает слабые хиты (recall precision, GR-3d).
 - `hybrid` — сливает BM25 + вектор и **вкладывает графовый сигнал в ранжирование**: `score_components.graph_boost` — ограниченный буст за общие сущности (GR-1) и similarity-рёбра (GR-3b). Если гейт оставил пустые слоты — дозаполняет их graph-only соседями топ-хитов (GR-3c, `graph_expanded: true`), которые дописываются после реальных хитов и не могут их перевесить.
 - `graph neighbors` — прямой обход графа знаний от топика/автора/работы/документа/чанка.
 
+Конвейер `hybrid` (граф-осведомлённое ранжирование + расширение кандидатов):
+
+```mermaid
+flowchart TD
+    Q["Запрос"] --> T["text_search<br/>BM25"]
+    Q --> SEM["semantic_search<br/>ANN + min_similarity гейт"]
+    T --> FUSE["fuse по документам<br/>BM25-норм + cosine"]
+    SEM --> FUSE
+    FUSE --> BOOST["+ graph_boost<br/>общие сущности + similarity-рёбра"]
+    BOOST --> SLOT{"пустые слоты?<br/>хитов меньше limit"}
+    SLOT -->|да| EXP["GR-3c: graph-only соседи<br/>дописать ПОСЛЕ реальных хитов"]
+    SLOT -->|нет| OUT["top-limit результаты"]
+    EXP --> OUT
+```
+
 ### 6. GraphRAG-поиск (поверх графа и сообществ)
 - `kb search local` — локальный подграф вокруг сильнейших документов запроса: связывающие сущности (topics/authors/works) + similarity-соседи + сообщества сидов.
 - `kb search global` — ответ на уровне корпуса: сопоставляет retrieval-хиты сообществам, ранжирует сообщества по суммарной релевантности их документов, возвращает топ с summary/`top_topics` и документами-цитатами.
 
 Контекст обоих — **экстрактивный и цитируемый** (без LLM-генерации), совместим с обычным форматом результатов (провенанс на каждой строке).
+
+```mermaid
+flowchart TD
+    Q["Запрос"] --> H["hybrid_search<br/>пул документов-кандидатов"]
+    H --> MODE{"режим"}
+    MODE -->|local| L1["связывающие сущности<br/>topics / authors / works"]
+    MODE -->|local| L2["similarity-соседи<br/>item_related_to_item"]
+    MODE -->|local| L3["сообщества сидов"]
+    MODE -->|global| G1["map: документ → сообщество"]
+    G1 --> G2["rank: Σ релевантности<br/>документов сообщества"]
+    G2 --> G3["топ сообществ<br/>summary + документы-цитаты"]
+```
 
 ### Сквозные инварианты
 - **Zero runtime dependency** — ядро на stdlib (свой ArangoDB HTTP-клиент, argparse-CLI); sentence-transformers опционален (lazy import), Louvain — чистый Python.
