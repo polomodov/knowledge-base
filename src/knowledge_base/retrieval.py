@@ -18,7 +18,6 @@ _GRAPH_BOOST_CAP = 0.5
 # connecting entities, similarity-neighbours, and communities.
 _GLOBAL_CANDIDATE_POOL = 50
 _GLOBAL_COMMUNITY_LIMIT = 5
-_GLOBAL_DOCS_PER_COMMUNITY = 5
 _LOCAL_RELATED_LIMIT = 10
 _LOCAL_ENTITY_LIMIT = 15
 
@@ -577,27 +576,35 @@ def local_search(
     (item_related_to_item, GR-3), and the communities (GR-4) they belong to — a focused, cited local
     context rather than a flat ranked list.
     """
-    hybrid = hybrid_search(
-        repository,
-        query,
-        limit=limit,
-        dimension=dimension,
-        source_key=source_key,
-        provider=provider,
-        min_similarity=min_similarity,
-    )
-    seeds = hybrid["results"]
-    seed_keys = [row["document_key"] for row in seeds]
     context: dict[str, Any] = {
         "query": query,
         "mode": "graphrag-local",
-        "status": hybrid["status"],
-        "degraded_components": hybrid.get("degraded_components", []),
-        "seeds": seeds,
+        "status": "ok",
+        "degraded_components": [],
+        "seeds": [],
         "entities": [],
         "related_documents": [],
         "communities": [],
     }
+    # The initial retrieval must honour the never-throw contract too: a DB/vector failure here yields a
+    # degraded result, not an escaping ArangoError (PR #32 review).
+    try:
+        hybrid = hybrid_search(
+            repository,
+            query,
+            limit=limit,
+            dimension=dimension,
+            source_key=source_key,
+            provider=provider,
+            min_similarity=min_similarity,
+        )
+    except ArangoError:
+        _mark_degraded(context, "retrieval")
+        return context
+    context["status"] = hybrid["status"]
+    context["degraded_components"] = list(hybrid.get("degraded_components", []))
+    context["seeds"] = hybrid["results"]
+    seed_keys = [row["document_key"] for row in hybrid["results"]]
     if not seed_keys:
         return context
     try:
@@ -628,23 +635,30 @@ def global_search(
     — the map/reduce shape of GraphRAG global search, grounded in retrieval evidence rather than an LLM
     pass over every summary. `limit` bounds the documents shown per community.
     """
-    pool = max(limit, _GLOBAL_CANDIDATE_POOL)
-    hybrid = hybrid_search(
-        repository,
-        query,
-        limit=pool,
-        dimension=dimension,
-        source_key=source_key,
-        provider=provider,
-        min_similarity=min_similarity,
-    )
     context: dict[str, Any] = {
         "query": query,
         "mode": "graphrag-global",
-        "status": hybrid["status"],
-        "degraded_components": hybrid.get("degraded_components", []),
+        "status": "ok",
+        "degraded_components": [],
         "communities": [],
     }
+    # A larger candidate pool than `limit` is retrieved so community ranking sees enough evidence, but
+    # the initial retrieval still honours the never-throw contract (PR #32 review).
+    try:
+        hybrid = hybrid_search(
+            repository,
+            query,
+            limit=max(limit, _GLOBAL_CANDIDATE_POOL),
+            dimension=dimension,
+            source_key=source_key,
+            provider=provider,
+            min_similarity=min_similarity,
+        )
+    except ArangoError:
+        _mark_degraded(context, "retrieval")
+        return context
+    context["status"] = hybrid["status"]
+    context["degraded_components"] = list(hybrid.get("degraded_components", []))
     candidates = hybrid["results"]
     if not candidates:
         return context
@@ -654,12 +668,13 @@ def global_search(
     except ArangoError:
         _mark_degraded(context, "graph")
         return context
+    # `limit` is the CLI "documents shown per community" flag, so it bounds citations directly.
     context["communities"] = _aggregate_community_scores(
         candidates,
         membership,
         communities,
         community_limit=community_limit,
-        docs_per_community=min(limit, _GLOBAL_DOCS_PER_COMMUNITY),
+        docs_per_community=limit,
     )
     return context
 
@@ -684,7 +699,7 @@ def _entities_for_documents(repository: KnowledgeRepository, document_keys: list
               (FOR c IN chunks FILTER c.document_key == doc_key RETURN c._id),
               CONCAT("documents/", doc_key)
             )
-            FOR pair IN UNION(
+            FOR pair IN UNION_DISTINCT(
                 (FOR e IN document_mentions_topic FILTER e._from IN from_ids RETURN {id: e._to, kind: "topic"}),
                 (FOR e IN document_mentions_author FILTER e._from IN from_ids RETURN {id: e._to, kind: "author"}),
                 (FOR e IN document_references_work FILTER e._from IN from_ids RETURN {id: e._to, kind: "work"}))
@@ -835,7 +850,10 @@ def _aggregate_community_scores(
                 ],
             }
         )
-    ranked.sort(key=lambda item: (item["score"], item["community_key"]), reverse=True)
+    # Score descending; ties broken by community_key ascending (consistent with the sibling AQL
+    # helpers' `... ASC` tie-breaks). Two stable sorts: secondary key first, then primary.
+    ranked.sort(key=lambda item: item["community_key"])
+    ranked.sort(key=lambda item: item["score"], reverse=True)
     return ranked[:community_limit]
 
 
