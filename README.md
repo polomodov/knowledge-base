@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект находится на ранней стадии, но уже содержит исполнимый вертикальный срез: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб", включая владельческий Telegram Desktop archive import, schema/index bootstrap, full-text search, deterministic embeddings, graph traversal, hybrid retrieval и JSONL export.
+Проект содержит исполнимый вертикальный срез с завершённым GraphRAG-слоем: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск** и JSONL export.
 
 ## Зачем
 
@@ -45,9 +45,12 @@ Raw-данные, нормализованные данные и generated outpu
 - Source adapter `book-cube` для публичных постов Telegram-канала из `t.me/s` HTML snapshot или одиночного Telegram Desktop JSON export.
 - Source adapter `book-cube-archive` для полного владельческого Telegram Desktop JSON archive из directory или `.zip` с `result.json`; media binaries остаются локальными raw references.
 - Ingest fixture с provenance edges: source, raw snapshot, document, chunk, topic, author, work.
-- Retrieval-команды: `kb search text`, `kb search semantic`, `kb graph neighbors`, `kb search hybrid`.
+- Подключаемые эмбеддинги: детерминированный `hash` (dim 8, zero-dependency, по умолчанию) и `local` (sentence-transformers, напр. `all-mpnet-base-v2`, 768d); переключение провайдера/модели без re-ingest через `kb index rebuild --target embeddings`.
+- Derived-индексы: `--target related` (similarity-рёбра `item_related_to_item` через ANN) и `--target communities` (Louvain community detection + экстрактивные summaries).
+- Retrieval-команды: `kb search text` (BM25), `kb search semantic` (ANN + relevance-гейт), `kb search hybrid` (BM25 + вектор + **graph_boost**, с расширением кандидатов графом), `kb graph neighbors` (обход графа знаний).
+- GraphRAG-поиск: `kb search local` (подграф вокруг релевантных сущностей) и `kb search global` (ответ поверх community summaries) — экстрактивный цитируемый контекст с провенансом.
 - `kb export jsonl` для generated exports в gitignored data zone.
-- Unit и integration tests, включая проверку на живой ArangoDB.
+- Unit и integration tests (включая проверку на живой ArangoDB), CI (ruff + mypy + pytest) и SonarCloud.
 
 ## Быстрый старт
 
@@ -67,13 +70,67 @@ uv run kb platform health
 ```bash
 uv run kb ingest fixture
 uv run kb index rebuild --target all
+uv run kb index rebuild --target related        # similarity-рёбра item_related_to_item
+uv run kb index rebuild --target communities    # community detection (Louvain) + summaries
 uv run kb search text "systems thinking"
 uv run kb search semantic "ideas across books"
 uv run kb graph neighbors --topic systems-thinking
 uv run kb graph neighbors --author fixture-author
 uv run kb search hybrid "systems thinking writing workflow"
+uv run kb search local "systems thinking"       # GraphRAG local: подграф вокруг хитов
+uv run kb search global "ideas across books"     # GraphRAG global: поверх community summaries
 uv run kb export jsonl --output data/generated/exports/fixture.jsonl
 ```
+
+### Семантический поиск и GraphRAG на реальной модели
+
+Fixture использует детерминированный `hash`-провайдер (dim 8), достаточный для смоука. Для осмысленного semantic/GraphRAG-поиска на реальном корпусе включите локальную модель эмбеддингов — задайте `[embedding] provider = "local"` в конфиге (`--config`) или через env:
+
+```bash
+export KB_EMBEDDING_PROVIDER=local
+export KB_EMBEDDING_MODEL=sentence-transformers/all-mpnet-base-v2
+export KB_EMBEDDING_DIMENSION=768
+```
+
+После смены провайдера/модели переэмбеддите корпус и пересоберите производный граф (re-ingest не нужен):
+
+```bash
+uv run kb index rebuild --target embeddings     # пересчитать векторы + vector index под 768d
+uv run kb index rebuild --target related        # similarity-рёбра на новых эмбеддингах
+uv run kb index rebuild --target communities    # сообщества на обновлённом графе
+```
+
+Затем — семантический и GraphRAG-поиск с relevance-гейтом:
+
+```bash
+uv run kb search semantic "distributed systems consistency" --min-similarity 0.35
+uv run kb search hybrid   "engineering management and leading teams" --limit 5
+uv run kb search local    "distributed database consensus"
+uv run kb search global   "engineering leadership" --communities 5
+```
+
+> Важно: если стор содержит 768d-эмбеддинги, а провайдер остался `hash` (dim 8), semantic/hybrid не найдут векторных совпадений (несовпадение размерности/модели). Держите провайдер согласованным со стором.
+
+### Проверка работы (smoke-test)
+
+Быстрый гейт качества (то же, что гоняет CI):
+
+```bash
+uv run --extra dev ruff check src tests
+uv run --extra dev ruff format --check src tests
+uv run --extra dev mypy
+uv run --extra dev pytest tests/unit -q            # unit, без БД
+KB_RUN_INTEGRATION=1 uv run --extra dev pytest -q  # полный прогон с живым ArangoDB
+```
+
+Проверка живого окружения и корпуса:
+
+```bash
+uv run kb platform health          # status: ok, exit code 0 = готово
+uv run kb search hybrid "distributed systems and databases" --limit 4
+```
+
+Признаки, что база работает: `platform health` → `status: ok`; результаты поиска **по теме** запроса с непустым `provenance`; в `hybrid` поле `score_components.graph_boost` — число в `[0, 0.5]` (не `null`), а `score` монотонно убывает; `search local`/`global` возвращают связывающие сущности / сообщества с summary.
 
 Прогнать первый реальный source adapter на локальном snapshot:
 
@@ -192,7 +249,8 @@ Integration-тесты работают против выделенной БД `
 ## Документация
 
 - [AGENTS.md](AGENTS.md) - правила для Codex и других агентов, работающих с репозиторием.
-- [docs/architecture.md](docs/architecture.md) - целевая архитектура и ключевые сущности.
+- [docs/architecture.md](docs/architecture.md) - целевая архитектура, ключевые сущности и диаграммы (системный поток, модель данных графа).
+- [docs/graphrag-plan.md](docs/graphrag-plan.md) - GraphRAG-эпик (GR-0…GR-6): статус, «как работает база знаний сейчас» и диаграммы конвейеров retrieval/GraphRAG.
 - [docs/roadmap.md](docs/roadmap.md) - этапы развития проекта.
 - [docs/adr/README.md](docs/adr/README.md) - журнал архитектурных решений и ADR-процесс.
 - [specs/001-production-knowledge-pipeline/spec.md](specs/001-production-knowledge-pipeline/spec.md) - Spec Kit feature для ArangoDB-centered production pipeline.
@@ -252,7 +310,7 @@ npm run check:adr
 - **v0** - стартовая документация, принципы, архитектурный контур.
 - **v1** - production-like ArangoDB fixture pipeline с provenance, search, vector, graph и hybrid retrieval.
 - **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб", включая полный владельческий archive import.
-- **v3** - расширенный GraphRAG, embeddings и качество retrieval.
+- **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги и качество retrieval — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
 - **v4** - визуализация тем, источников и связей.
 - **v5** - writer/research workflow поверх базы знаний.
 
