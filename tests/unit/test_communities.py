@@ -24,8 +24,12 @@ def test_louvain_splits_a_single_connected_component() -> None:
     # The key property label propagation lacked: two cliques linked by a *single* edge form one
     # connected component, but Louvain still splits them (LP would flood one label over both).
     adjacency = {
-        "a": {"b": 5.0, "c": 5.0}, "b": {"a": 5.0, "c": 5.0}, "c": {"a": 5.0, "b": 5.0, "d": 0.2},
-        "d": {"e": 5.0, "f": 5.0, "c": 0.2}, "e": {"d": 5.0, "f": 5.0}, "f": {"d": 5.0, "e": 5.0},
+        "a": {"b": 5.0, "c": 5.0},
+        "b": {"a": 5.0, "c": 5.0},
+        "c": {"a": 5.0, "b": 5.0, "d": 0.2},
+        "d": {"e": 5.0, "f": 5.0, "c": 0.2},
+        "e": {"d": 5.0, "f": 5.0},
+        "f": {"d": 5.0, "e": 5.0},
     }
     assert _sizes(_louvain(adjacency)) == [3, 3]
 
@@ -53,8 +57,15 @@ def test_louvain_partition_is_order_independent() -> None:
     order_two = [("b", "c", 1.0), ("a", "b", 1.0), ("c", "d", 1.0), ("d", "a", 1.0)]
     assert partition(order_one) == partition(order_two)
     # A larger graph with a weak bridge must also be order-stable end to end.
-    triangles = [("a", "b", 1.0), ("a", "c", 1.0), ("b", "c", 1.0), ("c", "x", 0.1),
-                 ("x", "y", 1.0), ("x", "z", 1.0), ("y", "z", 1.0)]
+    triangles = [
+        ("a", "b", 1.0),
+        ("a", "c", 1.0),
+        ("b", "c", 1.0),
+        ("c", "x", 0.1),
+        ("x", "y", 1.0),
+        ("x", "z", 1.0),
+        ("y", "z", 1.0),
+    ]
     assert partition(triangles) == partition(list(reversed(triangles)))
 
 
