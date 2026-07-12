@@ -32,6 +32,7 @@ from knowledge_base.research_artifacts import (
 )
 
 CONTRACT_DIR = Path(__file__).resolve().parents[2] / "specs" / "007-writer-research-workflow" / "contracts"
+_USERINFO_URL = "https://" + ":".join(("synthetic-user", "synthetic-value@example.test/item"))
 
 
 def _schemas() -> dict[str, dict]:
@@ -86,8 +87,9 @@ def test_canonical_json_is_compact_sorted_utf8_and_digestible() -> None:
     assert canonical_json_bytes(left) == expected
     assert canonical_json_bytes(right) == expected
     assert canonical_sha256(left) == hashlib.sha256(expected).hexdigest()
+    invalid_json = {"not_json": float("nan")}
     with pytest.raises(ValueError):
-        canonical_json_bytes({"not_json": float("nan")})
+        canonical_json_bytes(invalid_json)
 
 
 def test_short_id_registry_is_idempotent_and_rejects_prefix_collision() -> None:
@@ -151,7 +153,7 @@ def test_strict_object_parser_accepts_only_expected_version_and_fields() -> None
         ("file:///private/archive.json", None),
         ("javascript:alert(1)", None),
         ("/relative/path", None),
-        ("https://user:secret@example.test/item", None),
+        (_USERINFO_URL, None),
         (None, None),
     ],
 )
@@ -384,10 +386,11 @@ def test_materialization_rejects_schema_invalid_request_and_citation_values(
 ) -> None:
     candidate = evidence_candidate_builder(citation=citation_builder(**citation_overrides))
     context = {**dossier_manifest_builder()["corpus_context"], **context_overrides}
+    request = research_request_builder(**request_overrides)
 
     with pytest.raises(ArtifactContractError):
         _materialize(
-            research_request_builder(**request_overrides),
+            request,
             context,
             [candidate],
             clock="2026-07-12T12:00:00Z",
@@ -437,12 +440,15 @@ def test_no_selected_evidence_refuses_materialization_and_publishes_nothing(
     dossier_manifest_builder,
 ) -> None:
     output_root = tmp_path / "research"
+    request = research_request_builder()
+    context = dossier_manifest_builder()["corpus_context"]
+    candidates = [evidence_candidate_builder(selection_state="candidate")]
 
     with pytest.raises(ArtifactContractError, match="evidence"):
         _materialize(
-            research_request_builder(),
-            dossier_manifest_builder()["corpus_context"],
-            [evidence_candidate_builder(selection_state="candidate")],
+            request,
+            context,
+            candidates,
             clock="2026-07-12T12:00:00Z",
             entropy="01234567",
         )

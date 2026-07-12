@@ -21,13 +21,18 @@ from urllib.parse import urlsplit, urlunsplit
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _CITATION_ID_RE = re.compile(r"^cit-[0-9a-f]{16}$")
 _DOSSIER_KEY_RE = re.compile(r"^research-[a-z0-9_-]+-[0-9a-f]{12}$")
-_REVISION_ID_RE = re.compile(r"^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
+_REVISION_ID_RE = re.compile(r"(?a:^rev-\d{8}T\d{6}Z-[0-9a-f]{8}$)")
 _ENTROPY_RE = re.compile(r"^[0-9a-f]{8,}$")
-_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-_UTC_TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z$")
+_DATE_RE = re.compile(r"(?a:^\d{4}-\d{2}-\d{2}$)")
+_UTC_TIMESTAMP_RE = re.compile(r"(?a:^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$)")
 _SHORT_ID_PREFIX_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
 _SCHEMA_VERSION = "1.0"
 _OUTSIDE_GENERATED_WARNING = "output_outside_generated_zone"
+_MANIFEST_FILENAME = "manifest.json"
+_DOSSIER_FILENAME = "dossier.md"
+_VALIDATION_FILENAME = "validation.json"
+_DOSSIER_PACKAGE_FILENAMES = frozenset({_MANIFEST_FILENAME, _DOSSIER_FILENAME, _VALIDATION_FILENAME})
+_UTC_OFFSET = "+00:00"
 
 _REQUEST_FIELDS = (
     "query",
@@ -441,13 +446,7 @@ def materialize_dossier_package(
     request_projection = _project_request(request)
     context_projection = _project_corpus_context(corpus_context)
     candidates = [_project_candidate(value) for value in _bounded_sequence(candidate_evidence, "candidate evidence", 150)]
-    selected_ids = [
-        candidate["citation"]["citation_id"] for candidate in candidates if candidate["selection_state"] in {"selected", "pinned"}
-    ]
-    if not selected_ids:
-        raise ArtifactContractError("dossier requires at least one selected evidence citation")
-    if len(selected_ids) > 100 or len(selected_ids) != len(set(selected_ids)):
-        raise ArtifactContractError("selected evidence must contain at most 100 unique citations")
+    selected_ids = _selected_citation_ids(candidates)
 
     derived_projection = _project_derived_context(derived_context)
     operations = [
@@ -502,13 +501,13 @@ def materialize_dossier_package(
     dossier_bytes = markdown.encode("utf-8")
     validation_bytes = _json_file_bytes(validation)
     manifest["files"] = {
-        "dossier": _file_digest("dossier.md", dossier_bytes),
-        "validation": _file_digest("validation.json", validation_bytes),
+        "dossier": _file_digest(_DOSSIER_FILENAME, dossier_bytes),
+        "validation": _file_digest(_VALIDATION_FILENAME, validation_bytes),
     }
     files = {
-        "manifest.json": _json_file_bytes(manifest),
-        "dossier.md": dossier_bytes,
-        "validation.json": validation_bytes,
+        _MANIFEST_FILENAME: _json_file_bytes(manifest),
+        _DOSSIER_FILENAME: dossier_bytes,
+        _VALIDATION_FILENAME: validation_bytes,
     }
     package = DossierPackage(manifest=manifest, validation=validation, markdown=markdown, files=files)
     _validate_dossier_package(package)
@@ -523,6 +522,17 @@ def publish_dossier_package(output_root: Path, package: DossierPackage) -> Publi
     revision_id = package.manifest["revision_id"]
     target = output_root / dossier_key / "revisions" / revision_id
     return publish_directory_atomic(target, package.files)
+
+
+def _selected_citation_ids(candidates: Sequence[Mapping[str, Any]]) -> list[str]:
+    selected_ids = [
+        candidate["citation"]["citation_id"] for candidate in candidates if candidate["selection_state"] in {"selected", "pinned"}
+    ]
+    if not selected_ids:
+        raise ArtifactContractError("dossier requires at least one selected evidence citation")
+    if len(selected_ids) > 100 or len(selected_ids) != len(set(selected_ids)):
+        raise ArtifactContractError("selected evidence must contain at most 100 unique citations")
+    return selected_ids
 
 
 def _project_request(value: Any) -> dict[str, Any]:
@@ -631,10 +641,7 @@ def _project_citation(value: Any) -> dict[str, Any]:
     identity = citation["identity_sha256"]
     excerpt = citation["excerpt"]
     excerpt_digest = citation["excerpt_sha256"]
-    if not isinstance(citation_id, str) or not _CITATION_ID_RE.fullmatch(citation_id):
-        raise ArtifactContractError("invalid citation_id")
-    if not isinstance(identity, str) or not _DIGEST_RE.fullmatch(identity):
-        raise ArtifactContractError("invalid citation identity digest")
+    _validate_citation_identifiers(citation_id, identity)
     _bounded_string(citation["source_key"], "citation source_key", 1, 256)
     _bounded_string(citation["canonical_id"], "citation canonical_id", 1, 1024)
     _bounded_string(citation["document_key"], "citation document_key", 1, 256)
@@ -674,6 +681,13 @@ def _project_citation(value: Any) -> dict[str, Any]:
     if identity != expected_identity or citation_id != f"cit-{expected_identity[:16]}":
         raise ArtifactContractError("citation identity does not match its exact projection")
     return citation
+
+
+def _validate_citation_identifiers(citation_id: Any, identity: Any) -> None:
+    if not isinstance(citation_id, str) or not _CITATION_ID_RE.fullmatch(citation_id):
+        raise ArtifactContractError("invalid citation_id")
+    if not isinstance(identity, str) or not _DIGEST_RE.fullmatch(identity):
+        raise ArtifactContractError("invalid citation identity digest")
 
 
 def _project_curation_operation(value: Any) -> dict[str, Any]:
@@ -827,21 +841,11 @@ def _validate_initial_dossier_validation(
 
 
 def _validate_dossier_package(package: DossierPackage) -> None:
-    if not isinstance(package, DossierPackage):
-        raise TypeError("package must be a DossierPackage")
-    if set(package.files) != {"manifest.json", "dossier.md", "validation.json"}:
-        raise ArtifactContractError("dossier package must contain exactly three files")
-    if set(package.manifest) != _MANIFEST_FIELDS or set(package.validation) != _VALIDATION_FIELDS:
-        raise ArtifactContractError("dossier package fields do not match the contract allowlist")
-    _validate_initial_dossier_validation(package.manifest, package.validation)
-    if not _DOSSIER_KEY_RE.fullmatch(str(package.manifest.get("dossier_key", ""))):
-        raise ArtifactContractError("invalid dossier package key")
-    if not _REVISION_ID_RE.fullmatch(str(package.manifest.get("revision_id", ""))):
-        raise ArtifactContractError("invalid dossier revision identifier")
+    _validate_dossier_package_structure(package)
     try:
-        serialized_manifest = json.loads(package.files["manifest.json"])
-        serialized_validation = json.loads(package.files["validation.json"])
-        serialized_markdown = package.files["dossier.md"].decode("utf-8")
+        serialized_manifest = json.loads(package.files[_MANIFEST_FILENAME])
+        serialized_validation = json.loads(package.files[_VALIDATION_FILENAME])
+        serialized_markdown = package.files[_DOSSIER_FILENAME].decode("utf-8")
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ArtifactContractError("dossier package files must be valid UTF-8 JSON/Markdown") from error
     if serialized_manifest != package.manifest or serialized_validation != package.validation:
@@ -860,13 +864,27 @@ def _validate_dossier_package(package: DossierPackage) -> None:
         raise ArtifactContractError("dossier selected evidence set/order mismatch")
     if package.markdown != _render_dossier_markdown(package.manifest):
         raise ArtifactContractError("dossier Markdown does not match selected evidence")
-    for label, name in (("dossier", "dossier.md"), ("validation", "validation.json")):
+    for label, name in (("dossier", _DOSSIER_FILENAME), ("validation", _VALIDATION_FILENAME)):
         if package.manifest["files"].get(label) != _file_digest(name, package.files[name]):
             raise ArtifactContractError(f"dossier package {name} digest mismatch")
     if package.validation.get("target_id") != package.manifest["revision_id"]:
         raise ArtifactContractError("dossier validation targets another revision")
     if package.validation.get("target_digest") != package.manifest["content_digest"]:
         raise ArtifactContractError("dossier validation targets another content digest")
+
+
+def _validate_dossier_package_structure(package: DossierPackage) -> None:
+    if not isinstance(package, DossierPackage):
+        raise TypeError("package must be a DossierPackage")
+    if set(package.files) != _DOSSIER_PACKAGE_FILENAMES:
+        raise ArtifactContractError("dossier package must contain exactly three files")
+    if set(package.manifest) != _MANIFEST_FIELDS or set(package.validation) != _VALIDATION_FIELDS:
+        raise ArtifactContractError("dossier package fields do not match the contract allowlist")
+    _validate_initial_dossier_validation(package.manifest, package.validation)
+    if not _DOSSIER_KEY_RE.fullmatch(str(package.manifest.get("dossier_key", ""))):
+        raise ArtifactContractError("invalid dossier package key")
+    if not _REVISION_ID_RE.fullmatch(str(package.manifest.get("revision_id", ""))):
+        raise ArtifactContractError("invalid dossier revision identifier")
 
 
 def _project_fields(value: Any, fields: Sequence[str], label: str) -> dict[str, Any]:
@@ -982,7 +1000,7 @@ def _timestamp(value: Any, label: str) -> str:
     if not isinstance(value, str) or not _UTC_TIMESTAMP_RE.fullmatch(value):
         raise ArtifactContractError(f"{label} must be an RFC 3339 UTC timestamp")
     try:
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+        parsed = datetime.fromisoformat(value[:-1] + _UTC_OFFSET)
     except ValueError as error:
         raise ArtifactContractError(f"{label} must be an RFC 3339 UTC timestamp") from error
     offset = parsed.utcoffset()
@@ -1000,10 +1018,10 @@ def _clock_values(clock: Callable[[], str | datetime]) -> tuple[str, str]:
         parsed = value.astimezone(UTC)
     elif isinstance(value, str):
         _timestamp(value, "dossier clock")
-        parsed = datetime.fromisoformat(value[:-1] + "+00:00").astimezone(UTC)
+        parsed = datetime.fromisoformat(value[:-1] + _UTC_OFFSET).astimezone(UTC)
     else:
         raise ArtifactContractError("dossier clock must return a UTC timestamp")
-    validated_at = parsed.isoformat(timespec="seconds").replace("+00:00", "Z")
+    validated_at = parsed.isoformat(timespec="seconds").replace(_UTC_OFFSET, "Z")
     return validated_at, parsed.strftime("%Y%m%dT%H%M%SZ")
 
 

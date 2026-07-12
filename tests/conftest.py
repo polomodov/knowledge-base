@@ -17,6 +17,8 @@ JsonObject = dict[str, Any]
 _BUILT_AT = "2026-07-12T12:00:00Z"
 _REVISION_ID = "rev-20260712T120000Z-01234567"
 _SYNTHETIC_EXCERPT = "Synthetic evidence excerpt for contract tests."
+_DOSSIER_FILENAME = "dossier.md"
+_VALIDATION_FILENAME = "validation.json"
 
 
 @dataclass(frozen=True)
@@ -32,11 +34,11 @@ class DossierPackageFixture:
 
     @property
     def dossier_path(self) -> Path:
-        return self.path / "dossier.md"
+        return self.path / _DOSSIER_FILENAME
 
     @property
     def validation_path(self) -> Path:
-        return self.path / "validation.json"
+        return self.path / _VALIDATION_FILENAME
 
 
 def build_research_request(**overrides: Any) -> JsonObject:
@@ -155,8 +157,8 @@ def build_dossier_manifest(
         "includes_drafts": effective_request["visibility"] == "published_and_drafts",
         "warnings": [],
         "files": {
-            "dossier": _file_digest("dossier.md", b""),
-            "validation": _file_digest("validation.json", b""),
+            "dossier": _file_digest(_DOSSIER_FILENAME, b""),
+            "validation": _file_digest(_VALIDATION_FILENAME, b""),
         },
     }
     manifest.update(deepcopy(overrides))
@@ -179,14 +181,14 @@ def build_dossier_package(
     markdown_bytes = package_markdown.encode("utf-8")
     validation_bytes = _pretty_json_bytes(package_validation)
     package_manifest["files"] = {
-        "dossier": _file_digest("dossier.md", markdown_bytes),
-        "validation": _file_digest("validation.json", validation_bytes),
+        "dossier": _file_digest(_DOSSIER_FILENAME, markdown_bytes),
+        "validation": _file_digest(_VALIDATION_FILENAME, validation_bytes),
     }
 
     package_path = output_root / package_manifest["dossier_key"] / "revisions" / package_manifest["revision_id"]
     package_path.mkdir(parents=True)
-    (package_path / "dossier.md").write_bytes(markdown_bytes)
-    (package_path / "validation.json").write_bytes(validation_bytes)
+    (package_path / _DOSSIER_FILENAME).write_bytes(markdown_bytes)
+    (package_path / _VALIDATION_FILENAME).write_bytes(validation_bytes)
     (package_path / "manifest.json").write_bytes(_pretty_json_bytes(package_manifest))
     return DossierPackageFixture(
         path=package_path,

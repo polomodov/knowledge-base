@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 import knowledge_base.research_workflow as workflow
 from knowledge_base.arango import ArangoError
+from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.research_workflow import (
     Citation,
     CurationOperation,
@@ -22,6 +23,7 @@ from knowledge_base.research_workflow import (
 )
 
 JsonObject = dict[str, Any]
+_PRIVATE_MARKER = "must-not-leak"
 
 
 def test_research_visibility_exposes_exact_document_status_scope() -> None:
@@ -93,8 +95,9 @@ def test_research_request_rejects_invalid_bounds(
     research_request_builder: Callable[..., JsonObject],
     overrides: JsonObject,
 ) -> None:
+    payload = research_request_builder(**overrides)
     with pytest.raises(ValueError):
-        ResearchRequest(**research_request_builder(**overrides))
+        ResearchRequest(**payload)
 
 
 def test_citation_accepts_verified_identity_and_excludes_run_provenance_from_identity(
@@ -131,8 +134,9 @@ def test_citation_rejects_invalid_offsets_hashes_and_identity(
     citation_builder: Callable[..., JsonObject],
     overrides: JsonObject,
 ) -> None:
+    payload = citation_builder(**overrides)
     with pytest.raises(ValueError):
-        Citation(**citation_builder(**overrides))
+        Citation(**payload)
 
 
 @pytest.mark.parametrize(
@@ -394,7 +398,7 @@ def _hydrated_retrieval_row(
         "raw_snapshot": {
             "_key": "raw-synthetic",
             "captured_at": "2026-01-15T10:05:00Z",
-            "payload": {"secret": "must-not-leak"},
+            "payload": {"secret": _PRIVATE_MARKER},
         },
         "source_edge": {
             "import_run_key": "import-synthetic",
@@ -495,9 +499,10 @@ def test_build_dossier_projects_allowlisted_evidence_and_selected_context(monkey
         communities=[community],
     )
     request = ResearchRequest(query="synthetic orchestration", document_limit=1, evidence_limit=1)
+    repository = cast(KnowledgeRepository, object())
 
     result = build_dossier(
-        object(),
+        repository,
         request,
         provider=_PROVIDER,
         built_at=_BUILT_AT,
@@ -519,16 +524,17 @@ def test_build_dossier_projects_allowlisted_evidence_and_selected_context(monkey
     assert [row["kind"] for row in result.derived_context["leads"]] == ["related_chunk", "clean_community"]
     assert calls["topics"][0] == calls["communities"][0] == ("doc-success",)
     assert calls["related"][0] == ("chunk-success-0",)
-    assert "must-not-leak" not in repr(result)
+    assert _PRIVATE_MARKER not in repr(result)
 
 
 def test_build_dossier_returns_non_publishable_no_evidence_without_optional_leads(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls = _patch_build_reads(monkeypatch, lexical=[], semantic=[])
+    repository = cast(KnowledgeRepository, object())
 
     result = build_dossier(
-        object(),
+        repository,
         ResearchRequest(query="no matching evidence"),
         provider=_PROVIDER,
         built_at=_BUILT_AT,
@@ -547,22 +553,24 @@ def test_build_dossier_degrades_optional_lead_failure_without_changing_evidence(
     lexical = _hydrated_retrieval_row()
     request = ResearchRequest(query="stable evidence", document_limit=1, evidence_limit=1)
     _patch_build_reads(monkeypatch, lexical=[lexical], semantic=[])
-    ready = build_dossier(object(), request, provider=_PROVIDER, built_at=_BUILT_AT)
+    ready_repository = cast(KnowledgeRepository, object())
+    ready = build_dossier(ready_repository, request, provider=_PROVIDER, built_at=_BUILT_AT)
 
     _patch_build_reads(
         monkeypatch,
         lexical=[lexical],
         semantic=[],
-        related=ArangoError("database password=must-not-leak"),
+        related=ArangoError(f"database access failed: {_PRIVATE_MARKER}"),
     )
-    degraded = build_dossier(object(), request, provider=_PROVIDER, built_at=_BUILT_AT)
+    degraded_repository = cast(KnowledgeRepository, object())
+    degraded = build_dossier(degraded_repository, request, provider=_PROVIDER, built_at=_BUILT_AT)
 
     assert ready.status == "ready"
     assert degraded.status == "degraded" and degraded.publishable is True
     assert degraded.candidate_evidence == ready.candidate_evidence
     assert degraded.selected_citation_ids == ready.selected_citation_ids
     assert degraded.warnings == ("optional related context is unavailable",)
-    assert "must-not-leak" not in repr(degraded)
+    assert _PRIVATE_MARKER not in repr(degraded)
 
 
 @pytest.mark.parametrize("operation", ["include", "exclude", "pin"])
@@ -596,8 +604,9 @@ def test_dossier_revision_allows_only_finalized_statuses(
 def test_dossier_revision_rejects_invalid_manifest_status(
     dossier_manifest_builder: Callable[..., JsonObject],
 ) -> None:
+    manifest = dossier_manifest_builder(status="invalid")
     with pytest.raises(ValueError):
-        DossierRevision(**dossier_manifest_builder(status="invalid"))
+        DossierRevision(**manifest)
 
 
 def _validation_payload(*, status: str = "valid", citation_status: str = "valid") -> JsonObject:

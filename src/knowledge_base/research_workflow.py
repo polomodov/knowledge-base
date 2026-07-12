@@ -35,9 +35,9 @@ JsonObject = dict[str, Any]
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _CITATION_ID_RE = re.compile(r"^cit-[0-9a-f]{16}$")
 _DOSSIER_KEY_RE = re.compile(r"^research-[a-z0-9_-]+-[0-9a-f]{12}$")
-_REVISION_ID_RE = re.compile(r"^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
-_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-_UTC_TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z$")
+_REVISION_ID_RE = re.compile(r"^rev-(?a:\d{8}T\d{6}Z)-[0-9a-f]{8}$")
+_DATE_RE = re.compile(r"^(?a:\d{4}-\d{2}-\d{2})$")
+_UTC_TIMESTAMP_RE = re.compile(r"^(?a:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)$")
 
 
 class ResearchVisibility(StrEnum):
@@ -46,9 +46,10 @@ class ResearchVisibility(StrEnum):
 
     @property
     def document_statuses(self) -> tuple[str, ...]:
-        if self is ResearchVisibility.PUBLISHED_ONLY:
-            return ("published",)
-        return ("published", "draft")
+        statuses = ["published"]
+        if self is ResearchVisibility.PUBLISHED_AND_DRAFTS:
+            statuses.append("draft")
+        return tuple(statuses)
 
     @property
     def includes_drafts(self) -> bool:
@@ -352,9 +353,52 @@ def fuse_and_select_candidates(
 
     lexical_scores = _collect_signal_scores("lexical", lexical)
     vector_scores = _collect_signal_scores("semantic", semantic)
+    accumulators = _accumulate_grounded_candidates(
+        grounded=grounded,
+        lexical_scores=lexical_scores,
+        vector_scores=vector_scores,
+    )
+    ranked = _rank_accumulated_candidates(
+        accumulators,
+        lexical_weight=lexical_weight,
+        vector_weight=vector_weight,
+        candidate_limit=effective_request.candidate_limit,
+    )
+    if not ranked:
+        return ()
+
+    by_document = _group_candidates_by_document(ranked)
+    document_order = _rank_documents(by_document)
+    document_rank = {document_key: index for index, document_key in enumerate(document_order, start=1)}
+    fragment_rank = {
+        row.citation.identity_sha256: index for rows in by_document.values() for index, row in enumerate(rows, start=1)
+    }
+    selected, selected_round = _select_candidate_rounds(
+        by_document,
+        document_order=document_order,
+        document_limit=effective_request.document_limit,
+        fragments_per_document=effective_request.fragments_per_document,
+        evidence_limit=effective_request.evidence_limit,
+    )
+
+    selected_ids = set(selected_round)
+    output_order = [*selected, *(row for row in ranked if row.citation.identity_sha256 not in selected_ids)]
+    return _materialize_evidence_candidates(
+        output_order,
+        document_rank=document_rank,
+        fragment_rank=fragment_rank,
+        selected_round=selected_round,
+    )
+
+
+def _accumulate_grounded_candidates(
+    *,
+    grounded: Iterable[Mapping[str, Any]],
+    lexical_scores: Mapping[tuple[str, str], float],
+    vector_scores: Mapping[tuple[str, str], float],
+) -> dict[str, _CandidateAccumulator]:
     citation_ids = ShortIdRegistry(prefix="cit", length=16)
     accumulators: dict[str, _CandidateAccumulator] = {}
-
     for grounded_row in grounded:
         if not isinstance(grounded_row, Mapping):
             raise ValueError("grounded candidates must be objects")
@@ -363,27 +407,53 @@ def fuse_and_select_candidates(
         signal_key = (citation.document_key, citation.chunk_key)
         if signal_key not in lexical_scores and signal_key not in vector_scores:
             continue
-        lexical_score = lexical_scores.get(signal_key)
-        vector_score = vector_scores.get(signal_key)
-        accumulator = accumulators.get(citation.identity_sha256)
-        if accumulator is None:
-            accumulators[citation.identity_sha256] = _CandidateAccumulator(
-                citation=citation,
-                representative_key=representative_key,
-                lexical=lexical_score,
-                vector=vector_score,
-                graph_lead=graph_lead,
-            )
-        else:
-            accumulator.merge(
-                citation=citation,
-                representative_key=representative_key,
-                lexical=lexical_score,
-                vector=vector_score,
-                graph_lead=graph_lead,
-            )
+        _merge_grounded_candidate(
+            accumulators,
+            citation=citation,
+            representative_key=representative_key,
+            lexical_score=lexical_scores.get(signal_key),
+            vector_score=vector_scores.get(signal_key),
+            graph_lead=graph_lead,
+        )
+    return accumulators
 
-    ranked = sorted(
+
+def _merge_grounded_candidate(
+    accumulators: dict[str, _CandidateAccumulator],
+    *,
+    citation: Citation,
+    representative_key: bytes,
+    lexical_score: float | None,
+    vector_score: float | None,
+    graph_lead: float | None,
+) -> None:
+    accumulator = accumulators.get(citation.identity_sha256)
+    if accumulator is None:
+        accumulators[citation.identity_sha256] = _CandidateAccumulator(
+            citation=citation,
+            representative_key=representative_key,
+            lexical=lexical_score,
+            vector=vector_score,
+            graph_lead=graph_lead,
+        )
+        return
+    accumulator.merge(
+        citation=citation,
+        representative_key=representative_key,
+        lexical=lexical_score,
+        vector=vector_score,
+        graph_lead=graph_lead,
+    )
+
+
+def _rank_accumulated_candidates(
+    accumulators: Mapping[str, _CandidateAccumulator],
+    *,
+    lexical_weight: float,
+    vector_weight: float,
+    candidate_limit: int | None,
+) -> list[_ScoredCandidate]:
+    return sorted(
         (
             _ScoredCandidate(
                 citation=row.citation,
@@ -395,29 +465,40 @@ def fuse_and_select_candidates(
             for row in accumulators.values()
         ),
         key=lambda row: (-row.score, row.citation.citation_id),
-    )[: effective_request.candidate_limit]
-    if not ranked:
-        return ()
+    )[:candidate_limit]
 
+
+def _group_candidates_by_document(
+    ranked: Iterable[_ScoredCandidate],
+) -> dict[str, list[_ScoredCandidate]]:
     by_document: dict[str, list[_ScoredCandidate]] = {}
     for row in ranked:
         by_document.setdefault(row.citation.document_key, []).append(row)
-    document_order = sorted(
+    return by_document
+
+
+def _rank_documents(by_document: Mapping[str, Sequence[_ScoredCandidate]]) -> list[str]:
+    return sorted(
         by_document,
         key=lambda document_key: (
             -by_document[document_key][0].score,
             by_document[document_key][0].citation.citation_id,
         ),
     )
-    document_rank = {document_key: index for index, document_key in enumerate(document_order, start=1)}
-    fragment_rank = {
-        row.citation.identity_sha256: index for rows in by_document.values() for index, row in enumerate(rows, start=1)
-    }
 
+
+def _select_candidate_rounds(
+    by_document: Mapping[str, Sequence[_ScoredCandidate]],
+    *,
+    document_order: Sequence[str],
+    document_limit: int,
+    fragments_per_document: int,
+    evidence_limit: int | None,
+) -> tuple[list[_ScoredCandidate], dict[str, int]]:
     selected: list[_ScoredCandidate] = []
     selected_round: dict[str, int] = {}
-    eligible_documents = document_order[: effective_request.document_limit]
-    for round_index in range(effective_request.fragments_per_document):
+    eligible_documents = document_order[:document_limit]
+    for round_index in range(fragments_per_document):
         for document_key in eligible_documents:
             document_rows = by_document[document_key]
             if round_index >= len(document_rows):
@@ -425,13 +506,21 @@ def fuse_and_select_candidates(
             row = document_rows[round_index]
             selected.append(row)
             selected_round[row.citation.identity_sha256] = round_index + 1
-            if len(selected) == effective_request.evidence_limit:
+            if len(selected) == evidence_limit:
                 break
-        if len(selected) == effective_request.evidence_limit:
+        if len(selected) == evidence_limit:
             break
+    return selected, selected_round
 
+
+def _materialize_evidence_candidates(
+    output_order: Iterable[_ScoredCandidate],
+    *,
+    document_rank: Mapping[str, int],
+    fragment_rank: Mapping[str, int],
+    selected_round: Mapping[str, int],
+) -> tuple[EvidenceCandidate, ...]:
     selected_ids = set(selected_round)
-    output_order = [*selected, *(row for row in ranked if row.citation.identity_sha256 not in selected_ids)]
     return tuple(
         EvidenceCandidate(
             citation=row.citation,
@@ -828,58 +917,88 @@ class DossierRevision:
     files: Mapping[str, Any]
 
     def __post_init__(self) -> None:
-        if self.schema_version != "1.0" or self.artifact_type != "dossier_revision":
-            raise ValueError("unsupported dossier contract")
-        if not isinstance(self.dossier_key, str) or not _DOSSIER_KEY_RE.fullmatch(self.dossier_key):
-            raise ValueError("invalid dossier_key")
-        if not isinstance(self.revision_id, str) or not _REVISION_ID_RE.fullmatch(self.revision_id):
-            raise ValueError("invalid revision_id")
-        if self.parent_revision_id is not None and (
-            not isinstance(self.parent_revision_id, str) or not _REVISION_ID_RE.fullmatch(self.parent_revision_id)
-        ):
-            raise ValueError("invalid parent_revision_id")
-        if not isinstance(self.content_digest, str) or not _SHA256_RE.fullmatch(self.content_digest):
-            raise ValueError("invalid content_digest")
+        _validate_dossier_revision_identity(self)
 
         request = self.request if isinstance(self.request, ResearchRequest) else ResearchRequest(**dict(self.request))
         object.__setattr__(self, "request", request)
         _validate_corpus_context(self.corpus_context)
         object.__setattr__(self, "corpus_context", dict(self.corpus_context))
 
-        candidates = tuple(
-            candidate if isinstance(candidate, EvidenceCandidate) else EvidenceCandidate(**dict(candidate))
-            for candidate in self.candidate_evidence
-        )
-        if len(candidates) > 150:
-            raise ValueError("candidate_evidence exceeds 150 items")
+        candidates = _normalize_dossier_candidates(self.candidate_evidence)
         object.__setattr__(self, "candidate_evidence", candidates)
 
-        selected_ids = tuple(self.selected_citation_ids)
-        if not 1 <= len(selected_ids) <= 100 or len(selected_ids) != len(set(selected_ids)):
-            raise ValueError("selected_citation_ids must contain 1..100 unique items")
-        candidate_ids = {candidate.citation.citation_id for candidate in candidates if isinstance(candidate.citation, Citation)}
-        if any(not _CITATION_ID_RE.fullmatch(value) or value not in candidate_ids for value in selected_ids):
-            raise ValueError("selected citation must resolve into candidate_evidence")
+        selected_ids = _normalize_selected_citation_ids(self.selected_citation_ids, candidates)
         object.__setattr__(self, "selected_citation_ids", selected_ids)
 
-        operations = tuple(
-            operation if isinstance(operation, CurationOperation) else CurationOperation(**dict(operation))
-            for operation in self.curation_operations
-        )
-        if len(operations) > 300:
-            raise ValueError("curation_operations exceeds 300 items")
+        operations = _normalize_curation_operations(self.curation_operations)
         object.__setattr__(self, "curation_operations", operations)
         _validate_derived_context(self.derived_context)
         object.__setattr__(self, "derived_context", dict(self.derived_context))
 
-        if self.status not in {"ready", "degraded"}:
-            raise ValueError("finalized dossier status must be ready or degraded")
-        if not isinstance(self.includes_drafts, bool) or self.includes_drafts is not request.includes_drafts:
-            raise ValueError("includes_drafts must mirror request visibility")
+        _validate_dossier_revision_state(self, request)
         _validate_string_sequence("warnings", self.warnings, maximum_items=100, maximum_length=2000)
         object.__setattr__(self, "warnings", tuple(self.warnings))
         _validate_dossier_files(self.files)
         object.__setattr__(self, "files", dict(self.files))
+
+
+def _validate_dossier_revision_identity(revision: DossierRevision) -> None:
+    if revision.schema_version != "1.0" or revision.artifact_type != "dossier_revision":
+        raise ValueError("unsupported dossier contract")
+    if not isinstance(revision.dossier_key, str) or not _DOSSIER_KEY_RE.fullmatch(revision.dossier_key):
+        raise ValueError("invalid dossier_key")
+    if not isinstance(revision.revision_id, str) or not _REVISION_ID_RE.fullmatch(revision.revision_id):
+        raise ValueError("invalid revision_id")
+    if revision.parent_revision_id is not None and (
+        not isinstance(revision.parent_revision_id, str) or not _REVISION_ID_RE.fullmatch(revision.parent_revision_id)
+    ):
+        raise ValueError("invalid parent_revision_id")
+    if not isinstance(revision.content_digest, str) or not _SHA256_RE.fullmatch(revision.content_digest):
+        raise ValueError("invalid content_digest")
+
+
+def _normalize_dossier_candidates(
+    candidate_evidence: Sequence[EvidenceCandidate | Mapping[str, Any]],
+) -> tuple[EvidenceCandidate, ...]:
+    candidates = tuple(
+        candidate if isinstance(candidate, EvidenceCandidate) else EvidenceCandidate(**dict(candidate))
+        for candidate in candidate_evidence
+    )
+    if len(candidates) > 150:
+        raise ValueError("candidate_evidence exceeds 150 items")
+    return candidates
+
+
+def _normalize_selected_citation_ids(
+    selected_citation_ids: Sequence[str],
+    candidates: Sequence[EvidenceCandidate],
+) -> tuple[str, ...]:
+    selected_ids = tuple(selected_citation_ids)
+    if not 1 <= len(selected_ids) <= 100 or len(selected_ids) != len(set(selected_ids)):
+        raise ValueError("selected_citation_ids must contain 1..100 unique items")
+    candidate_ids = {candidate.citation.citation_id for candidate in candidates if isinstance(candidate.citation, Citation)}
+    if any(not _CITATION_ID_RE.fullmatch(value) or value not in candidate_ids for value in selected_ids):
+        raise ValueError("selected citation must resolve into candidate_evidence")
+    return selected_ids
+
+
+def _normalize_curation_operations(
+    curation_operations: Sequence[CurationOperation | Mapping[str, Any]],
+) -> tuple[CurationOperation, ...]:
+    operations = tuple(
+        operation if isinstance(operation, CurationOperation) else CurationOperation(**dict(operation))
+        for operation in curation_operations
+    )
+    if len(operations) > 300:
+        raise ValueError("curation_operations exceeds 300 items")
+    return operations
+
+
+def _validate_dossier_revision_state(revision: DossierRevision, request: ResearchRequest) -> None:
+    if revision.status not in {"ready", "degraded"}:
+        raise ValueError("finalized dossier status must be ready or degraded")
+    if not isinstance(revision.includes_drafts, bool) or revision.includes_drafts is not request.includes_drafts:
+        raise ValueError("includes_drafts must mirror request visibility")
 
 
 @dataclass(frozen=True, slots=True)
@@ -902,34 +1021,10 @@ class ValidationResult:
     validated_at: str
 
     def __post_init__(self) -> None:
-        if self.schema_version != "1.0" or self.artifact_type != "validation_result":
-            raise ValueError("unsupported validation contract")
-        if self.target_type not in {"dossier_revision", "writing_handoff", "writing_output", "imported_writing"}:
-            raise ValueError("unsupported validation target_type")
-        _bounded_string("target_id", self.target_id, minimum=1, maximum=500)
-        if not isinstance(self.target_digest, str) or not _SHA256_RE.fullmatch(self.target_digest):
-            raise ValueError("invalid validation target_digest")
-        if self.status not in {"valid", "valid_with_warnings", "invalid"}:
-            raise ValueError("unsupported validation status")
-        for name in (
-            "schema_valid",
-            "package_integrity",
-            "dossier_current",
-            "citations_resolved",
-            "coverage_complete",
-            "human_reviewed",
-        ):
-            if not isinstance(getattr(self, name), bool):
-                raise ValueError(f"{name} must be boolean")
-        if self.human_reviewed:
-            raise ValueError("automatic validation cannot set human_reviewed")
+        _validate_validation_result_identity(self)
+        _validate_validation_claim_types(self)
 
-        citations = tuple(_validate_citation_result(row) for row in self.citations)
-        if len(citations) > 250:
-            raise ValueError("validation citations exceeds 250 items")
-        resolved = all(row["status"] == "valid" for row in citations)
-        if self.citations_resolved is not resolved:
-            raise ValueError("citations_resolved does not match per-citation states")
+        citations = _normalize_validation_citations(self.citations, citations_resolved=self.citations_resolved)
         object.__setattr__(self, "citations", citations)
 
         _validate_string_sequence("warnings", self.warnings, maximum_items=100, maximum_length=2000)
@@ -938,15 +1033,66 @@ class ValidationResult:
         object.__setattr__(self, "errors", tuple(self.errors))
         _validate_timestamp("validated_at", self.validated_at, optional=False)
 
-        claims_valid = all(
-            (self.schema_valid, self.package_integrity, self.dossier_current, self.citations_resolved, self.coverage_complete)
+        _validate_validation_result_status(self)
+
+
+def _validate_validation_result_identity(result: ValidationResult) -> None:
+    if result.schema_version != "1.0" or result.artifact_type != "validation_result":
+        raise ValueError("unsupported validation contract")
+    if result.target_type not in {"dossier_revision", "writing_handoff", "writing_output", "imported_writing"}:
+        raise ValueError("unsupported validation target_type")
+    _bounded_string("target_id", result.target_id, minimum=1, maximum=500)
+    if not isinstance(result.target_digest, str) or not _SHA256_RE.fullmatch(result.target_digest):
+        raise ValueError("invalid validation target_digest")
+    if result.status not in {"valid", "valid_with_warnings", "invalid"}:
+        raise ValueError("unsupported validation status")
+
+
+def _validate_validation_claim_types(result: ValidationResult) -> None:
+    for name in (
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+        "human_reviewed",
+    ):
+        if not isinstance(getattr(result, name), bool):
+            raise ValueError(f"{name} must be boolean")
+    if result.human_reviewed:
+        raise ValueError("automatic validation cannot set human_reviewed")
+
+
+def _normalize_validation_citations(
+    citations: Sequence[Mapping[str, Any]],
+    *,
+    citations_resolved: bool,
+) -> tuple[JsonObject, ...]:
+    normalized = tuple(_validate_citation_result(row) for row in citations)
+    if len(normalized) > 250:
+        raise ValueError("validation citations exceeds 250 items")
+    resolved = all(row["status"] == "valid" for row in normalized)
+    if citations_resolved is not resolved:
+        raise ValueError("citations_resolved does not match per-citation states")
+    return normalized
+
+
+def _validate_validation_result_status(result: ValidationResult) -> None:
+    claims_valid = all(
+        (
+            result.schema_valid,
+            result.package_integrity,
+            result.dossier_current,
+            result.citations_resolved,
+            result.coverage_complete,
         )
-        if self.status == "valid" and (not claims_valid or self.warnings or self.errors):
-            raise ValueError("valid status requires all claims and no warnings or errors")
-        if self.status == "valid_with_warnings" and (not claims_valid or not self.warnings or self.errors):
-            raise ValueError("valid_with_warnings requires valid claims, warnings and no errors")
-        if self.status == "invalid" and not self.errors:
-            raise ValueError("invalid status requires at least one error")
+    )
+    if result.status == "valid" and (not claims_valid or result.warnings or result.errors):
+        raise ValueError("valid status requires all claims and no warnings or errors")
+    if result.status == "valid_with_warnings" and (not claims_valid or not result.warnings or result.errors):
+        raise ValueError("valid_with_warnings requires valid claims, warnings and no errors")
+    if result.status == "invalid" and not result.errors:
+        raise ValueError("invalid status requires at least one error")
 
 
 def _bounded_integer(name: str, value: Any, *, minimum: int, maximum: int | None = None) -> None:

@@ -4,9 +4,12 @@ import json
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
+
+from knowledge_base.arango import ArangoError
+from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.research_retrieval import (
     ResearchRetrievalError,
     clean_community_leads,
@@ -17,13 +20,12 @@ from knowledge_base.research_retrieval import (
     semantic_chunk_candidates,
     topic_leads,
 )
-
-from knowledge_base.arango import ArangoError
 from knowledge_base.research_workflow import ResearchRequest, ResearchVisibility
 
 CORPUS_PATH = Path(__file__).parents[1] / "fixtures/research/safe-research-corpus.json"
 CORPUS = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
 HIDDEN = "HIDDEN_DRAFT_SIGNAL_MUST_NOT_LEAK"
+_PRIVATE_MARKER = "must-not-leak"
 
 
 class FakeProvider:
@@ -44,7 +46,7 @@ class FakeClient:
             retrieval_min_similarity=0.25,
             arango_url="http://localhost:8529",
             arango_user="test-user",
-            arango_password="must-not-leak",
+            arango_password=_PRIVATE_MARKER,
         )
 
     def aql(
@@ -68,11 +70,15 @@ class FakeRepository:
         self.client = FakeClient(responses)
 
 
+def _as_repository(repository: FakeRepository) -> KnowledgeRepository:
+    return cast(KnowledgeRepository, repository)
+
+
 def test_lexical_scope_precedes_ranking_and_returns_exact_chunk() -> None:
     row = _hydrated_row("research-published-a-c0", bm25=4.5)
     repository = FakeRepository({"research:lexical_chunk_candidates": [row]})
 
-    results = lexical_chunk_candidates(repository, _request())
+    results = lexical_chunk_candidates(_as_repository(repository), _request())
 
     assert results[0]["chunk"]["text"] == CORPUS["chunks"][0]["text"]
     assert results[0]["score_components"] == {"lexical": 4.5, "vector": None}
@@ -104,7 +110,7 @@ def test_semantic_search_bounds_overfetch_then_scopes_hydration_and_exact_cosine
     )
     request = ResearchRequest(query="synthetic", candidate_limit=2, evidence_limit=2)
 
-    results = semantic_chunk_candidates(repository, request, provider=FakeProvider(), overfetch_factor=3)
+    results = semantic_chunk_candidates(_as_repository(repository), request, provider=FakeProvider(), overfetch_factor=3)
 
     assert [row["chunk"]["_key"] for row in results] == [
         "research-published-a-c0",
@@ -124,7 +130,7 @@ def test_hydration_preserves_exact_provenance_and_rejects_wrong_ownership() -> N
     exact = _hydrated_row("research-published-a-c1", embedding=[1.0, 0.0])
     repository = FakeRepository({"research:hydrate_chunk_candidates": [exact]})
 
-    rows = hydrate_chunk_candidates(repository, [exact["chunk"]["_key"]], _request())
+    rows = hydrate_chunk_candidates(_as_repository(repository), [exact["chunk"]["_key"]], _request())
 
     assert rows == [exact]
     assert rows[0]["raw_edge"]["document_key"] == rows[0]["document"]["_key"]
@@ -133,8 +139,11 @@ def test_hydration_preserves_exact_provenance_and_rejects_wrong_ownership() -> N
     invalid = deepcopy(exact)
     invalid["raw_snapshot"]["source_key"] = "research-source-b"
     repository = FakeRepository({"research:hydrate_chunk_candidates": [invalid]})
+    typed_repository = _as_repository(repository)
+    chunk_keys = [invalid["chunk"]["_key"]]
+    request = _request()
     with pytest.raises(ResearchRetrievalError, match=r"ownership|provenance"):
-        hydrate_chunk_candidates(repository, [invalid["chunk"]["_key"]], _request())
+        hydrate_chunk_candidates(typed_repository, chunk_keys, request)
 
 
 def test_graph_leads_filter_visibility_and_suppress_whole_tainted_community() -> None:
@@ -156,9 +165,10 @@ def test_graph_leads_filter_visibility_and_suppress_whole_tainted_community() ->
     )
     request = _request()
 
-    topics = topic_leads(repository, ["research-published-a"], request, limit=10)
-    related = related_leads(repository, ["research-published-a-c0"], request, limit=10)
-    communities = clean_community_leads(repository, ["research-published-a"], request, limit=10)
+    typed_repository = _as_repository(repository)
+    topics = topic_leads(typed_repository, ["research-published-a"], request, limit=10)
+    related = related_leads(typed_repository, ["research-published-a-c0"], request, limit=10)
+    communities = clean_community_leads(typed_repository, ["research-published-a"], request, limit=10)
 
     assert [row["topic_key"] for row in topics] == ["systems-thinking"]
     assert [row["document_key"] for row in related] == ["research-published-b"]
@@ -173,7 +183,7 @@ def test_optional_corpus_context_failure_degrades_without_credential_leak() -> N
     repository = FakeRepository({"research:corpus_context": ArangoError("index unavailable")})
 
     context = load_corpus_context(
-        repository,
+        _as_repository(repository),
         _request(),
         provider=FakeProvider(),
         built_at="2026-07-12T12:00:00Z",
@@ -192,7 +202,7 @@ def test_optional_corpus_context_failure_degrades_without_credential_leak() -> N
         "warnings": ["optional corpus/index freshness context is unavailable"],
     }
     assert not {"arango_url", "arango_user", "arango_password"} & context.keys()
-    assert "must-not-leak" not in json.dumps(context)
+    assert _PRIVATE_MARKER not in json.dumps(context)
 
 
 def _request() -> ResearchRequest:

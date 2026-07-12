@@ -278,7 +278,11 @@ def test_research_build_defaults_wire_published_request_service_and_publication(
     assert calls["repository_client"] is not None and calls["provider_settings"] is settings
     assert calls["build"]["repository"] is not None
     assert calls["build"]["provider"] is not None
-    assert re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z", calls["build"]["built_at"])
+    timestamp_pattern = (
+        r"(?a:\d){4}-(?a:\d){2}-(?a:\d){2}T"
+        r"(?a:\d){2}:(?a:\d){2}:(?a:\d){2}(?:\.(?a:\d)+)?Z"
+    )
+    assert re.fullmatch(timestamp_pattern, calls["build"]["built_at"])
     assert calls["materialize"] == {
         "request": result.request,
         "corpus_context": result.corpus_context,

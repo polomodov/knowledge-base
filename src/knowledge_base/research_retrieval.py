@@ -18,6 +18,7 @@ _MAX_OVERFETCH_FACTOR = 10
 _MAX_LEAD_LIMIT = 150
 _INDEX_TARGETS = ("embeddings", "related", "communities")
 _OPTIONAL_CONTEXT_WARNING = "optional corpus/index freshness context is unavailable"
+_PROVENANCE_OWNERSHIP_ERROR = "provenance ownership mismatch in hydrated research chunk"
 
 
 class ResearchRetrievalError(RuntimeError):
@@ -623,13 +624,13 @@ def _validate_hydrated_row(row: Mapping[str, Any]) -> None:
         source_edge.get("_to") == expected_source_id,
     )
     if not all(checks):
-        raise ResearchRetrievalError("provenance ownership mismatch in hydrated research chunk")
+        raise ResearchRetrievalError(_PROVENANCE_OWNERSHIP_ERROR)
 
     for entity, expected_id in ((chunk, expected_chunk_id), (document, expected_document_id)):
         if entity.get("_id", expected_id) != expected_id:
-            raise ResearchRetrievalError("provenance ownership mismatch in hydrated research chunk")
+            raise ResearchRetrievalError(_PROVENANCE_OWNERSHIP_ERROR)
     if raw_snapshot.get("_id", expected_raw_id) != expected_raw_id:
-        raise ResearchRetrievalError("provenance ownership mismatch in hydrated research chunk")
+        raise ResearchRetrievalError(_PROVENANCE_OWNERSHIP_ERROR)
 
     document_text = document.get("text")
     chunk_text = chunk.get("text")
@@ -652,7 +653,7 @@ def _validate_hydrated_row(row: Mapping[str, Any]) -> None:
 
     provenance = source_edge.get("provenance")
     if isinstance(provenance, Mapping) and provenance.get("raw_snapshot_key", raw_key) != raw_key:
-        raise ResearchRetrievalError("provenance ownership mismatch in hydrated research chunk")
+        raise ResearchRetrievalError(_PROVENANCE_OWNERSHIP_ERROR)
     raw_import = raw_edge.get("import_run_key")
     source_import = source_edge.get("import_run_key")
     if raw_import is not None and source_import is not None and raw_import != source_import:
