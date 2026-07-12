@@ -12,8 +12,30 @@
 | Дата и время (UTC) | TBD |
 | Implementation commit | TBD |
 | Test corpus / fixture identity | TBD |
-| Automated gates evidence | TBD |
+| Automated gates evidence | PASS — см. раздел «Automated evidence (T045/T049)» ниже |
 | Итоговый result | NOT RUN |
+
+## Automated evidence (T045/T049)
+
+Этот раздел фиксирует только машинные проверки и не является independent acceptance. Он не меняет `NOT RUN` в секциях 1–4, не выставляет `human_reviewed=true` и не подтверждает factual correctness или secret-free exact excerpts.
+
+| Поле | Значение |
+|------|----------|
+| Дата запуска (UTC) | 2026-07-12 |
+| Проверенный implementation commit | `d754f74` |
+| Real corpus identity | DB `knowledge_base`; 3 sources, 2 972 documents, 24 877 chunks, 422 topics, 11 communities; local `sentence-transformers/all-mpnet-base-v2`, 768 dimensions |
+| Real-corpus build | Два отдельных published-only запуска: `rev-20260712T154307Z-fc07b06b` за 8.37 s и `rev-20260712T154321Z-5eb0e834` за 5.78 s; оба `status=ok`, 36 candidates / 14 evidence, `dossier_key=research-topic-d003992b38b6`, одинаковый `content_digest=e5451e7f5c95a43d1ff6b83c9f3abbe286a0f7e63703dfc2f3f4d7261aaf483e` |
+| Real-corpus validation | `rev-20260712T154321Z-5eb0e834`: `status=valid`, 14/14 citations valid, 0.23 s |
+| Artifact sizes | `manifest.json` 107 539 bytes; `dossier.md` 9 695 bytes; `validation.json` 1 982 bytes |
+| Automated privacy projection | В manifest не найдены структурные `password`, `credentials`, `cookie`, `raw_payload`, archive/file/local/corpus path, provider key или token fields. Unstructured excerpts намеренно не объявляются автоматически очищенными и остаются предметом owner review |
+| Executable structural smoke | Child `rev-20260712T155157Z-766f6f37`; imported draft `writing-2c885f436d777046`; imported summary `writing-5cbb0e6b8fb1d7ee`; identical re-import reused IDs; unknown-citation и cross-kind cases отклонены целиком |
+| Full pytest + coverage | `530 passed, 1 skipped`; total coverage 83.58%; unit и live-Arango integration вместе, 74.67 s |
+| Isolated V5 integration | 10 passed; UUID test DB; canonical SHA-256 и counts всех document/edge collections совпали до и после полного pipeline |
+| Contract gates | 6 focused Draft 2020-12/schema contract checks passed; полный suite также проверил runtime strict parsers и fixtures |
+| Static/docs/build gates | Ruff check PASS; Ruff format 72 files PASS; mypy 34 source files PASS; ADR check 10 PASS; Markdown links 317/86 PASS; visualization template PASS; wheel resource PASS; base package imports without MCP extra; `git diff --check` PASS |
+| Независимая приёмка | T050–T053 не запускались; секции 1–4 и итоговое решение остаются `NOT RUN` |
+
+Первый диагностический запуск выполнялся одновременно с отдельным integration suite и получил client timeout; он не включён в performance measurement. Оба зачётных build запускались без параллельной DB-нагрузки, уложились в лимит 30 s и подтвердили одинаковый content digest; validation уложилась в лимит 5 s.
 
 ## 1. Dossier, citations и curation
 
