@@ -59,6 +59,8 @@ Raw-данные, нормализованные данные и generated outpu
 
 ## Быстрый старт
 
+Свежий clone по умолчанию использует `hash`-эмбеддинги (dim 8) для offline smoke; для реальной модели переключите `[embedding]` и выполните локальный `kb index rebuild --target embeddings`.
+
 Установить зависимости и поднять runtime:
 
 ```bash

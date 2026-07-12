@@ -57,6 +57,12 @@ def health_report(client: ArangoClient) -> dict[str, Any]:
 
 
 def ensure_vector_index(client: ArangoClient, *, dimension: int = VECTOR_DIMENSION) -> dict[str, Any]:
+    # IVF nLists trades recall vs build/query cost. Prefer ~sqrt(N) when chunk count is known;
+    # otherwise scale with embedding dimension (hash/8 → small; 768d → capped at 64).
+    # ArangoDB freezes vector-index params at create time; ensure_index is a no-op on 409, so a
+    # changed nLists only applies when rebuild drops and recreates the index
+    # (`kb index rebuild --target embeddings`).
+    n_lists = _vector_index_nlists(client, dimension=dimension)
     body = {
         "type": "vector",
         "name": "idx_chunks_embedding_vector",
@@ -64,7 +70,7 @@ def ensure_vector_index(client: ArangoClient, *, dimension: int = VECTOR_DIMENSI
         "params": {
             "metric": "cosine",
             "dimension": dimension,
-            "nLists": 1,
+            "nLists": n_lists,
         },
     }
     result = _safe(lambda: client.ensure_index("chunks", body), "idx_chunks_embedding_vector")
@@ -72,6 +78,23 @@ def ensure_vector_index(client: ArangoClient, *, dimension: int = VECTOR_DIMENSI
         result["status"] = "degraded"
         result["note"] = "Vector index could not be created; semantic search should report degraded mode."
     return result
+
+
+def _estimate_chunk_count(client: ArangoClient) -> int | None:
+    try:
+        rows = client.aql("RETURN LENGTH(chunks)")
+        if rows and isinstance(rows[0], int):
+            return rows[0]
+    except Exception:
+        return None
+    return None
+
+
+def _vector_index_nlists(client: ArangoClient, *, dimension: int) -> int:
+    estimate = _estimate_chunk_count(client)
+    if estimate is not None and estimate > 0:
+        return max(1, min(100, round(estimate**0.5)))
+    return max(1, min(64, dimension))
 
 
 def _ensure_persistent_indexes(client: ArangoClient) -> list[dict[str, Any]]:
