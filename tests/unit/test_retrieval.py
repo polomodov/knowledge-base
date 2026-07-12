@@ -11,6 +11,9 @@ from knowledge_base.retrieval import (
     _merge_hybrid,
     _start_vertex,
     _vector_ranked,
+    graph_neighbors,
+    semantic_search,
+    text_search,
 )
 
 
@@ -231,3 +234,149 @@ def test_dedup_best_by_document_keeps_first_per_document() -> None:
     deduped = _dedup_best_by_document(scored)
     assert [item["document_key"] for item in deduped] == ["d1", "d2"]
     assert deduped[0]["id"] == "c1"  # best chunk of d1, not the 0.7 one
+
+
+def _legacy_result(document_key: str, visibility: str, score: float) -> dict:
+    return {
+        "id": f"chunks/{document_key}-c0",
+        "document_key": document_key,
+        "chunk_key": f"{document_key}-c0",
+        "title": f"{visibility} document",
+        "snippet": f"legacy {visibility} result",
+        "score": score,
+        "score_components": {"bm25": score, "vector": None, "graph_boost": None},
+        "provenance": {
+            "source_key": "legacy-source",
+            "raw_snapshot_key": f"raw-{document_key}",
+            "import_run_key": "legacy-import",
+        },
+    }
+
+
+def _assert_legacy_result_shape(result: dict) -> None:
+    assert set(result) == {
+        "id",
+        "document_key",
+        "chunk_key",
+        "title",
+        "snippet",
+        "score",
+        "score_components",
+        "provenance",
+    }
+    assert set(result["score_components"]) == {"bm25", "vector", "graph_boost"}
+    assert set(result["provenance"]) == {"source_key", "raw_snapshot_key", "import_run_key"}
+
+
+class _LegacyReadClient:
+    def __init__(self, rows: list[dict]) -> None:
+        self.rows = rows
+        self.calls: list[tuple[str, dict]] = []
+
+    def aql(self, query: str, bind_vars: dict) -> list[dict]:
+        self.calls.append((query, dict(bind_vars)))
+        return [dict(row) for row in self.rows]
+
+
+def test_v5_does_not_narrow_legacy_text_visibility_or_change_result_envelope() -> None:
+    rows = [
+        _legacy_result("published-doc", "published", 2.0),
+        _legacy_result("draft-doc", "draft", 1.0),
+    ]
+    client = _LegacyReadClient(rows)
+    repository = cast(KnowledgeRepository, type("Repository", (), {"client": client})())
+
+    response = text_search(repository, "legacy query")
+
+    assert set(response) == {"query", "mode", "status", "results"}
+    assert (response["query"], response["mode"], response["status"]) == ("legacy query", "text", "ok")
+    assert [row["document_key"] for row in response["results"]] == ["published-doc", "draft-doc"]
+    for row in response["results"]:
+        _assert_legacy_result_shape(row)
+    query, bind_vars = client.calls[0]
+    assert bind_vars == {"query": "legacy query", "limit": 10, "source_key": None}
+    assert "FILTER doc.status" not in query
+    assert "@visibility" not in query and "@include_drafts" not in query
+
+
+class _LegacySemanticClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict]] = []
+        self.results = [
+            _legacy_result("published-doc", "published", 0.9),
+            _legacy_result("draft-doc", "draft", 0.8),
+        ]
+
+    def aql(self, query: str, bind_vars: dict) -> list[dict]:
+        self.calls.append((query, dict(bind_vars)))
+        if "FOR chunk IN chunks" in query:
+            return [
+                {
+                    "_id": "chunks/published-doc-c0",
+                    "_key": "published-doc-c0",
+                    "document_key": "published-doc",
+                    "text": "published semantic text",
+                    "embedding": [1.0, 0.0],
+                },
+                {
+                    "_id": "chunks/draft-doc-c0",
+                    "_key": "draft-doc-c0",
+                    "document_key": "draft-doc",
+                    "text": "draft semantic text",
+                    "embedding": [0.0, 1.0],
+                },
+            ]
+        if "FOR item IN @items" in query:
+            return [dict(row) for row in self.results]
+        raise AssertionError("unexpected legacy semantic query")
+
+
+def test_v5_does_not_narrow_legacy_semantic_visibility_or_change_result_envelope() -> None:
+    client = _LegacySemanticClient()
+    repository = cast(KnowledgeRepository, type("Repository", (), {"client": client})())
+
+    response = semantic_search(
+        repository,
+        "legacy semantic query",
+        dimension=2,
+        source_key="legacy-source",
+        min_similarity=-1.0,
+    )
+
+    assert set(response) == {"query", "mode", "status", "results"}
+    assert (response["query"], response["mode"], response["status"]) == (
+        "legacy semantic query",
+        "semantic",
+        "ok",
+    )
+    assert {row["document_key"] for row in response["results"]} == {"published-doc", "draft-doc"}
+    for row in response["results"]:
+        _assert_legacy_result_shape(row)
+    discovery_query, discovery_vars = client.calls[0]
+    assert discovery_vars["source_key"] == "legacy-source"
+    assert "FILTER doc.status" not in discovery_query
+    assert "@visibility" not in discovery_query and "@include_drafts" not in discovery_query
+
+
+def test_v5_does_not_narrow_legacy_graph_visibility_or_change_result_envelope() -> None:
+    rows = [
+        _legacy_result("published-doc", "published", 1.0),
+        _legacy_result("draft-doc", "draft", 1.0),
+    ]
+    client = _LegacyReadClient(rows)
+    repository = cast(KnowledgeRepository, type("Repository", (), {"client": client})())
+
+    response = graph_neighbors(repository, document="published-doc", limit=2)
+
+    assert set(response) == {"query", "mode", "status", "results"}
+    assert (response["query"], response["mode"], response["status"]) == (
+        "documents/published-doc",
+        "graph",
+        "ok",
+    )
+    assert [row["document_key"] for row in response["results"]] == ["published-doc", "draft-doc"]
+    for row in response["results"]:
+        _assert_legacy_result_shape(row)
+    query, bind_vars = client.calls[0]
+    assert "status" not in bind_vars and "visibility" not in bind_vars and "include_drafts" not in bind_vars
+    assert "FILTER doc.status" not in query

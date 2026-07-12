@@ -41,6 +41,12 @@ class SeededResearchCorpus:
     fixture: dict[str, object]
 
 
+@dataclass(frozen=True)
+class CollectionContentHash:
+    document_count: int
+    sha256: str
+
+
 @pytest.fixture
 def seeded_research_corpus(monkeypatch: pytest.MonkeyPatch) -> Iterator[SeededResearchCorpus]:
     base = load_settings()
@@ -378,6 +384,13 @@ def test_research_writing_round_trip_validates_every_artifact_and_reuses_identic
 ) -> None:
     repository = seeded_research_corpus.repository
     database_before = _database_snapshot(repository)
+    assert seeded_research_corpus.settings.arango_database.startswith("kb_research_")
+    assert set(database_before) == set(COLLECTIONS)
+    assert database_before == _database_snapshot(repository)
+    assert all(
+        snapshot.document_count >= 0 and len(snapshot.sha256) == 64 and snapshot.sha256 == snapshot.sha256.lower()
+        for snapshot in database_before.values()
+    )
     output_root = tmp_path / "research"
     dossier_path, dossier_manifest, handoff_path, handoff = _build_integration_handoff(
         capsys,
@@ -767,16 +780,21 @@ def _assert_exact_provenance(manifest: dict[str, object], fixture: dict[str, obj
         assert citation["url"] == document["url"]
 
 
-def _database_snapshot(repository: KnowledgeRepository) -> dict[str, bytes]:
-    return {
-        collection: canonical_json_bytes(
-            repository.client.aql(
-                "FOR document IN @@collection SORT document._key ASC RETURN document",
-                {"@collection": collection},
-            )
+def _database_snapshot(repository: KnowledgeRepository) -> dict[str, CollectionContentHash]:
+    snapshot: dict[str, CollectionContentHash] = {}
+    for collection in COLLECTIONS:
+        documents = repository.client.aql(
+            # Arango's server-generated revision token differs between independent
+            # databases; it is not collection content and must not perturb the hash.
+            "FOR document IN @@collection SORT document._key ASC RETURN UNSET(document, '_rev')",
+            {"@collection": collection},
         )
-        for collection in COLLECTIONS
-    }
+        payload = canonical_json_bytes(documents)
+        snapshot[collection] = CollectionContentHash(
+            document_count=len(documents),
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+    return snapshot
 
 
 def _tree_snapshot(root: Path) -> dict[str, bytes]:

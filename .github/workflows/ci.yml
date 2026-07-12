@@ -18,6 +18,8 @@ jobs:
           node-version: "24"
           package-manager-cache: false
       - run: pip install uv
+      - name: Documentation gates (ADR and Markdown links)
+        run: npm run check
       - name: Offline visualization template syntax and safety
         run: node scripts/check-viz-template.mjs
       - name: Wheel carries the offline visualization template

@@ -133,10 +133,10 @@
 
 **Purpose**: доказать отсутствие regression/mutations, синхронизировать документацию и провести независимую приёмку всех четырёх gates.
 
-- [ ] T043 [P] Добавить regression tests, что V5 не меняет legacy search visibility/result envelopes и MCP read-only tools, в `tests/unit/test_retrieval.py` и `tests/unit/test_mcp_service.py`
-- [ ] T044 Усилить seeded isolated integration проверкой deterministic per-collection content hashes без подключения к owner corpus в `tests/integration/test_research_workflow_pipeline.py`
+- [X] T043 [P] Добавить regression tests, что V5 не меняет legacy search visibility/result envelopes и MCP read-only tools, в `tests/unit/test_retrieval.py` и `tests/unit/test_mcp_service.py`
+- [X] T044 Усилить seeded isolated integration проверкой deterministic per-collection content hashes без подключения к owner corpus в `tests/integration/test_research_workflow_pipeline.py`
 - [ ] T045 Выполнить отдельный opt-in real-corpus build ≤30s / validation ≤5s measurement и записать corpus identity, timings и artifact IDs только в automated evidence поля `specs/007-writer-research-workflow/acceptance.md`
-- [ ] T046 [P] Добавить Markdown link checker `scripts/check-markdown-links.mjs`, команды `check:docs-links`/aggregate `check` в `package.json` и ADR/link gates в `.github/workflows/ci.yml`
+- [X] T046 [P] Добавить Markdown link checker `scripts/check-markdown-links.mjs`, команды `check:docs-links`/aggregate `check` в `package.json` и ADR/link gates в `.github/workflows/ci.yml`
 - [ ] T047 [P] Обновить реализованные `kb research` commands, generated-data boundary и фактический V5 status в `README.md`, `docs/architecture.md` и `docs/roadmap.md`
 - [ ] T048 [P] Перевести future-tense examples в исполнимый acceptance flow и сверить все команды/fixtures с runtime в `specs/007-writer-research-workflow/quickstart.md`
 - [ ] T049 Запустить unit/integration/coverage, ruff, format, mypy, contract, ADR, link и `git diff --check` gates и записать automated evidence, не меняя independent results, в `specs/007-writer-research-workflow/acceptance.md`
