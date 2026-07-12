@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import html
 import json
@@ -32,6 +33,7 @@ _MANIFEST_FILENAME = "manifest.json"
 _DOSSIER_FILENAME = "dossier.md"
 _VALIDATION_FILENAME = "validation.json"
 _DOSSIER_PACKAGE_FILENAMES = frozenset({_MANIFEST_FILENAME, _DOSSIER_FILENAME, _VALIDATION_FILENAME})
+_MAX_DOSSIER_MEMBER_BYTES = 32 * 1024 * 1024
 _UTC_OFFSET = "+00:00"
 
 _REQUEST_FIELDS = (
@@ -169,6 +171,8 @@ _VALIDATION_FIELDS = frozenset(
         "validated_at",
     }
 )
+_FILE_DIGEST_FIELDS = frozenset({"path", "sha256", "bytes"})
+_VALIDATION_CITATION_FIELDS = ("citation_id", "status", "reason")
 
 PublishStatus = Literal["created", "reused"]
 
@@ -524,6 +528,39 @@ def publish_dossier_package(output_root: Path, package: DossierPackage) -> Publi
     return publish_directory_atomic(target, package.files)
 
 
+def load_dossier_package(revision_dir: Path) -> DossierPackage:
+    """Load and fully verify one immutable dossier revision without corpus access."""
+
+    files = _read_dossier_directory(revision_dir)
+    try:
+        markdown = files[_DOSSIER_FILENAME].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ArtifactContractError("dossier package members must be valid UTF-8") from error
+
+    manifest = parse_strict_object(
+        files[_MANIFEST_FILENAME],
+        artifact_type="dossier_revision",
+        required_fields=_MANIFEST_FIELDS - {"schema_version", "artifact_type"},
+        max_bytes=_MAX_DOSSIER_MEMBER_BYTES,
+    )
+    validation = parse_strict_object(
+        files[_VALIDATION_FILENAME],
+        artifact_type="validation_result",
+        required_fields=_VALIDATION_FIELDS - {"schema_version", "artifact_type"},
+        max_bytes=_MAX_DOSSIER_MEMBER_BYTES,
+    )
+    try:
+        _validate_loaded_dossier_manifest(manifest)
+        _validate_loaded_initial_validation(validation)
+        package = DossierPackage(manifest=manifest, validation=validation, markdown=markdown, files=files)
+        _validate_dossier_package(package)
+    except ArtifactContractError:
+        raise
+    except (AttributeError, IndexError, KeyError, TypeError) as error:
+        raise ArtifactContractError("dossier package contains invalid field types") from error
+    return package
+
+
 def _selected_citation_ids(candidates: Sequence[Mapping[str, Any]]) -> list[str]:
     selected_ids = [
         candidate["citation"]["citation_id"] for candidate in candidates if candidate["selection_state"] in {"selected", "pinned"}
@@ -840,6 +877,120 @@ def _validate_initial_dossier_validation(
     _timestamp(validation.get("validated_at"), "initial validation timestamp")
 
 
+def _validate_loaded_dossier_manifest(manifest: Mapping[str, Any]) -> None:
+    request = _project_request(manifest["request"])
+    if request != manifest["request"]:
+        raise ArtifactContractError("dossier request does not match its strict projection")
+
+    context = _project_corpus_context(manifest["corpus_context"])
+    if context != manifest["corpus_context"]:
+        raise ArtifactContractError("dossier corpus context does not match its strict projection")
+
+    raw_candidates = _bounded_sequence(manifest["candidate_evidence"], "candidate evidence", 150)
+    candidates = [_project_candidate(value) for value in raw_candidates]
+    if candidates != raw_candidates:
+        raise ArtifactContractError("dossier candidate evidence does not match its strict projection")
+
+    raw_operations = _bounded_sequence(manifest["curation_operations"], "curation operations", 300)
+    operations = [_project_curation_operation(value) for value in raw_operations]
+    if operations != raw_operations:
+        raise ArtifactContractError("dossier curation operations do not match their strict projection")
+
+    derived_context = _project_derived_context(manifest["derived_context"])
+    if derived_context != manifest["derived_context"]:
+        raise ArtifactContractError("dossier derived context does not match its strict projection")
+
+    selected_ids = _bounded_strings(manifest["selected_citation_ids"], "selected citation IDs", 100, 20)
+    if any(not _CITATION_ID_RE.fullmatch(citation_id) for citation_id in selected_ids):
+        raise ArtifactContractError("invalid selected citation ID")
+    if selected_ids != _selected_citation_ids(candidates):
+        raise ArtifactContractError("dossier selected evidence set/order mismatch")
+
+    warnings = _bounded_strings(manifest["warnings"], "dossier warnings", 100, 2000)
+    if warnings != manifest["warnings"]:
+        raise ArtifactContractError("dossier warnings do not match their strict projection")
+    if not isinstance(manifest["includes_drafts"], bool):
+        raise ArtifactContractError("dossier includes_drafts must be a boolean")
+
+    parent_revision_id = manifest["parent_revision_id"]
+    if parent_revision_id is not None and (
+        not isinstance(parent_revision_id, str) or not _REVISION_ID_RE.fullmatch(parent_revision_id)
+    ):
+        raise ArtifactContractError("invalid parent dossier revision identifier")
+    if not isinstance(manifest["content_digest"], str) or not _DIGEST_RE.fullmatch(manifest["content_digest"]):
+        raise ArtifactContractError("invalid dossier content digest")
+    if manifest["dossier_key"] != _dossier_key(request):
+        raise ArtifactContractError("dossier key does not match the research request")
+
+    _validate_loaded_file_digests(manifest["files"])
+
+
+def _validate_loaded_file_digests(value: Any) -> None:
+    files = _allowlisted_mapping(
+        value,
+        frozenset({"dossier", "validation"}),
+        "dossier files",
+        require_all=True,
+    )
+    for label, expected_path in (("dossier", _DOSSIER_FILENAME), ("validation", _VALIDATION_FILENAME)):
+        digest = _allowlisted_mapping(
+            files[label],
+            _FILE_DIGEST_FIELDS,
+            f"dossier {label} file digest",
+            require_all=True,
+        )
+        if digest["path"] != expected_path:
+            raise ArtifactContractError(f"dossier {label} file path is inconsistent")
+        if not isinstance(digest["sha256"], str) or not _DIGEST_RE.fullmatch(digest["sha256"]):
+            raise ArtifactContractError(f"dossier {label} file digest is invalid")
+        _bounded_integer(digest["bytes"], f"dossier {label} file bytes", 0, _MAX_DOSSIER_MEMBER_BYTES)
+
+
+def _validate_loaded_initial_validation(validation: Mapping[str, Any]) -> None:
+    if validation["target_type"] != "dossier_revision":
+        raise ArtifactContractError("initial validation must target a dossier revision")
+    _bounded_string(validation["target_id"], "validation target_id", 1, 500)
+    if not isinstance(validation["target_digest"], str) or not _DIGEST_RE.fullmatch(validation["target_digest"]):
+        raise ArtifactContractError("validation target digest is invalid")
+    if not isinstance(validation["status"], str) or validation["status"] not in {
+        "valid",
+        "valid_with_warnings",
+        "invalid",
+    }:
+        raise ArtifactContractError("validation status is unsupported")
+
+    boolean_fields = (
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+        "human_reviewed",
+    )
+    if any(not isinstance(validation[field], bool) for field in boolean_fields):
+        raise ArtifactContractError("validation claims must be booleans")
+
+    citations = _bounded_sequence(validation["citations"], "validation citations", 250)
+    for value in citations:
+        citation = _project_fields(value, _VALIDATION_CITATION_FIELDS, "validation citation")
+        if not isinstance(citation["citation_id"], str) or not _CITATION_ID_RE.fullmatch(citation["citation_id"]):
+            raise ArtifactContractError("validation citation ID is invalid")
+        if not isinstance(citation["status"], str) or citation["status"] not in {
+            "valid",
+            "missing",
+            "changed",
+            "hidden",
+        }:
+            raise ArtifactContractError("validation citation status is unsupported")
+        reason = citation["reason"]
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 2000):
+            raise ArtifactContractError("validation citation reason must contain at most 2000 characters")
+
+    _bounded_strings(validation["warnings"], "validation warnings", 100, 2000)
+    _bounded_strings(validation["errors"], "validation errors", 100, 2000)
+    _timestamp(validation["validated_at"], "validation timestamp")
+
+
 def _validate_dossier_package(package: DossierPackage) -> None:
     _validate_dossier_package_structure(package)
     try:
@@ -1085,6 +1236,92 @@ def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, An
 
 def _absolute_path(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+
+def _read_dossier_directory(revision_dir: Path) -> dict[str, bytes]:
+    revision = _absolute_path(revision_dir)
+    assert_no_symlink_components(revision)
+    try:
+        mode = os.lstat(revision).st_mode
+    except FileNotFoundError as error:
+        raise ArtifactContractError(f"dossier revision directory does not exist: {revision}") from error
+    if stat.S_ISLNK(mode):
+        raise UnsafeArtifactPathError(f"symlink dossier revision is forbidden: {revision}")
+    if not stat.S_ISDIR(mode):
+        raise ArtifactContractError(f"dossier revision path is not a real directory: {revision}")
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(revision, flags)
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.EMLINK}:
+            raise UnsafeArtifactPathError(f"symlink dossier revision is forbidden: {revision}") from error
+        raise ArtifactContractError(f"cannot open dossier revision directory: {revision}") from error
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ArtifactContractError(f"dossier revision path is not a real directory: {revision}")
+        names = set(os.listdir(descriptor))
+        if names != _DOSSIER_PACKAGE_FILENAMES:
+            raise ArtifactContractError("dossier revision directory must contain exactly three known files")
+        files = {name: _read_dossier_member(descriptor, revision, name) for name in sorted(names)}
+        if set(os.listdir(descriptor)) != _DOSSIER_PACKAGE_FILENAMES:
+            raise ArtifactContractError("dossier revision directory changed while being read")
+        return files
+    finally:
+        os.close(descriptor)
+
+
+def _read_dossier_member(directory_descriptor: int, revision: Path, name: str) -> bytes:
+    try:
+        path_stat = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError as error:
+        raise ArtifactContractError(f"dossier package member is missing: {name}") from error
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise UnsafeArtifactPathError(f"symlink dossier package member is forbidden: {revision / name}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ArtifactContractError(f"dossier package member is not a regular file: {name}")
+    _validate_dossier_member_size(name, path_stat.st_size)
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.EMLINK}:
+            raise UnsafeArtifactPathError(f"symlink dossier package member is forbidden: {revision / name}") from error
+        raise ArtifactContractError(f"cannot open dossier package member: {name}") from error
+    try:
+        opened_stat = os.fstat(descriptor)
+        if stat.S_ISLNK(opened_stat.st_mode):
+            raise UnsafeArtifactPathError(f"symlink dossier package member is forbidden: {revision / name}")
+        if not stat.S_ISREG(opened_stat.st_mode):
+            raise ArtifactContractError(f"dossier package member is not a regular file: {name}")
+        if (opened_stat.st_dev, opened_stat.st_ino) != (path_stat.st_dev, path_stat.st_ino):
+            raise UnsafeArtifactPathError(f"dossier package member changed during secure open: {revision / name}")
+        _validate_dossier_member_size(name, opened_stat.st_size)
+        payload = _read_bounded_descriptor(descriptor, name)
+        final_stat = os.fstat(descriptor)
+        if final_stat.st_size != len(payload) or final_stat.st_mtime_ns != opened_stat.st_mtime_ns:
+            raise ArtifactContractError(f"dossier package member changed while being read: {name}")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+def _validate_dossier_member_size(name: str, size: int) -> None:
+    if size > _MAX_DOSSIER_MEMBER_BYTES:
+        raise ArtifactContractError(f"dossier package member {name} exceeds {_MAX_DOSSIER_MEMBER_BYTES} byte limit")
+
+
+def _read_bounded_descriptor(descriptor: int, name: str) -> bytes:
+    payload = bytearray()
+    while True:
+        remaining = _MAX_DOSSIER_MEMBER_BYTES + 1 - len(payload)
+        if remaining <= 0:
+            raise ArtifactContractError(f"dossier package member {name} exceeds {_MAX_DOSSIER_MEMBER_BYTES} byte limit")
+        chunk = os.read(descriptor, min(1024 * 1024, remaining))
+        if not chunk:
+            return bytes(payload)
+        payload.extend(chunk)
 
 
 def _ensure_owner_directory(path: Path) -> None:

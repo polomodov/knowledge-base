@@ -19,6 +19,7 @@ from knowledge_base.research_artifacts import (
 from knowledge_base.research_retrieval import (
     ResearchRetrievalError,
     clean_community_leads,
+    hydrate_current_citations,
     lexical_chunk_candidates,
     load_corpus_context,
     related_leads,
@@ -541,6 +542,10 @@ def _materialize_evidence_candidates(
 
 class DossierBuildError(RuntimeError):
     """A required dossier read or evidence projection failed safely."""
+
+
+class DossierValidationError(RuntimeError):
+    """Current-corpus dossier validation failed without a citation verdict."""
 
 
 _DRAFT_SCOPE_WARNING = "draft_visibility_enabled"
@@ -1093,6 +1098,308 @@ def _validate_validation_result_status(result: ValidationResult) -> None:
         raise ValueError("valid_with_warnings requires valid claims, warnings and no errors")
     if result.status == "invalid" and not result.errors:
         raise ValueError("invalid status requires at least one error")
+
+
+_CURRENT_CITATION_FIELDS = {
+    "citation_id",
+    "document",
+    "chunk",
+    "document_edge",
+    "raw_edge",
+    "raw_snapshot",
+    "source_edge",
+}
+
+
+def revalidate_dossier_citations(
+    repository: KnowledgeRepository,
+    revision: DossierRevision,
+) -> tuple[JsonObject, ...]:
+    """Resolve the selected evidence against current allowlisted corpus state."""
+
+    citations = _selected_revision_citations(revision)
+    refs = tuple(_citation_validation_ref(citation) for citation in citations)
+    try:
+        current_rows = hydrate_current_citations(repository, refs)
+    except (ArangoError, ResearchRetrievalError, TypeError, ValueError):
+        raise DossierValidationError("current citation hydration failed") from None
+
+    try:
+        return _classify_current_citations(revision, citations, current_rows)
+    except DossierValidationError:
+        raise
+    except (KeyError, TypeError, ValueError):
+        raise DossierValidationError("current citation projection failed") from None
+
+
+def validate_dossier_revision(
+    repository: KnowledgeRepository,
+    revision: DossierRevision,
+    *,
+    validated_at: str,
+) -> ValidationResult:
+    """Validate one already-loaded dossier without repairing corpus or package."""
+
+    citations = revalidate_dossier_citations(repository, revision)
+    citations_resolved = all(row["status"] == "valid" for row in citations)
+    warnings = tuple(revision.warnings)
+    errors = tuple(
+        f"citation {row['citation_id']} is {row['status']}: {row['reason']}" for row in citations if row["status"] != "valid"
+    )
+    if errors:
+        status = "invalid"
+    elif warnings:
+        status = "valid_with_warnings"
+    else:
+        status = "valid"
+    return ValidationResult(
+        schema_version="1.0",
+        artifact_type="validation_result",
+        target_type="dossier_revision",
+        target_id=revision.revision_id,
+        target_digest=revision.content_digest,
+        status=status,
+        schema_valid=True,
+        package_integrity=True,
+        dossier_current=citations_resolved,
+        citations_resolved=citations_resolved,
+        coverage_complete=True,
+        human_reviewed=False,
+        citations=citations,
+        warnings=warnings,
+        errors=errors,
+        validated_at=validated_at,
+    )
+
+
+def _selected_revision_citations(revision: DossierRevision) -> tuple[Citation, ...]:
+    by_id = {
+        candidate.citation.citation_id: candidate.citation
+        for candidate in revision.candidate_evidence
+        if isinstance(candidate, EvidenceCandidate) and isinstance(candidate.citation, Citation)
+    }
+    try:
+        return tuple(by_id[citation_id] for citation_id in revision.selected_citation_ids)
+    except KeyError:  # pragma: no cover - enforced by DossierRevision
+        raise DossierValidationError("selected citation projection is inconsistent") from None
+
+
+def _citation_validation_ref(citation: Citation) -> JsonObject:
+    return {
+        "citation_id": citation.citation_id,
+        "source_key": citation.source_key,
+        "document_key": citation.document_key,
+        "chunk_key": citation.chunk_key,
+        "raw_snapshot_key": citation.raw_snapshot_key,
+        "import_run_key": citation.import_run_key,
+    }
+
+
+def _classify_current_citations(
+    revision: DossierRevision,
+    citations: Sequence[Citation],
+    current_rows: Any,
+) -> tuple[JsonObject, ...]:
+    if not isinstance(current_rows, Sequence) or isinstance(current_rows, (str, bytes)):
+        raise DossierValidationError("current citation hydration returned an invalid envelope")
+    if len(current_rows) != len(citations):
+        raise DossierValidationError("current citation hydration returned an incomplete envelope")
+
+    states: list[JsonObject] = []
+    for citation, row in zip(citations, current_rows, strict=True):
+        if not isinstance(row, Mapping) or set(row) != _CURRENT_CITATION_FIELDS:
+            raise DossierValidationError("current citation hydration returned an invalid row")
+        if row["citation_id"] != citation.citation_id:
+            raise DossierValidationError("current citation hydration returned citations out of order")
+        states.append(_classify_current_citation(revision, citation, row))
+    return tuple(states)
+
+
+def _classify_current_citation(
+    revision: DossierRevision,
+    citation: Citation,
+    row: Mapping[str, Any],
+) -> JsonObject:
+    document = row["document"]
+    if document is None:
+        return _citation_state(citation, "missing", "current document is missing")
+    if not isinstance(document, Mapping):
+        raise DossierValidationError("current citation document has an invalid projection")
+
+    current_status = document.get("status")
+    if not isinstance(current_status, str) or not current_status:
+        raise DossierValidationError("current citation document status has an invalid projection")
+    request = revision.request
+    if not isinstance(request, ResearchRequest):  # pragma: no cover - normalized by DossierRevision
+        raise DossierValidationError("saved research request has an invalid projection")
+    if current_status in {"published", "draft"} and current_status not in request.document_statuses:
+        return _citation_state(citation, "hidden", "current document is outside saved visibility scope")
+    if current_status not in {"published", "draft"}:
+        return _citation_state(citation, "changed", "current document status is unsupported")
+
+    chunk = row["chunk"]
+    if chunk is None:
+        return _citation_state(citation, "missing", "current chunk is missing")
+    if not isinstance(chunk, Mapping):
+        raise DossierValidationError("current citation chunk has an invalid projection")
+
+    mismatch = _current_citation_mismatch(citation, row, document=document, chunk=chunk)
+    if mismatch is not None:
+        return _citation_state(citation, "changed", mismatch)
+    return _citation_state(citation, "valid", None)
+
+
+def _current_citation_mismatch(
+    citation: Citation,
+    row: Mapping[str, Any],
+    *,
+    document: Mapping[str, Any],
+    chunk: Mapping[str, Any],
+) -> str | None:
+    document_mismatch = _document_citation_mismatch(citation, document)
+    if document_mismatch is not None:
+        return document_mismatch
+    chunk_mismatch = _chunk_citation_mismatch(citation, row, chunk)
+    if chunk_mismatch is not None:
+        return chunk_mismatch
+    excerpt_mismatch = _excerpt_citation_mismatch(citation, document, chunk)
+    if excerpt_mismatch is not None:
+        return excerpt_mismatch
+    return _provenance_citation_mismatch(citation, row, document)
+
+
+def _document_citation_mismatch(citation: Citation, document: Mapping[str, Any]) -> str | None:
+    expected_document_id = f"documents/{citation.document_key}"
+    checks = (
+        (document.get("_key"), citation.document_key, "current document key changed"),
+        (document.get("_id"), expected_document_id, "current document identity changed"),
+        (document.get("source_key"), citation.source_key, "current document source changed"),
+        (document.get("canonical_id"), citation.canonical_id, "current canonical identity changed"),
+        (document.get("title"), citation.title, "current document title changed"),
+        (document.get("published_at"), citation.published_at, "current publication time changed"),
+        (document.get("status"), citation.document_status, "current document status changed"),
+    )
+    return _first_mismatch(checks)
+
+
+def _chunk_citation_mismatch(
+    citation: Citation,
+    row: Mapping[str, Any],
+    chunk: Mapping[str, Any],
+) -> str | None:
+    expected_chunk_id = f"chunks/{citation.chunk_key}"
+    expected_document_id = f"documents/{citation.document_key}"
+    checks = (
+        (chunk.get("_key"), citation.chunk_key, "current chunk key changed"),
+        (chunk.get("_id"), expected_chunk_id, "current chunk identity changed"),
+        (chunk.get("document_key"), citation.document_key, "current chunk ownership changed"),
+        (chunk.get("ordinal"), citation.chunk_ordinal, "current chunk ordinal changed"),
+        (chunk.get("char_start"), citation.char_start, "current chunk start offset changed"),
+        (chunk.get("char_end"), citation.char_end, "current chunk end offset changed"),
+    )
+    mismatch = _first_mismatch(checks)
+    if mismatch is not None:
+        return mismatch
+
+    document_edge = row["document_edge"]
+    if document_edge is None:
+        return "current chunk ownership edge is missing"
+    if not isinstance(document_edge, Mapping):
+        raise DossierValidationError("current chunk ownership edge has an invalid projection")
+    edge_checks = (
+        (document_edge.get("_from"), expected_chunk_id, "current chunk ownership edge source changed"),
+        (document_edge.get("_to"), expected_document_id, "current chunk ownership edge target changed"),
+        (document_edge.get("ordinal"), citation.chunk_ordinal, "current chunk ownership edge ordinal changed"),
+    )
+    return _first_mismatch(edge_checks)
+
+
+def _excerpt_citation_mismatch(
+    citation: Citation,
+    document: Mapping[str, Any],
+    chunk: Mapping[str, Any],
+) -> str | None:
+    document_text = document.get("text")
+    if not isinstance(document_text, str):
+        return "current document text changed"
+    chunk_text = chunk.get("text")
+    if not isinstance(chunk_text, str):
+        return "current chunk excerpt changed"
+
+    normalized_document = " ".join(document_text.split())
+    if citation.char_end > len(normalized_document):
+        return "current normalized offsets no longer resolve"
+    if normalized_document[citation.char_start : citation.char_end] != citation.excerpt:
+        return "current normalized document slice changed"
+    if chunk_text != citation.excerpt:
+        return "current chunk excerpt changed"
+    if hashlib.sha256(chunk_text.encode("utf-8")).hexdigest() != citation.excerpt_sha256:
+        return "current chunk excerpt digest changed"
+    return None
+
+
+def _provenance_citation_mismatch(
+    citation: Citation,
+    row: Mapping[str, Any],
+    document: Mapping[str, Any],
+) -> str | None:
+    raw_edge = _current_optional_mapping(row, "raw_edge")
+    raw_snapshot = _current_optional_mapping(row, "raw_snapshot")
+    source_edge = _current_optional_mapping(row, "source_edge")
+    if raw_edge is None or raw_snapshot is None or source_edge is None:
+        return "current citation provenance is missing"
+
+    provenance = source_edge.get("provenance")
+    if not isinstance(provenance, Mapping):
+        return "current source provenance is missing"
+    expected_chunk_id = f"chunks/{citation.chunk_key}"
+    expected_document_id = f"documents/{citation.document_key}"
+    expected_source_id = f"sources/{citation.source_key}"
+    expected_raw_id = f"raw_snapshots/{citation.raw_snapshot_key}" if citation.raw_snapshot_key is not None else None
+    projected_url = safe_http_url(document.get("url")) or safe_http_url(provenance.get("url"))
+    raw_import = raw_edge.get("import_run_key")
+    projected_import = raw_import if isinstance(raw_import, str) and raw_import else source_edge.get("import_run_key")
+    raw_capture = raw_snapshot.get("captured_at")
+    projected_capture = raw_capture if isinstance(raw_capture, str) and raw_capture else provenance.get("captured_at")
+    checks = (
+        (raw_edge.get("_from"), expected_chunk_id, "current raw provenance source changed"),
+        (raw_edge.get("_to"), expected_raw_id, "current raw provenance target changed"),
+        (raw_edge.get("document_key"), citation.document_key, "current raw provenance ownership changed"),
+        (raw_edge.get("char_start"), citation.char_start, "current raw provenance start changed"),
+        (raw_edge.get("char_end"), citation.char_end, "current raw provenance end changed"),
+        (raw_snapshot.get("_key"), citation.raw_snapshot_key, "current raw snapshot key changed"),
+        (raw_snapshot.get("_id"), expected_raw_id, "current raw snapshot identity changed"),
+        (raw_snapshot.get("source_key"), citation.source_key, "current raw snapshot source changed"),
+        (source_edge.get("_from"), expected_document_id, "current source provenance owner changed"),
+        (source_edge.get("_to"), expected_source_id, "current source provenance target changed"),
+        (
+            provenance.get("raw_snapshot_key"),
+            citation.raw_snapshot_key,
+            "current source provenance snapshot changed",
+        ),
+        (projected_import, citation.import_run_key, "current provenance import run changed"),
+        (projected_capture, citation.captured_at, "current provenance capture time changed"),
+        (projected_url, citation.url, "current provenance URL changed"),
+    )
+    return _first_mismatch(checks)
+
+
+def _current_optional_mapping(row: Mapping[str, Any], field: str) -> Mapping[str, Any] | None:
+    value = row[field]
+    if value is None or isinstance(value, Mapping):
+        return value
+    raise DossierValidationError(f"current citation {field} has an invalid projection")
+
+
+def _first_mismatch(checks: Iterable[tuple[Any, Any, str]]) -> str | None:
+    for current, expected, reason in checks:
+        if current != expected:
+            return reason
+    return None
+
+
+def _citation_state(citation: Citation, status: str, reason: str | None) -> JsonObject:
+    return {"citation_id": citation.citation_id, "status": status, "reason": reason}
 
 
 def _bounded_integer(name: str, value: Any, *, minimum: int, maximum: int | None = None) -> None:
