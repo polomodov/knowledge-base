@@ -971,6 +971,428 @@ def test_materialize_curated_dossier_rejects_operation_log_state_or_reason_misma
         )
 
 
+@pytest.mark.parametrize(
+    ("output_kind", "includes_drafts", "unsupported_sections"),
+    [("draft", False, 0), ("summary", True, 1)],
+)
+def test_imported_writing_materialization_matches_schema_and_runtime_contract_for_both_kinds(
+    research_request_builder,
+    dossier_manifest_builder,
+    requested_output_builder,
+    handoff_package_builder,
+    writing_section_builder,
+    writing_output_package_builder,
+    output_kind: str,
+    includes_drafts: bool,
+    unsupported_sections: int,
+) -> None:
+    request = research_request_builder(visibility="published_and_drafts" if includes_drafts else "published_only")
+    dossier = dossier_manifest_builder(request=request)
+    handoff = handoff_package_builder(
+        dossier_manifest=dossier,
+        requested_output=requested_output_builder(kind=output_kind),
+    )
+    if unsupported_sections:
+        content = "## Гипотеза\n\nЭтот раздел явно не подтверждён текущим корпусом."
+        sections = [
+            writing_section_builder(
+                content_markdown=content,
+                citation_ids=[],
+                unsupported_by_corpus=True,
+                unsupported_reason="Синтетическая гипотеза требует дополнительных источников.",
+            )
+        ]
+        writing_output = writing_output_package_builder(
+            handoff=handoff,
+            content_markdown=content,
+            sections=sections,
+        )
+        validation_warnings = ["unsupported_sections_present"]
+    else:
+        writing_output = writing_output_package_builder(handoff=handoff)
+        validation_warnings = []
+    validation = _writing_output_validation(
+        writing_output,
+        handoff,
+        warnings=validation_warnings,
+    )
+
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        validation,
+        imported_at="2026-07-12T12:10:00Z",
+    )
+
+    imported_type = vars(research_artifacts_module)["ImportedWritingPackage"]
+    assert isinstance(package, imported_type)
+    schemas = _schemas()
+    registry = _registry(schemas)
+    checker = FormatChecker()
+    Draft202012Validator(
+        schemas["imported-writing-manifest.schema.json"],
+        registry=registry,
+        format_checker=checker,
+    ).validate(package.manifest)
+    Draft202012Validator(
+        schemas["validation-result.schema.json"],
+        registry=registry,
+        format_checker=checker,
+    ).validate(package.validation)
+    assert json.loads(package.files["manifest.json"]) == package.manifest
+    assert json.loads(package.files["validation.json"]) == package.validation
+
+    expected_identity = canonical_sha256(
+        {
+            "handoff_id": handoff["handoff_id"],
+            "incoming_package_digest": writing_output["package_digest"],
+        }
+    )
+    assert package.manifest == {
+        "schema_version": "1.0",
+        "artifact_type": "imported_writing",
+        "writing_id": f"writing-{expected_identity[:16]}",
+        "output_kind": output_kind,
+        "incoming_package_digest": writing_output["package_digest"],
+        "handoff_id": handoff["handoff_id"],
+        "handoff_digest": handoff["package_digest"],
+        "dossier_key": handoff["dossier_key"],
+        "revision_id": handoff["revision_id"],
+        "revision_content_digest": handoff["revision_content_digest"],
+        "visibility": handoff["visibility"],
+        "includes_drafts": handoff["includes_drafts"],
+        "egress_acknowledged": handoff["egress_acknowledged"],
+        "draft_evidence_acknowledged": handoff["draft_evidence_acknowledged"],
+        "source_created_at": writing_output["created_at"],
+        "imported_at": "2026-07-12T12:10:00Z",
+        "agent": writing_output["agent"],
+        "title": writing_output["title"],
+        "content_sha256": writing_output["content_sha256"],
+        "validation": {
+            "schema_valid": True,
+            "package_integrity": True,
+            "dossier_current": True,
+            "citations_resolved": True,
+            "coverage_complete": True,
+            "unsupported_sections": unsupported_sections,
+        },
+        "human_reviewed": False,
+        "warnings": [*handoff["warnings"], *validation_warnings],
+        "files": package.manifest["files"],
+    }
+    assert set(package.files) == {"manifest.json", "output.md", "validation.json"}
+    assert package.manifest["files"]["output"]["path"] == "output.md"
+    assert package.manifest["files"]["validation"]["path"] == "validation.json"
+
+
+def test_imported_writing_inherits_privacy_decisions_only_from_validated_handoff(
+    research_request_builder,
+    dossier_manifest_builder,
+    requested_output_builder,
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    dossier = dossier_manifest_builder(request=research_request_builder(visibility="published_and_drafts"))
+    handoff = handoff_package_builder(
+        dossier_manifest=dossier,
+        requested_output=requested_output_builder(kind="summary"),
+        warnings=["dossier_degraded", "exact_evidence_requires_owner_review"],
+    )
+    writing_output = writing_output_package_builder(handoff=handoff)
+    validation = _writing_output_validation(
+        writing_output,
+        handoff,
+        warnings=["structural_coverage_only", "exact_evidence_requires_owner_review"],
+    )
+
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        validation,
+        imported_at="2026-07-12T12:10:00Z",
+    )
+
+    assert package.manifest["visibility"] == "published_and_drafts"
+    assert package.manifest["includes_drafts"] is True
+    assert package.manifest["egress_acknowledged"] is True
+    assert package.manifest["draft_evidence_acknowledged"] is True
+    assert package.manifest["warnings"] == [
+        "dossier_degraded",
+        "exact_evidence_requires_owner_review",
+        "structural_coverage_only",
+    ]
+    assert package.manifest["human_reviewed"] is False
+    assert package.validation["human_reviewed"] is False
+
+
+def test_imported_markdown_has_generated_boundary_and_separate_source_and_file_hashes(
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    handoff = handoff_package_builder()
+    writing_output = writing_output_package_builder(handoff=handoff)
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        _writing_output_validation(writing_output, handoff),
+        imported_at="2026-07-12T12:10:00Z",
+    )
+
+    output_bytes = package.files["output.md"]
+    output_text = output_bytes.decode("utf-8")
+    normalized_banner = output_text[: output_text.index(writing_output["content_markdown"])].casefold()
+    assert "generated" in normalized_banner
+    assert "source of truth" in normalized_banner
+    assert handoff["handoff_id"] in output_text
+    assert writing_output["content_markdown"] in output_text
+    assert package.manifest["content_sha256"] == hashlib.sha256(writing_output["content_markdown"].encode("utf-8")).hexdigest()
+    assert package.manifest["files"]["output"] == _file_digest("output.md", output_bytes)
+    assert package.manifest["files"]["output"]["sha256"] != package.manifest["content_sha256"]
+
+
+def test_imported_validation_retargets_full_automatic_result_without_claiming_human_review(
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    handoff = handoff_package_builder(warnings=["exact_evidence_requires_owner_review"])
+    writing_output = writing_output_package_builder(handoff=handoff)
+    incoming_validation = _writing_output_validation(
+        writing_output,
+        handoff,
+        warnings=["structural_coverage_only"],
+    )
+
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        incoming_validation,
+        imported_at="2026-07-12T12:10:00Z",
+    )
+
+    assert package.validation == {
+        **incoming_validation,
+        "target_type": "imported_writing",
+        "target_id": package.manifest["writing_id"],
+        "target_digest": writing_output["package_digest"],
+        "warnings": ["exact_evidence_requires_owner_review", "structural_coverage_only"],
+        "validated_at": "2026-07-12T12:10:00Z",
+    }
+    assert package.validation["human_reviewed"] is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="V5 targets POSIX filesystem semantics")
+def test_imported_writing_publication_is_atomic_owner_only_and_loadable(
+    tmp_path: Path,
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    handoff = handoff_package_builder()
+    writing_output = writing_output_package_builder(handoff=handoff)
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        _writing_output_validation(writing_output, handoff),
+        imported_at="2026-07-12T12:10:00Z",
+    )
+    output_root = tmp_path / "research"
+
+    publication = _publish_imported_writing(output_root, package)
+
+    publication_type = vars(research_artifacts_module)["ImportedWritingPublication"]
+    expected_path = _imported_writing_path(output_root, package)
+    assert isinstance(publication, publication_type)
+    assert publication.status == "created"
+    assert publication.path == expected_path
+    assert publication.package == package
+    assert {path.name: path.read_bytes() for path in expected_path.iterdir()} == package.files
+    assert stat.S_IMODE(expected_path.stat().st_mode) == 0o700
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in expected_path.iterdir())
+
+    loaded = _load_imported_writing(expected_path)
+    assert loaded == package
+    assert set(loaded.files) == {"manifest.json", "output.md", "validation.json"}
+
+
+def test_identical_reimport_with_different_import_time_reuses_original_stored_package(
+    tmp_path: Path,
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    handoff = handoff_package_builder()
+    writing_output = writing_output_package_builder(handoff=handoff)
+    validation = _writing_output_validation(writing_output, handoff)
+    original = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        validation,
+        imported_at="2026-07-12T12:10:00Z",
+    )
+    repeated = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        validation,
+        imported_at="2026-07-13T09:30:00Z",
+    )
+    output_root = tmp_path / "research"
+    first_publication = _publish_imported_writing(output_root, original)
+    original_bytes = {path.name: path.read_bytes() for path in first_publication.path.iterdir()}
+
+    repeated_publication = _publish_imported_writing(output_root, repeated)
+
+    assert original.manifest["writing_id"] == repeated.manifest["writing_id"]
+    assert original.files != repeated.files
+    assert repeated_publication.status == "reused"
+    assert repeated_publication.path == first_publication.path
+    assert repeated_publication.package == original
+    assert repeated_publication.package.manifest["imported_at"] == "2026-07-12T12:10:00Z"
+    assert {path.name: path.read_bytes() for path in first_publication.path.iterdir()} == original_bytes
+
+
+@pytest.mark.skipif(os.name != "posix", reason="V5 targets POSIX filesystem semantics")
+def test_imported_writing_publication_rejects_symlink_and_cleans_temporary_directory_on_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    handoff = handoff_package_builder()
+    writing_output = writing_output_package_builder(handoff=handoff)
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        _writing_output_validation(writing_output, handoff),
+        imported_at="2026-07-12T12:10:00Z",
+    )
+    real_root = tmp_path / "real-research"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked-research"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+
+    with pytest.raises(UnsafeArtifactPathError):
+        _publish_imported_writing(linked_root, package)
+
+    output_root = tmp_path / "research"
+
+    def fail_atomic_rename(_source: object, _destination: object) -> None:
+        raise OSError("synthetic atomic rename failure")
+
+    monkeypatch.setattr(research_artifacts_module.os, "rename", fail_atomic_rename)
+    with pytest.raises(OSError, match="synthetic atomic rename failure"):
+        _publish_imported_writing(output_root, package)
+
+    final_path = _imported_writing_path(output_root, package)
+    assert not final_path.exists()
+    if final_path.parent.exists():
+        assert not any(path.name.startswith(f".{package.manifest['writing_id']}.") for path in final_path.parent.iterdir())
+
+
+def test_imported_writing_collision_never_overwrites_existing_bytes(
+    tmp_path: Path,
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    handoff = handoff_package_builder()
+    writing_output = writing_output_package_builder(handoff=handoff)
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        _writing_output_validation(writing_output, handoff),
+        imported_at="2026-07-12T12:10:00Z",
+    )
+    publication = _publish_imported_writing(tmp_path / "research", package)
+    output_path = publication.path / "output.md"
+    collision_bytes = b"synthetic pre-existing collision\n"
+    output_path.write_bytes(collision_bytes)
+
+    with pytest.raises(ArtifactCollisionError):
+        _publish_imported_writing(tmp_path / "research", package)
+
+    assert output_path.read_bytes() == collision_bytes
+    assert not any(path.name.startswith(f".{package.manifest['writing_id']}.") for path in publication.path.parent.iterdir())
+
+
+@pytest.mark.parametrize("mutation", ["missing", "unknown"])
+def test_load_imported_writing_requires_exact_three_file_set(
+    tmp_path: Path,
+    handoff_package_builder,
+    writing_output_package_builder,
+    mutation: str,
+) -> None:
+    package, path = _publish_imported_fixture(
+        tmp_path / "research",
+        handoff_package_builder,
+        writing_output_package_builder,
+    )
+    if mutation == "missing":
+        (path / "output.md").unlink()
+    else:
+        (path / "agent-notes.txt").write_text("unknown sidecar", encoding="utf-8")
+
+    with pytest.raises(ArtifactContractError):
+        _load_imported_writing(path)
+    assert package.manifest["writing_id"] in str(path)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["invalid_json", "unknown_manifest", "unknown_nested", "output_digest", "validation_target"],
+)
+def test_load_imported_writing_strictly_rejects_unknown_corrupt_or_digest_mismatched_package(
+    tmp_path: Path,
+    handoff_package_builder,
+    writing_output_package_builder,
+    mutation: str,
+) -> None:
+    _, path = _publish_imported_fixture(
+        tmp_path / "research",
+        handoff_package_builder,
+        writing_output_package_builder,
+    )
+    manifest_path = path / "manifest.json"
+    manifest = _read_json_object(manifest_path)
+    if mutation == "invalid_json":
+        manifest_path.write_bytes(b"{not-json")
+    elif mutation == "unknown_manifest":
+        manifest["provider_api_key"] = "synthetic-forbidden-field"
+        manifest_path.write_bytes(_json_file_bytes(manifest))
+    elif mutation == "unknown_nested":
+        manifest["agent"]["local_model_path"] = "/private/synthetic-model"
+        manifest_path.write_bytes(_json_file_bytes(manifest))
+    elif mutation == "output_digest":
+        (path / "output.md").write_text("changed generated output", encoding="utf-8")
+    else:
+        validation = _read_json_object(path / "validation.json")
+        validation["target_id"] = "writing-0000000000000000"
+        validation_payload = _json_file_bytes(validation)
+        (path / "validation.json").write_bytes(validation_payload)
+        manifest["files"]["validation"] = _file_digest("validation.json", validation_payload)
+        manifest_path.write_bytes(_json_file_bytes(manifest))
+
+    with pytest.raises(ArtifactContractError):
+        _load_imported_writing(path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="V5 targets POSIX filesystem semantics")
+def test_load_imported_writing_refuses_symlink_member(
+    tmp_path: Path,
+    handoff_package_builder,
+    writing_output_package_builder,
+) -> None:
+    _, path = _publish_imported_fixture(
+        tmp_path / "research",
+        handoff_package_builder,
+        writing_output_package_builder,
+    )
+    output_path = path / "output.md"
+    outside = tmp_path / "outside.md"
+    outside.write_bytes(output_path.read_bytes())
+    output_path.unlink()
+    output_path.symlink_to(outside)
+
+    with pytest.raises(UnsafeArtifactPathError):
+        _load_imported_writing(path)
+
+
 def _materialize(
     request: dict[str, Any],
     corpus_context: dict[str, Any],
@@ -1095,3 +1517,93 @@ def _deterministic_validation_inputs(validation: dict[str, Any]) -> dict[str, An
     projection.pop("target_id")
     projection.pop("validated_at")
     return projection
+
+
+def _writing_output_validation(
+    writing_output: dict[str, Any],
+    handoff: dict[str, Any],
+    *,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    effective_warnings = list(warnings or [])
+    cited_ids = list(
+        dict.fromkeys(citation_id for section in writing_output["sections"] for citation_id in section["citation_ids"])
+    )
+    return {
+        "schema_version": "1.0",
+        "artifact_type": "validation_result",
+        "target_type": "writing_output",
+        "target_id": writing_output["package_digest"],
+        "target_digest": writing_output["package_digest"],
+        "status": "valid_with_warnings" if effective_warnings else "valid",
+        "schema_valid": True,
+        "package_integrity": True,
+        "dossier_current": True,
+        "citations_resolved": True,
+        "coverage_complete": True,
+        "human_reviewed": False,
+        "citations": [
+            {"citation_id": citation_id, "status": "valid", "reason": None}
+            for citation_id in cited_ids
+            if citation_id in handoff["citation_allowlist"]
+        ],
+        "warnings": effective_warnings,
+        "errors": [],
+        "validated_at": "2026-07-12T12:09:00Z",
+    }
+
+
+def _materialize_imported_writing(
+    writing_output: dict[str, Any],
+    handoff: dict[str, Any],
+    validation: dict[str, Any],
+    *,
+    imported_at: str,
+) -> Any:
+    materializer = cast(
+        Callable[..., Any],
+        vars(research_artifacts_module)["materialize_imported_writing_package"],
+    )
+    return materializer(
+        writing_output,
+        handoff,
+        validation,
+        imported_at=imported_at,
+    )
+
+
+def _publish_imported_writing(output_root: Path, package: Any) -> Any:
+    publisher = cast(
+        Callable[[Path, Any], Any],
+        vars(research_artifacts_module)["publish_imported_writing_package"],
+    )
+    return publisher(output_root, package)
+
+
+def _load_imported_writing(path: Path) -> Any:
+    loader = cast(
+        Callable[[Path], Any],
+        vars(research_artifacts_module)["load_imported_writing_package"],
+    )
+    return loader(path)
+
+
+def _imported_writing_path(output_root: Path, package: Any) -> Path:
+    return output_root / package.manifest["dossier_key"] / "outputs" / package.manifest["writing_id"]
+
+
+def _publish_imported_fixture(
+    output_root: Path,
+    handoff_package_builder: Callable[..., dict[str, Any]],
+    writing_output_package_builder: Callable[..., dict[str, Any]],
+) -> tuple[Any, Path]:
+    handoff = handoff_package_builder()
+    writing_output = writing_output_package_builder(handoff=handoff)
+    package = _materialize_imported_writing(
+        writing_output,
+        handoff,
+        _writing_output_validation(writing_output, handoff),
+        imported_at="2026-07-12T12:10:00Z",
+    )
+    publication = _publish_imported_writing(output_root, package)
+    return package, publication.path
