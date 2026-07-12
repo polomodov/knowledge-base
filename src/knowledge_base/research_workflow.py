@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Any
-from urllib.parse import urlsplit
+
+from knowledge_base.research_artifacts import (
+    ShortIdRegistry,
+    canonical_json_bytes,
+    canonical_sha256,
+    safe_http_url,
+)
 
 JsonObject = dict[str, Any]
 
@@ -211,6 +216,255 @@ class EvidenceCandidate:
     @property
     def is_evidence(self) -> bool:
         return self.selection_state in {"selected", "pinned"}
+
+
+@dataclass(slots=True)
+class _CandidateAccumulator:
+    citation: Citation
+    representative_key: bytes
+    lexical: float | None
+    vector: float | None
+    graph_lead: float | None
+
+    def merge(
+        self,
+        *,
+        citation: Citation,
+        representative_key: bytes,
+        lexical: float | None,
+        vector: float | None,
+        graph_lead: float | None,
+    ) -> None:
+        if representative_key < self.representative_key:
+            self.citation = citation
+            self.representative_key = representative_key
+        self.lexical = _max_optional(self.lexical, lexical)
+        self.vector = _max_optional(self.vector, vector)
+        self.graph_lead = _max_optional(self.graph_lead, graph_lead)
+
+
+@dataclass(frozen=True, slots=True)
+class _ScoredCandidate:
+    citation: Citation
+    score: float
+    lexical: float | None
+    vector: float | None
+    graph_lead: float | None
+
+
+def fuse_and_select_candidates(
+    *,
+    request: ResearchRequest | Mapping[str, Any],
+    lexical: Iterable[Mapping[str, Any]],
+    semantic: Iterable[Mapping[str, Any]],
+    grounded: Iterable[Mapping[str, Any]],
+) -> tuple[EvidenceCandidate, ...]:
+    """Project, fuse and deterministically select grounded chunk evidence."""
+
+    effective_request = request if isinstance(request, ResearchRequest) else ResearchRequest(**dict(request))
+    lexical_weight = _retrieval_weight(effective_request, "lexical_weight")
+    vector_weight = _retrieval_weight(effective_request, "vector_weight")
+    tie_policy = effective_request.retrieval.get("tie_policy", "score-desc-citation-id-asc")
+    if tie_policy != "score-desc-citation-id-asc":
+        raise ValueError("unsupported research candidate tie_policy")
+
+    lexical_scores = _collect_signal_scores("lexical", lexical)
+    vector_scores = _collect_signal_scores("semantic", semantic)
+    citation_ids = ShortIdRegistry(prefix="cit", length=16)
+    accumulators: dict[str, _CandidateAccumulator] = {}
+
+    for grounded_row in grounded:
+        if not isinstance(grounded_row, Mapping):
+            raise ValueError("grounded candidates must be objects")
+        graph_lead = _finite_number("graph_lead_score", grounded_row.get("graph_lead_score"), optional=True)
+        citation, representative_key = _project_citation(grounded_row, citation_ids)
+        signal_key = (citation.document_key, citation.chunk_key)
+        if signal_key not in lexical_scores and signal_key not in vector_scores:
+            continue
+        lexical_score = lexical_scores.get(signal_key)
+        vector_score = vector_scores.get(signal_key)
+        accumulator = accumulators.get(citation.identity_sha256)
+        if accumulator is None:
+            accumulators[citation.identity_sha256] = _CandidateAccumulator(
+                citation=citation,
+                representative_key=representative_key,
+                lexical=lexical_score,
+                vector=vector_score,
+                graph_lead=graph_lead,
+            )
+        else:
+            accumulator.merge(
+                citation=citation,
+                representative_key=representative_key,
+                lexical=lexical_score,
+                vector=vector_score,
+                graph_lead=graph_lead,
+            )
+
+    ranked = sorted(
+        (
+            _ScoredCandidate(
+                citation=row.citation,
+                score=lexical_weight * (row.lexical or 0.0) + vector_weight * (row.vector or 0.0),
+                lexical=row.lexical,
+                vector=row.vector,
+                graph_lead=row.graph_lead,
+            )
+            for row in accumulators.values()
+        ),
+        key=lambda row: (-row.score, row.citation.citation_id),
+    )[: effective_request.candidate_limit]
+    if not ranked:
+        return ()
+
+    by_document: dict[str, list[_ScoredCandidate]] = {}
+    for row in ranked:
+        by_document.setdefault(row.citation.document_key, []).append(row)
+    document_order = sorted(
+        by_document,
+        key=lambda document_key: (
+            -by_document[document_key][0].score,
+            by_document[document_key][0].citation.citation_id,
+        ),
+    )
+    document_rank = {document_key: index for index, document_key in enumerate(document_order, start=1)}
+    fragment_rank = {
+        row.citation.identity_sha256: index for rows in by_document.values() for index, row in enumerate(rows, start=1)
+    }
+
+    selected: list[_ScoredCandidate] = []
+    selected_round: dict[str, int] = {}
+    eligible_documents = document_order[: effective_request.document_limit]
+    for round_index in range(effective_request.fragments_per_document):
+        for document_key in eligible_documents:
+            document_rows = by_document[document_key]
+            if round_index >= len(document_rows):
+                continue
+            row = document_rows[round_index]
+            selected.append(row)
+            selected_round[row.citation.identity_sha256] = round_index + 1
+            if len(selected) == effective_request.evidence_limit:
+                break
+        if len(selected) == effective_request.evidence_limit:
+            break
+
+    selected_ids = set(selected_round)
+    output_order = [*selected, *(row for row in ranked if row.citation.identity_sha256 not in selected_ids)]
+    return tuple(
+        EvidenceCandidate(
+            citation=row.citation,
+            document_rank=document_rank[row.citation.document_key],
+            fragment_rank=fragment_rank[row.citation.identity_sha256],
+            score=row.score,
+            score_components={"lexical": row.lexical, "vector": row.vector, "graph_lead": row.graph_lead},
+            selection_state="selected" if row.citation.identity_sha256 in selected_ids else "candidate",
+            selection_reason=(
+                f"automatic-round-{selected_round[row.citation.identity_sha256]}"
+                if row.citation.identity_sha256 in selected_ids
+                else "candidate-pool"
+            ),
+        )
+        for row in output_order
+    )
+
+
+def _collect_signal_scores(
+    name: str,
+    signals: Iterable[Mapping[str, Any]],
+) -> dict[tuple[str, str], float]:
+    scores: dict[tuple[str, str], float] = {}
+    for signal in signals:
+        if not isinstance(signal, Mapping):
+            raise ValueError(f"{name} signals must be objects")
+        document_key = signal.get("document_key")
+        chunk_key = signal.get("chunk_key")
+        _bounded_string(f"{name} document_key", document_key, minimum=1, maximum=256)
+        _bounded_string(f"{name} chunk_key", chunk_key, minimum=1, maximum=256)
+        assert isinstance(document_key, str)
+        assert isinstance(chunk_key, str)
+        score = _finite_number(f"{name} score", signal.get("score"))
+        assert score is not None
+        key = (document_key, chunk_key)
+        scores[key] = max(scores.get(key, score), score)
+    return scores
+
+
+def _project_citation(
+    grounded: Mapping[str, Any],
+    citation_ids: ShortIdRegistry,
+) -> tuple[Citation, bytes]:
+    required = {
+        "source_key",
+        "canonical_id",
+        "document_key",
+        "chunk_key",
+        "chunk_ordinal",
+        "char_start",
+        "char_end",
+        "offset_basis",
+        "excerpt",
+        "title",
+        "document_status",
+    }
+    missing = sorted(required - grounded.keys())
+    if missing:
+        raise ValueError(f"grounded citation is missing fields: {', '.join(missing)}")
+    excerpt = grounded["excerpt"]
+    if not isinstance(excerpt, str):
+        raise ValueError("grounded citation excerpt must be a string")
+    excerpt_sha256 = hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
+    identity_projection = {
+        "projection_version": "citation-v1",
+        "source_key": grounded["source_key"],
+        "canonical_id": grounded["canonical_id"],
+        "document_key": grounded["document_key"],
+        "chunk_key": grounded["chunk_key"],
+        "char_start": grounded["char_start"],
+        "char_end": grounded["char_end"],
+        "offset_basis": grounded["offset_basis"],
+        "excerpt_sha256": excerpt_sha256,
+    }
+    identity_sha256 = canonical_sha256(identity_projection)
+    payload: JsonObject = {
+        "citation_id": citation_ids.register(identity_sha256),
+        "identity_sha256": identity_sha256,
+        **identity_projection,
+        "chunk_ordinal": grounded["chunk_ordinal"],
+        "excerpt": excerpt,
+        "title": grounded["title"],
+        "published_at": grounded.get("published_at"),
+        "document_status": grounded["document_status"],
+        "url": safe_http_url(grounded.get("url")),
+        "raw_snapshot_key": grounded.get("raw_snapshot_key"),
+        "import_run_key": grounded.get("import_run_key"),
+        "captured_at": grounded.get("captured_at"),
+    }
+    return Citation(**payload), canonical_json_bytes(payload)
+
+
+def _retrieval_weight(request: ResearchRequest, name: str) -> float:
+    weight = _finite_number(name, request.retrieval.get(name, 1.0))
+    assert weight is not None
+    if weight < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return weight
+
+
+def _finite_number(name: str, value: Any, *, optional: bool = False) -> float | None:
+    if value is None and optional:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        suffix = " or null" if optional else ""
+        raise ValueError(f"{name} must be a finite number{suffix}")
+    return float(value)
+
+
+def _max_optional(left: float | None, right: float | None) -> float | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return max(left, right)
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,11 +670,8 @@ def _validate_timestamp(name: str, value: Any, *, optional: bool = True) -> None
 def _validate_http_url(value: Any) -> None:
     if value is None:
         return
-    if not isinstance(value, str) or len(value) > 4096:
-        raise ValueError("url must be an HTTP(S) URL or null")
-    parsed = urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
-        raise ValueError("url must be a credential-free HTTP(S) URL")
+    if safe_http_url(value) != value:
+        raise ValueError("url must be a canonical credential-free HTTP(S) URL or null")
 
 
 def _validate_corpus_context(value: Any) -> None:
@@ -502,5 +753,4 @@ def _validate_string_sequence(name: str, value: Any, *, maximum_items: int, maxi
 
 
 def _sha256_json(value: Mapping[str, Any]) -> str:
-    payload = json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
+    return canonical_sha256(value)

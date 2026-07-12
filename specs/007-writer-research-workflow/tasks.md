@@ -63,9 +63,9 @@
 
 ### Implementation
 
-- [ ] T014 [P] [US1] Реализовать отдельные V5 lexical/vector chunk candidate queries с explicit visibility/source/UTC-date scope, bounded overfetch и exact cosine re-score в `src/knowledge_base/research_retrieval.py`
-- [ ] T015 [US1] Добавить exact document/chunk/raw/source hydration, visibility-filtered related/topic leads и allowlisted CorpusContext/index freshness без сериализации Settings credentials в `src/knowledge_base/research_retrieval.py`
-- [ ] T016 [P] [US1] Реализовать Citation identity/provenance projection и deterministic multi-fragment selection с dedupe, diversity, caps и stable tie-breaks в `src/knowledge_base/research_workflow.py`
+- [X] T014 [P] [US1] Реализовать отдельные V5 lexical/vector chunk candidate queries с explicit visibility/source/UTC-date scope, bounded overfetch и exact cosine re-score в `src/knowledge_base/research_retrieval.py`
+- [X] T015 [US1] Добавить exact document/chunk/raw/source hydration, visibility-filtered related/topic leads и allowlisted CorpusContext/index freshness без сериализации Settings credentials в `src/knowledge_base/research_retrieval.py`
+- [X] T016 [P] [US1] Реализовать Citation identity/provenance projection и deterministic multi-fragment selection с dedupe, diversity, caps и stable tie-breaks в `src/knowledge_base/research_workflow.py`
 - [ ] T017 [US1] Реализовать dossier build orchestration, request validation, optional-context degradation и честный no-evidence outcome без DB mutations в `src/knowledge_base/research_workflow.py`
 - [ ] T018 [US1] Реализовать dossier manifest, human-readable Markdown, initial validation projection и immutable root revision publication в `src/knowledge_base/research_artifacts.py`
 - [ ] T019 [US1] Добавить parser/handler `kb research build` с embedding provider, output-root safety flags и contract exit codes в `src/knowledge_base/cli/main.py`
