@@ -104,6 +104,8 @@
 - черновики и summaries в `generated`;
 - проверка, что generated outputs отделены от исходной базы.
 
+Проектирование V5 ведётся как Spec Kit feature [007 — Writer/Research Workflow](../specs/007-writer-research-workflow/spec.md). Принятый design direction: chunk-level citations, immutable file-first dossier revisions, ручной versioned round-trip с внешним writing-agent и локальная structural validation возвращённого writing-output package с `output_kind=draft|summary`; MCP сохраняется read-only. V5 завершается только после четырёх записанных independent acceptance sections: dossier/citation/curation, `draft`, `summary` и privacy/path safety. Технический план и контракты — в [plan.md](../specs/007-writer-research-workflow/plan.md), архитектурная граница предложена в [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md). Реализация ещё не начата.
+
 ## Текущий статус
 
 Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server**; и **v4 — graph export + самодостаточная offline-визуализация трёх видов** (команды и контракты — [docs/visualization.md](visualization.md)).

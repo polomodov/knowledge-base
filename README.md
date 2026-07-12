@@ -309,6 +309,7 @@ Integration-тесты работают против выделенной БД `
 - [specs/004-book-cube-owner-archive-import/spec.md](specs/004-book-cube-owner-archive-import/spec.md) - Spec Kit feature для полного владельческого Telegram archive import.
 - [specs/005-medium-export-source/spec.md](specs/005-medium-export-source/spec.md) - Spec Kit feature для Medium account export import.
 - [specs/006-knowledge-base-mcp-server/spec.md](specs/006-knowledge-base-mcp-server/spec.md) - Spec Kit feature для read-only MCP server.
+- [specs/007-writer-research-workflow/spec.md](specs/007-writer-research-workflow/spec.md) - проектируемая Spec Kit feature V5 для provenance-first research dossier, citations и file round-trip с writing-agent.
 
 ## Spec-Driven Development
 
@@ -367,6 +368,6 @@ npm run check:adr
 - **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб", включая полный владельческий archive import.
 - **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги, качество retrieval и локальный read-only MCP server — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
 - **v4** ✅ - node-link JSON/GraphML + самодостаточный offline HTML с картой сообществ/топиков, таймлайном и ego-графом документов (см. [docs/visualization.md](docs/visualization.md) и [ADR 0008](docs/adr/0008-adopt-offline-visualization-and-graph-export.md)).
-- **v5** - writer/research workflow поверх базы знаний.
+- **v5** 🟡 - writer/research workflow находится в design phase: Feature 007 проектирует immutable research dossier, chunk citations и проверяемый file round-trip с внешним writing-agent; runtime ещё не реализован.
 
 Подробнее: [docs/roadmap.md](docs/roadmap.md).
