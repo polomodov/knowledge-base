@@ -17,7 +17,7 @@
 
 ## 2. Visibility-scoped retrieval без breaking change
 
-**Decision**: internal retrieval helpers получают explicit `ResearchVisibility` (`published_only` / `published_and_drafts`). Legacy CLI/MCP вызовы продолжают не передавать scope и сохраняют текущую семантику. V5 применяет scope в AQL до ranking/dedup, при vector hydration, related expansion и derived grouping.
+**Decision**: новые V5 helpers в `research_retrieval.py` требуют explicit `ResearchVisibility` (`published_only` / `published_and_drafts`) и возвращают exact multi-chunk evidence candidates. Existing helpers в `retrieval.py` и вызывающие их legacy CLI/MCP surfaces не меняются и сохраняют текущую семантику. V5 применяет scope в собственных AQL queries до ranking/dedup, при vector hydration, related expansion и derived grouping.
 
 **Rationale**: post-filter top-K не устраняет влияние draft на ranking и graph expansion. Глобальная смена default сломала бы зафиксированное поведение существующих read surfaces. V5 нужен собственный disclosure boundary, потому что handoff покидает доверенную DB/CLI зону.
 

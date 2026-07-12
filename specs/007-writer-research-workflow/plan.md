@@ -14,7 +14,7 @@ V5 добавляет локальный provenance-first workflow поверх 
 
 **Language/Version**: Python `>=3.12`; JSON Schema 2020-12 как документируемый wire contract; Markdown как человекочитаемая проекция.
 
-**Primary Dependencies**: Python stdlib и существующие модули проекта (`Settings`, `ArangoClient`, `KnowledgeRepository`, embedding/retrieval helpers). Новых обязательных runtime dependencies нет; optional `mcp` extra не меняется.
+**Primary Dependencies**: Python stdlib и существующие модули проекта (`Settings`, `ArangoClient`, `KnowledgeRepository`, embedding primitives). Новых обязательных runtime dependencies нет; optional `mcp` extra не меняется. JSON Schema validation используется только в test/dev workflow через прямую dev dependency; установленный runtime выполняет эквивалентный version-dispatched strict parsing вручную и не загружает schemas из `specs/`.
 
 **Storage**: ArangoDB только для read queries; immutable directory packages под `data/generated/research/` для dossier revisions, handoffs и imported drafts/summaries. Explicit custom output root разрешён с unsafe-location warning и отдельным location acknowledgement; external-disclosure acknowledgement остаётся независимым handoff gate. Новые Arango collections/edges/indexes не создаются.
 
@@ -104,7 +104,7 @@ docs/
 
 ## Design Sequence
 
-1. **Scoped evidence retrieval**: ввести internal `ResearchVisibility`, visibility-aware text/vector/related queries и exact chunk hydration. Legacy calls получают прежний default `None`; V5 всегда передаёт explicit status scope.
+1. **Scoped evidence retrieval**: реализовать в новом `research_retrieval.py` собственные chunk-level text/vector/related queries и exact hydration, требующие explicit `ResearchVisibility`. Existing `retrieval.py`, CLI search и MCP calls не меняются: их document-level result envelopes и visibility semantics не используются как V5 evidence API.
 2. **Deterministic dossier build**: объединить lexical/semantic chunk scores, отделить leads от evidence, применить per-document caps и round-robin diversity с явными tie-breaks; построить bounded candidate pool и selected evidence.
 3. **Immutable artifact layer**: canonical JSON, non-circular digest/ID projections, strict parsers, Markdown renderer, generated-zone classifier, owner-only permissions, symlink refusal, temporary-directory + atomic-rename publisher и dossier validation.
 4. **Curation revisions**: include/exclude/pin только по разрешимому candidate pool, parent lineage, immutable new revision, stable evidence IDs и новый content digest.
@@ -114,7 +114,7 @@ docs/
 ## Validation Strategy
 
 - Pure tests фиксируют canonical serialization, collision handling, stable citation IDs, content digests, deterministic ordering, pin/exclude/include semantics и immutable parent behavior.
-- Contract fixtures проверяются и JSON Schemas, и тем же strict parser, который работает в runtime; `additionalProperties` запрещены на внешних envelopes.
+- Contract fixtures проверяются direct dev dependency `jsonschema` по schemas из `specs/` и тем же ручным strict parser, который работает в stdlib-only runtime; `additionalProperties` запрещены на внешних envelopes, а schemas не включаются в installed wheel.
 - Integration corpus содержит published + draft документы, related edges и tainted community. Тест доказывает, что draft не влияет на V5 candidates/context без opt-in и появляется только с opt-in.
 - Каждый citation сверяется с текущими document/chunk records, `normalized_whitespace_v1` offsets, excerpt hash, chunk ownership и allowlisted provenance edges.
 - Counts/hashes всех Arango collections до и после build/validate/curate/handoff/import совпадают.
