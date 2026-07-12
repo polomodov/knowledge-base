@@ -106,14 +106,21 @@ def semantic_search(
     effective_dimension = embedder.dimension
     model = embedder.model
     ranked = _vector_ranked(repository, query_vector, limit=limit, source_key=source_key, model=model)
-    if ranked is None:
+    used_fallback = ranked is None
+    if used_fallback:
         # Fallback: full-scan cosine in Python. Used when the ANN index is unavailable,
         # the embedding dimension differs from the index, or a source filter is set (the
-        # vector index cannot be combined with a filter).
+        # vector index cannot be combined with a filter). Always reported as degraded so
+        # callers do not treat O(N) Python cosine as ANN.
         chunks = _semantic_candidate_chunks(repository, dimension=effective_dimension, source_key=source_key, model=model)
         if not chunks:
             if source_key is not None:
-                return {"query": query, "mode": "semantic", "status": "ok", "results": []}
+                return {
+                    "query": query,
+                    "mode": "semantic",
+                    "status": "ok",
+                    "results": [],
+                }
             return {
                 "query": query,
                 "mode": "semantic",
@@ -135,7 +142,15 @@ def semantic_search(
         ranked = _dedup_best_by_document(scored)
 
     gated = _gate_by_similarity(ranked, min_similarity)
-    return {"query": query, "mode": "semantic", "status": "ok", "results": _hydrate_semantic(repository, gated[:limit])}
+    payload: dict[str, Any] = {
+        "query": query,
+        "mode": "semantic",
+        "status": "degraded" if used_fallback else "ok",
+        "results": _hydrate_semantic(repository, gated[:limit]),
+    }
+    if used_fallback:
+        payload["degraded_components"] = ["vector"]
+    return payload
 
 
 def _gate_by_similarity(ranked: list[dict[str, Any]], min_similarity: float) -> list[dict[str, Any]]:

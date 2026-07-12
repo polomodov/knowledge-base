@@ -583,7 +583,9 @@ def build_dossier(
     effective_request = request if isinstance(request, ResearchRequest) else ResearchRequest(**dict(request))
     try:
         lexical_rows = lexical_chunk_candidates(repository, effective_request)
-        semantic_rows = semantic_chunk_candidates(repository, effective_request, provider=provider)
+        semantic_rows, semantic_warnings = semantic_chunk_candidates(
+            repository, effective_request, provider=provider
+        )
     except (ArangoError, ResearchRetrievalError) as error:
         raise DossierBuildError("required dossier evidence retrieval failed") from error
 
@@ -622,7 +624,7 @@ def build_dossier(
             corpus_context=corpus_context,
             derived_context={"topics": (), "leads": ()},
             includes_drafts=effective_request.includes_drafts,
-            warnings=_stable_unique((*informational_warnings, *context_warnings)),
+            warnings=_stable_unique((*informational_warnings, *context_warnings, *semantic_warnings)),
         )
 
     document_keys = _stable_unique(citation.document_key for citation in selected_citations)
@@ -657,7 +659,7 @@ def build_dossier(
         warning=_COMMUNITY_WARNING,
     )
     optional_warnings = tuple(warning for warning in (topic_warning, related_warning, community_warning) if warning is not None)
-    degradation_warnings = _stable_unique((*context_warnings, *optional_warnings))
+    degradation_warnings = _stable_unique((*context_warnings, *optional_warnings, *semantic_warnings))
     warnings = _stable_unique((*informational_warnings, *degradation_warnings))
     leads = (
         *({**row, "kind": "related_chunk"} for row in related_rows),

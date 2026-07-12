@@ -19,6 +19,8 @@ _MAX_OVERFETCH_FACTOR = 10
 _MAX_LEAD_LIMIT = 150
 _INDEX_TARGETS = ("embeddings", "related", "communities")
 _OPTIONAL_CONTEXT_WARNING = "optional corpus/index freshness context is unavailable"
+_SEMANTIC_ANN_FALLBACK_WARNING = "semantic_ann_unavailable_used_exact_rescore_fallback"
+
 _PROVENANCE_OWNERSHIP_ERROR = "provenance ownership mismatch in hydrated research chunk"
 _CURRENT_CITATION_QUERY_ERROR = "current citation hydration query failed"
 _CURRENT_CITATION_ENVELOPE_ERROR = "current citation hydration returned an invalid result envelope"
@@ -180,8 +182,12 @@ def semantic_chunk_candidates(
     *,
     provider: EmbeddingProvider,
     overfetch_factor: int = 4,
-) -> list[JsonObject]:
-    """Discover with bounded ANN, then scope, hydrate and exact-rescore chunks."""
+) -> tuple[list[JsonObject], tuple[str, ...]]:
+    """Discover with bounded ANN, then scope, hydrate and exact-rescore chunks.
+
+    Returns ``(rows, warnings)``. When pre-filtered ANN is unavailable, falls back to a
+    scoped exact cosine rescore and reports ``semantic_ann_unavailable_used_exact_rescore_fallback``.
+    """
     if isinstance(overfetch_factor, bool) or not 1 <= overfetch_factor <= _MAX_OVERFETCH_FACTOR:
         raise ValueError(f"overfetch_factor must be between 1 and {_MAX_OVERFETCH_FACTOR}")
 
@@ -190,13 +196,14 @@ def semantic_chunk_candidates(
     if candidate_limit is None:
         raise ResearchRetrievalError("research request is missing its effective candidate limit")
     overfetch_limit = candidate_limit * overfetch_factor
-    ann_rows = _semantic_discovery(
+    ann_rows, used_fallback = _semantic_discovery(
         repository,
         request,
         query_vector=query_vector,
         embedding_model=provider.model,
         overfetch_limit=overfetch_limit,
     )
+    warnings = (_SEMANTIC_ANN_FALLBACK_WARNING,) if used_fallback else ()
     chunk_keys = _candidate_chunk_keys(ann_rows)
     hydrated = hydrate_chunk_candidates(repository, chunk_keys, request)
     threshold = float(repository.client.settings.retrieval_min_similarity)
@@ -216,7 +223,7 @@ def semantic_chunk_candidates(
             scored.append({**row, "score_components": {"lexical": None, "vector": score}})
 
     scored.sort(key=_semantic_sort_key)
-    return scored[:candidate_limit]
+    return scored[:candidate_limit], warnings
 
 
 def hydrate_chunk_candidates(
@@ -628,7 +635,7 @@ def _semantic_discovery(
     query_vector: list[float],
     embedding_model: str,
     overfetch_limit: int,
-) -> list[Any]:
+) -> tuple[list[Any], bool]:
     bind_vars = {
         **_scope_bind_vars(request),
         "query_embedding": query_vector,
@@ -636,7 +643,7 @@ def _semantic_discovery(
         "overfetch_limit": overfetch_limit,
     }
     try:
-        return repository.client.aql(
+        rows = repository.client.aql(
             """
             /* research:semantic_chunk_candidates */
             FOR chunk IN chunks
@@ -657,11 +664,34 @@ def _semantic_discovery(
             """,
             bind_vars,
         )
+        return rows, False
     except ArangoError:
         # ArangoDB before 3.12.6 and some vector-index plans reject pre-filtered
         # APPROX_NEAR_COSINE queries. Never fall back to an unscoped ANN result:
-        # take a deterministic, bounded scoped window and exact-rescore it in Python.
-        return repository.client.aql(
+        # exact-rescore a scoped batch in Python and let the caller mark degraded.
+        return _semantic_fallback_exact_window(
+            repository,
+            request,
+            query_vector=query_vector,
+            embedding_model=embedding_model,
+            overfetch_limit=overfetch_limit,
+        ), True
+
+
+def _semantic_fallback_exact_window(
+    repository: KnowledgeRepository,
+    request: ResearchRequest,
+    *,
+    query_vector: list[float],
+    embedding_model: str,
+    overfetch_limit: int,
+    batch_size: int = 500,
+) -> list[Any]:
+    """Load scoped embeddings in batches, exact-cosine rank, keep top overfetch_limit."""
+    scored: list[tuple[float, str]] = []
+    offset = 0
+    while True:
+        batch = repository.client.aql(
             """
             /* research:scoped_semantic_fallback */
             FOR chunk IN chunks
@@ -674,18 +704,38 @@ def _semantic_discovery(
               FILTER @published_from == null OR doc.published_at >= @published_from
               FILTER @published_to_exclusive == null OR doc.published_at < @published_to_exclusive
               SORT chunk._key ASC
-              LIMIT @overfetch_limit
+              LIMIT @offset, @batch_size
               RETURN {
                 chunk_key: chunk._key,
-                approximate_score: null
+                embedding: chunk.embedding
               }
             """,
             {
                 **_scope_bind_vars(request),
                 "embedding_model": embedding_model,
-                "overfetch_limit": overfetch_limit,
+                "offset": offset,
+                "batch_size": batch_size,
             },
         )
+        if not batch:
+            break
+        for row in batch:
+            if not isinstance(row, Mapping):
+                continue
+            key = row.get("chunk_key")
+            embedding = row.get("embedding")
+            if not isinstance(key, str) or not isinstance(embedding, list):
+                continue
+            try:
+                vector = _numeric_vector(embedding, expected_dimension=len(query_vector))
+            except ResearchRetrievalError:
+                continue
+            scored.append((cosine_similarity(query_vector, vector), key))
+        if len(batch) < batch_size:
+            break
+        offset += batch_size
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [{"chunk_key": key, "approximate_score": score} for score, key in scored[:overfetch_limit]]
 
 
 def _scope_bind_vars(request: ResearchRequest) -> JsonObject:
