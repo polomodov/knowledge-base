@@ -104,7 +104,7 @@
 - черновики и summaries в `generated`;
 - проверка, что generated outputs отделены от исходной базы.
 
-Проектирование V5 ведётся как Spec Kit feature [007 — Writer/Research Workflow](../specs/007-writer-research-workflow/spec.md). Принятый design direction: chunk-level citations, immutable file-first dossier revisions, ручной versioned round-trip с внешним writing-agent и локальная structural validation возвращённого writing-output package с `output_kind=draft|summary`; MCP сохраняется read-only. V5 завершается только после четырёх записанных independent acceptance sections: dossier/citation/curation, `draft`, `summary` и privacy/path safety. Технический план и контракты — в [plan.md](../specs/007-writer-research-workflow/plan.md), архитектурная граница предложена в [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md). Реализация ещё не начата.
+Проектирование V5 ведётся как Spec Kit feature [007 — Writer/Research Workflow](../specs/007-writer-research-workflow/spec.md). Принятый design direction: chunk-level citations, immutable file-first dossier revisions, ручной versioned round-trip с внешним writing-agent и локальная structural validation возвращённого writing-output package с `output_kind=draft|summary`; MCP сохраняется read-only. V5 завершается только после четырёх записанных independent acceptance sections: dossier/citation/curation, `draft`, `summary` и privacy/path safety. Технический план и контракты — в [plan.md](../specs/007-writer-research-workflow/plan.md), архитектурная граница зафиксирована в принятом [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md). Реализация ещё не начата.
 
 ## Текущий статус
 

@@ -136,7 +136,7 @@ Default output root проверяется без follow symlinks; новые pa
 
 ## 11. ADR boundary
 
-**Decision**: до реализации принять новый ADR 0010 о provenance-gated writer/research file workflow. Он фиксирует citation identity, immutable generated revisions, V5-only visibility, tainted context policy, external-agent round-trip и structural-vs-factual validation. ADR 0004–0008 не supersede.
+**Decision**: ADR 0010 о provenance-gated writer/research file workflow принят до реализации. Он фиксирует citation identity, immutable generated revisions, V5-only visibility, tainted context policy, external-agent round-trip и structural-vs-factual validation. ADR 0004–0008 не supersede.
 
 **Rationale**: решения меняют долговременные privacy, provenance и generated-output contracts, которые будущему участнику нужно понимать по причинам, а не только по diff.
 

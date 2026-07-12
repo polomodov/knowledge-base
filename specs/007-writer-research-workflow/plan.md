@@ -43,9 +43,9 @@ V5 добавляет локальный provenance-first workflow поверх 
 | Воспроизводимость | Canonical content digest, schema versions, request/settings/freshness metadata и deterministic tie-breaks | PASS |
 | MCP read-only boundary | Ни одного MCP write-tool; обмен с writing-agent только через files и локальный CLI | PASS |
 | Соразмерность зависимостей | Stdlib-only runtime; новые модули малы и независимо тестируются | PASS |
-| Архитектурные решения имеют принятый ADR | [ADR 0010](../../docs/adr/0010-adopt-provenance-gated-writer-research-file-workflow.md) фиксирует V5 trust/data/citation boundary, но пока имеет статус `proposed` | PENDING — принять до implementation |
+| Архитектурные решения имеют принятый ADR | Принятый [ADR 0010](../../docs/adr/0010-adopt-provenance-gated-writer-research-file-workflow.md) фиксирует V5 trust/data/citation boundary | PASS |
 
-Post-design re-check: data model, schemas and CLI contract ниже не вводят canonical writes, network/model calls или глобальное изменение visibility. Все инвариантные gates проходят; acceptance ADR 0010 остаётся явным pre-implementation gate.
+Post-design re-check: data model, schemas and CLI contract ниже не вводят canonical writes, network/model calls или глобальное изменение visibility. Все gates проходят; ADR 0010 принят до начала implementation.
 
 ## Project Structure
 

@@ -5,7 +5,7 @@
   "id": "0010",
   "titleRu": "Принять provenance-gated файловый writer/research workflow",
   "titleEn": "Adopt provenance-gated writer/research file workflow",
-  "status": "proposed",
+  "status": "accepted",
   "date": "2026-07-12",
   "deciders": [
     "knowledge-base maintainer"
