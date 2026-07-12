@@ -6,7 +6,14 @@
 
 Это персональная база знаний из собственных источников: канала "Книжный куб", Medium-блога и других будущих архивов. Проект предназначен для поиска, визуализации, исследования и помощи при написании постов, статей и книг.
 
-Сейчас репозиторий находится на ранней стадии. Не считайте, что ingest, storage, search, RAG или frontend уже реализованы, пока соответствующий код явно не появился в репозитории.
+**Текущая зрелость (не путать с «ранней стадией»):**
+
+- **v1–v2** — реализованы: ArangoDB pipeline, fixture и source adapters (`tellmeabout-tech`, `medium-export`, `book-cube`, `book-cube-archive`).
+- **v3** — реализованы: BM25/semantic/hybrid search, GraphRAG local/global, embeddings, derived indexes, read-only MCP (`kb-mcp`).
+- **v4** — реализованы: `kb export graph`, `kb viz build` (offline HTML).
+- **v5** — runtime и automated gates готовы (`kb research build|validate|curate|handoff|import-output`); **независимая приёмка T050–T053 ещё не проводилась** (`acceptance.md` остаётся `NOT RUN`; feature 007 не Complete).
+
+Не переimplementируйте существующие подсистемы. Перед работой читайте `README.md`, [docs/roadmap.md](docs/roadmap.md) и актуальный код в `src/knowledge_base/`. Трекер follow-up аудита: [docs/audit-followup-plan.md](docs/audit-followup-plan.md).
 
 ## Главные инварианты
 
