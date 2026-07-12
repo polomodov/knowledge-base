@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-base.local/schemas/v5/imported-writing-manifest.schema.json",
+  "title": "Knowledge Base V5 Imported Writing Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_type",
+    "writing_id",
+    "output_kind",
+    "incoming_package_digest",
+    "handoff_id",
+    "handoff_digest",
+    "dossier_key",
+    "revision_id",
+    "revision_content_digest",
+    "visibility",
+    "includes_drafts",
+    "egress_acknowledged",
+    "draft_evidence_acknowledged",
+    "source_created_at",
+    "imported_at",
+    "agent",
+    "title",
+    "content_sha256",
+    "validation",
+    "human_reviewed",
+    "warnings",
+    "files"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "artifact_type": { "const": "imported_writing" },
+    "writing_id": { "type": "string", "pattern": "^writing-[0-9a-f]{16}$" },
+    "output_kind": { "enum": ["draft", "summary"] },
+    "incoming_package_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "handoff_id": { "type": "string", "pattern": "^handoff-[0-9a-f]{16}$" },
+    "handoff_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dossier_key": { "type": "string", "pattern": "^research-[a-z0-9_-]+-[0-9a-f]{12}$" },
+    "revision_id": { "type": "string", "pattern": "^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
+    "revision_content_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "visibility": { "enum": ["published_only", "published_and_drafts"] },
+    "includes_drafts": { "type": "boolean" },
+    "egress_acknowledged": { "const": true },
+    "draft_evidence_acknowledged": { "type": "boolean" },
+    "source_created_at": { "type": "string", "format": "date-time" },
+    "imported_at": { "type": "string", "format": "date-time" },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "model", "run_id"],
+      "properties": {
+        "name": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "model": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "run_id": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] }
+      }
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+        "unsupported_sections"
+      ],
+      "properties": {
+        "schema_valid": { "const": true },
+        "package_integrity": { "const": true },
+        "dossier_current": { "const": true },
+        "citations_resolved": { "const": true },
+        "coverage_complete": { "const": true },
+        "unsupported_sections": { "type": "integer", "minimum": 0, "maximum": 200 }
+      }
+    },
+    "human_reviewed": { "const": false },
+    "warnings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "string", "maxLength": 2000 }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["output", "validation"],
+      "properties": {
+        "output": { "$ref": "#/$defs/fileDigest" },
+        "validation": { "$ref": "#/$defs/fileDigest" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "includes_drafts": { "const": true } },
+        "required": ["includes_drafts"]
+      },
+      "then": {
+        "properties": {
+          "visibility": { "const": "published_and_drafts" },
+          "draft_evidence_acknowledged": { "const": true }
+        }
+      },
+      "else": {
+        "properties": {
+          "visibility": { "const": "published_only" },
+          "draft_evidence_acknowledged": { "const": false }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "fileDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^[^/]+$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

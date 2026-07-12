@@ -1,0 +1,1187 @@
+from __future__ import annotations
+
+import hashlib
+import html
+import json
+import math
+import os
+import re
+import secrets
+import shutil
+import stat
+import tempfile
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Literal
+from urllib.parse import urlsplit, urlunsplit
+
+_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+_CITATION_ID_RE = re.compile(r"^cit-[0-9a-f]{16}$")
+_DOSSIER_KEY_RE = re.compile(r"^research-[a-z0-9_-]+-[0-9a-f]{12}$")
+_REVISION_ID_RE = re.compile(r"(?a:^rev-\d{8}T\d{6}Z-[0-9a-f]{8}$)")
+_ENTROPY_RE = re.compile(r"^[0-9a-f]{8,}$")
+_DATE_RE = re.compile(r"(?a:^\d{4}-\d{2}-\d{2}$)")
+_UTC_TIMESTAMP_RE = re.compile(r"(?a:^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$)")
+_SHORT_ID_PREFIX_RE = re.compile(r"^[a-z][a-z0-9_-]*$")
+_SCHEMA_VERSION = "1.0"
+_OUTSIDE_GENERATED_WARNING = "output_outside_generated_zone"
+_MANIFEST_FILENAME = "manifest.json"
+_DOSSIER_FILENAME = "dossier.md"
+_VALIDATION_FILENAME = "validation.json"
+_DOSSIER_PACKAGE_FILENAMES = frozenset({_MANIFEST_FILENAME, _DOSSIER_FILENAME, _VALIDATION_FILENAME})
+_UTC_OFFSET = "+00:00"
+
+_REQUEST_FIELDS = (
+    "query",
+    "source_key",
+    "published_from",
+    "published_to",
+    "visibility",
+    "document_limit",
+    "fragments_per_document",
+    "evidence_limit",
+    "candidate_limit",
+    "retrieval",
+)
+_CORPUS_CONTEXT_FIELDS = (
+    "database",
+    "built_at",
+    "embedding_model",
+    "embedding_dimension",
+    "retrieval_min_similarity",
+    "latest_import_run_key",
+    "latest_index_runs",
+    "git_revision",
+    "warnings",
+)
+_CANDIDATE_FIELDS = (
+    "citation",
+    "document_rank",
+    "fragment_rank",
+    "score",
+    "score_components",
+    "selection_state",
+    "selection_reason",
+)
+_CITATION_FIELDS = (
+    "citation_id",
+    "identity_sha256",
+    "projection_version",
+    "source_key",
+    "canonical_id",
+    "document_key",
+    "chunk_key",
+    "chunk_ordinal",
+    "char_start",
+    "char_end",
+    "offset_basis",
+    "excerpt",
+    "excerpt_sha256",
+    "title",
+    "published_at",
+    "document_status",
+    "url",
+    "raw_snapshot_key",
+    "import_run_key",
+    "captured_at",
+)
+_CURATION_FIELDS = ("operation", "citation_id", "reason", "ordinal")
+_RETRIEVAL_FIELDS = frozenset(
+    {
+        "mode",
+        "version",
+        "lexical_weight",
+        "vector_weight",
+        "min_similarity",
+        "tie_policy",
+        "overfetch_factor",
+    }
+)
+_SCORE_COMPONENT_FIELDS = frozenset({"lexical", "vector", "graph_lead"})
+_INDEX_TARGETS = frozenset({"embeddings", "related", "communities"})
+_INDEX_RUN_FIELDS = frozenset({"run_key", "started_at", "finished_at"})
+_DERIVED_ROW_FIELDS = frozenset(
+    {
+        "kind",
+        "topic_key",
+        "label",
+        "language",
+        "description",
+        "document_keys",
+        "document_statuses",
+        "document_key",
+        "chunk_key",
+        "title",
+        "document_status",
+        "source_key",
+        "published_at",
+        "weight",
+        "community_key",
+        "size",
+        "method",
+        "top_topics",
+        "summary",
+        "is_clean",
+        "score",
+        "grounded_chunk_keys",
+    }
+)
+_MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifact_type",
+        "dossier_key",
+        "revision_id",
+        "parent_revision_id",
+        "content_digest",
+        "request",
+        "corpus_context",
+        "candidate_evidence",
+        "selected_citation_ids",
+        "curation_operations",
+        "derived_context",
+        "status",
+        "includes_drafts",
+        "warnings",
+        "files",
+    }
+)
+_VALIDATION_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifact_type",
+        "target_type",
+        "target_id",
+        "target_digest",
+        "status",
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+        "human_reviewed",
+        "citations",
+        "warnings",
+        "errors",
+        "validated_at",
+    }
+)
+
+PublishStatus = Literal["created", "reused"]
+
+
+@dataclass(frozen=True, slots=True)
+class DossierPackage:
+    manifest: dict[str, Any]
+    validation: dict[str, Any]
+    markdown: str
+    files: dict[str, bytes]
+
+
+class ArtifactContractError(ValueError):
+    """A serialized artifact violates the supported wire contract."""
+
+
+class ArtifactCollisionError(FileExistsError):
+    """An immutable artifact already exists with different bytes."""
+
+
+class ShortIdCollisionError(ArtifactCollisionError):
+    """Two full digests map to the same shortened external identifier."""
+
+
+class UnsafeArtifactPathError(ValueError):
+    """An artifact path crosses a symlink or another unsafe filesystem boundary."""
+
+
+class OutputRootAcknowledgementRequired(PermissionError):
+    """A write outside data/generated requires an explicit caller acknowledgement."""
+
+
+class ShortIdRegistry:
+    """Create short IDs while retaining full digests for collision detection."""
+
+    def __init__(self, *, prefix: str, length: int = 16) -> None:
+        if not _SHORT_ID_PREFIX_RE.fullmatch(prefix):
+            raise ValueError("short ID prefix must be lowercase and filesystem-safe")
+        if not 1 <= length <= 64:
+            raise ValueError("short ID length must be between 1 and 64")
+        self.prefix = prefix
+        self.length = length
+        self._full_digest_by_id: dict[str, str] = {}
+
+    def register(self, full_digest: str) -> str:
+        if not _DIGEST_RE.fullmatch(full_digest):
+            raise ArtifactContractError("full digest must be 64 lowercase hexadecimal characters")
+        short_id = f"{self.prefix}-{full_digest[: self.length]}"
+        registered = self._full_digest_by_id.get(short_id)
+        if registered is not None and registered != full_digest:
+            raise ShortIdCollisionError(f"short ID collision for {short_id}")
+        self._full_digest_by_id[short_id] = full_digest
+        return short_id
+
+
+def canonical_json_bytes(value: Any) -> bytes:
+    """Serialize one deterministic UTF-8 JSON projection without insignificant whitespace."""
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+
+
+def canonical_sha256(value: Any) -> str:
+    return hashlib.sha256(canonical_json_bytes(value)).hexdigest()
+
+
+def parse_strict_object(
+    payload: bytes | str,
+    *,
+    artifact_type: str,
+    required_fields: Iterable[str],
+    optional_fields: Iterable[str] = (),
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Parse one bounded versioned JSON object and reject duplicate or unknown fields."""
+
+    if max_bytes < 1:
+        raise ValueError("max_bytes must be positive")
+    try:
+        encoded = payload.encode("utf-8") if isinstance(payload, str) else payload
+    except UnicodeEncodeError as error:
+        raise ArtifactContractError("artifact is not valid UTF-8") from error
+    if not isinstance(encoded, bytes):
+        raise TypeError("payload must be bytes or str")
+    if len(encoded) > max_bytes:
+        raise ArtifactContractError(f"artifact exceeds {max_bytes} byte limit")
+
+    def reject_constant(value: str) -> Any:
+        raise ArtifactContractError(f"non-finite JSON number is forbidden: {value}")
+
+    try:
+        decoded = encoded.decode("utf-8")
+        value = json.loads(
+            decoded,
+            object_pairs_hook=_object_without_duplicate_keys,
+            parse_constant=reject_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ArtifactContractError("artifact is not valid UTF-8 JSON") from error
+    if not isinstance(value, dict):
+        raise ArtifactContractError("artifact must be a JSON object")
+
+    required = {"schema_version", "artifact_type", *required_fields}
+    allowed = required | set(optional_fields)
+    unknown = sorted(set(value) - allowed)
+    missing = sorted(required - set(value))
+    if unknown:
+        raise ArtifactContractError(f"unknown artifact fields: {', '.join(unknown)}")
+    if missing:
+        raise ArtifactContractError(f"missing artifact fields: {', '.join(missing)}")
+    if value["schema_version"] != _SCHEMA_VERSION:
+        raise ArtifactContractError(f"unsupported schema_version: {value['schema_version']!r}")
+    if value["artifact_type"] != artifact_type:
+        raise ArtifactContractError(f"unexpected artifact_type: {value['artifact_type']!r}")
+    return value
+
+
+def safe_http_url(value: Any) -> str | None:
+    """Return a canonical HTTP(S) URL or null without opening or resolving it."""
+
+    if not isinstance(value, str) or not value or len(value) > 4096 or value != value.strip():
+        return None
+    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError:
+        return None
+    if scheme not in {"http", "https"} or not hostname or parsed.username is not None or parsed.password is not None:
+        return None
+    if "\\" in parsed.netloc:
+        return None
+
+    canonical_host = hostname.lower()
+    if ":" in canonical_host:
+        canonical_host = f"[{canonical_host}]"
+    netloc = canonical_host if port is None else f"{canonical_host}:{port}"
+    return urlunsplit((scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
+def validate_output_root(
+    output_root: Path,
+    *,
+    generated_root: Path,
+    acknowledge_unsafe: bool,
+) -> str | None:
+    """Classify a write root and require acknowledgement outside the generated zone."""
+
+    assert_no_symlink_components(generated_root)
+    assert_no_symlink_components(output_root)
+    output = _absolute_path(output_root)
+    generated = _absolute_path(generated_root)
+    if output.is_relative_to(generated):
+        return None
+    if not acknowledge_unsafe:
+        raise OutputRootAcknowledgementRequired(
+            f"output root {output} is outside generated zone {generated}; explicit acknowledgement is required"
+        )
+    return _OUTSIDE_GENERATED_WARNING
+
+
+def assert_no_symlink_components(path: Path) -> None:
+    """Reject a symlink in every currently existing component, including the target."""
+
+    absolute = _absolute_path(path)
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        try:
+            mode = os.lstat(current).st_mode
+        except FileNotFoundError:
+            continue
+        except NotADirectoryError as error:
+            raise UnsafeArtifactPathError(f"non-directory path component: {current}") from error
+        if stat.S_ISLNK(mode):
+            raise UnsafeArtifactPathError(f"symlink path component is forbidden: {current}")
+
+
+def publish_file_atomic(target: Path, payload: bytes) -> PublishStatus:
+    """Publish one immutable owner-only file, reusing only byte-identical content."""
+
+    if not isinstance(payload, bytes):
+        raise TypeError("payload must be bytes")
+    destination = _absolute_path(target)
+    assert_no_symlink_components(destination)
+    _ensure_owner_directory(destination.parent)
+    assert_no_symlink_components(destination)
+    if os.path.lexists(destination):
+        return _reuse_file_or_raise(destination, payload)
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+        dir=destination.parent,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        handle = os.fdopen(descriptor, "wb")
+        descriptor = -1
+        with handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            return _reuse_file_or_raise(destination, payload)
+        _fsync_directory(destination.parent)
+        return "created"
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+        _fsync_directory(destination.parent)
+
+
+def publish_directory_atomic(target: Path, files: Mapping[str, bytes]) -> PublishStatus:
+    """Publish one immutable flat directory package with owner-only files."""
+
+    validated_files = _validated_package_files(files)
+    destination = _absolute_path(target)
+    assert_no_symlink_components(destination)
+    _ensure_owner_directory(destination.parent)
+    assert_no_symlink_components(destination)
+    if os.path.lexists(destination):
+        return _reuse_directory_or_raise(destination, validated_files)
+
+    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent))
+    os.chmod(temporary, 0o700)
+    try:
+        for name, payload in sorted(validated_files.items()):
+            _write_owner_file(temporary / name, payload)
+        _fsync_directory(temporary)
+        assert_no_symlink_components(destination)
+        if os.path.lexists(destination):
+            return _reuse_directory_or_raise(destination, validated_files)
+        try:
+            os.rename(temporary, destination)
+        except OSError:
+            if os.path.lexists(destination):
+                return _reuse_directory_or_raise(destination, validated_files)
+            raise
+        _fsync_directory(destination.parent)
+        return "created"
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+            _fsync_directory(destination.parent)
+
+
+def materialize_dossier_package(
+    *,
+    request: Any,
+    corpus_context: Any,
+    candidate_evidence: Sequence[Any],
+    derived_context: Any,
+    warnings: Sequence[str] = (),
+    status: Literal["ready", "degraded"] | None = None,
+    parent_revision_id: str | None = None,
+    curation_operations: Sequence[Any] = (),
+    clock: Callable[[], str | datetime] | None = None,
+    entropy: Callable[[], str] | None = None,
+) -> DossierPackage:
+    """Build one cycle-free dossier package fully in memory before publication."""
+
+    request_projection = _project_request(request)
+    context_projection = _project_corpus_context(corpus_context)
+    candidates = [_project_candidate(value) for value in _bounded_sequence(candidate_evidence, "candidate evidence", 150)]
+    selected_ids = _selected_citation_ids(candidates)
+
+    derived_projection = _project_derived_context(derived_context)
+    operations = [
+        _project_curation_operation(value) for value in _bounded_sequence(curation_operations, "curation operations", 300)
+    ]
+    if parent_revision_id is not None and not _REVISION_ID_RE.fullmatch(parent_revision_id):
+        raise ArtifactContractError("invalid parent dossier revision identifier")
+
+    validated_at, compact_time = _clock_values(clock or _utc_now)
+    nonce = (entropy or _random_entropy)()
+    if not isinstance(nonce, str) or not _ENTROPY_RE.fullmatch(nonce):
+        raise ArtifactContractError("dossier entropy must contain at least eight lowercase hexadecimal characters")
+    revision_id = f"rev-{compact_time}-{nonce[:8]}"
+
+    supplied_warnings = _deduplicated_strings(
+        [*context_projection["warnings"], *_bounded_strings(warnings, "dossier warnings", 100, 2000)]
+    )
+    degradation_warnings = [warning for warning in supplied_warnings if warning != "draft_visibility_enabled"]
+    if status is not None and status not in {"ready", "degraded"}:
+        raise ArtifactContractError("dossier status must be ready, degraded or null")
+    includes_drafts = request_projection["visibility"] == "published_and_drafts"
+    manifest_warnings = list(supplied_warnings)
+    if includes_drafts and "draft_visibility_enabled" not in manifest_warnings:
+        manifest_warnings.append("draft_visibility_enabled")
+    if len(manifest_warnings) > 100:
+        raise ArtifactContractError("combined dossier warnings exceed 100 items")
+    effective_status = status or ("degraded" if degradation_warnings else "ready")
+    dossier_key = _dossier_key(request_projection)
+    manifest: dict[str, Any] = {
+        "schema_version": _SCHEMA_VERSION,
+        "artifact_type": "dossier_revision",
+        "dossier_key": dossier_key,
+        "revision_id": revision_id,
+        "parent_revision_id": parent_revision_id,
+        "content_digest": "",
+        "request": request_projection,
+        "corpus_context": context_projection,
+        "candidate_evidence": candidates,
+        "selected_citation_ids": selected_ids,
+        "curation_operations": operations,
+        "derived_context": derived_projection,
+        "status": effective_status,
+        "includes_drafts": includes_drafts,
+        "warnings": manifest_warnings,
+        "files": {},
+    }
+    manifest["content_digest"] = canonical_sha256(_dossier_content_projection(manifest))
+
+    markdown = _render_dossier_markdown(manifest)
+    validation = _initial_dossier_validation(manifest, validated_at=validated_at)
+    _validate_initial_dossier_validation(manifest, validation)
+    dossier_bytes = markdown.encode("utf-8")
+    validation_bytes = _json_file_bytes(validation)
+    manifest["files"] = {
+        "dossier": _file_digest(_DOSSIER_FILENAME, dossier_bytes),
+        "validation": _file_digest(_VALIDATION_FILENAME, validation_bytes),
+    }
+    files = {
+        _MANIFEST_FILENAME: _json_file_bytes(manifest),
+        _DOSSIER_FILENAME: dossier_bytes,
+        _VALIDATION_FILENAME: validation_bytes,
+    }
+    package = DossierPackage(manifest=manifest, validation=validation, markdown=markdown, files=files)
+    _validate_dossier_package(package)
+    return package
+
+
+def publish_dossier_package(output_root: Path, package: DossierPackage) -> PublishStatus:
+    """Atomically publish one immutable three-file dossier revision."""
+
+    _validate_dossier_package(package)
+    dossier_key = package.manifest["dossier_key"]
+    revision_id = package.manifest["revision_id"]
+    target = output_root / dossier_key / "revisions" / revision_id
+    return publish_directory_atomic(target, package.files)
+
+
+def _selected_citation_ids(candidates: Sequence[Mapping[str, Any]]) -> list[str]:
+    selected_ids = [
+        candidate["citation"]["citation_id"] for candidate in candidates if candidate["selection_state"] in {"selected", "pinned"}
+    ]
+    if not selected_ids:
+        raise ArtifactContractError("dossier requires at least one selected evidence citation")
+    if len(selected_ids) > 100 or len(selected_ids) != len(set(selected_ids)):
+        raise ArtifactContractError("selected evidence must contain at most 100 unique citations")
+    return selected_ids
+
+
+def _project_request(value: Any) -> dict[str, Any]:
+    raw = _project_fields(value, _REQUEST_FIELDS, "research request")
+    query = raw["query"]
+    if not isinstance(query, str) or not 1 <= len(query.strip()) <= 1000:
+        raise ArtifactContractError("research request query must contain 1..1000 characters")
+    source_key = raw["source_key"]
+    if source_key is not None and (not isinstance(source_key, str) or not source_key):
+        raise ArtifactContractError("research request source_key must be a non-empty string or null")
+    visibility = _enum_value(raw["visibility"])
+    if visibility not in {"published_only", "published_and_drafts"}:
+        raise ArtifactContractError("unsupported research request visibility")
+    retrieval = _allowlisted_mapping(raw["retrieval"], _RETRIEVAL_FIELDS, "research retrieval")
+    published_from = _calendar_date(raw["published_from"], "published_from")
+    published_to = _calendar_date(raw["published_to"], "published_to")
+    if published_from is not None and published_to is not None and published_from > published_to:
+        raise ArtifactContractError("published_from must not be later than published_to")
+    projection = {
+        "query": query.strip(),
+        "source_key": source_key,
+        "published_from": published_from.isoformat() if published_from is not None else None,
+        "published_to": published_to.isoformat() if published_to is not None else None,
+        "visibility": visibility,
+        "document_limit": _bounded_integer(raw["document_limit"], "document_limit", 1, 50),
+        "fragments_per_document": _bounded_integer(raw["fragments_per_document"], "fragments_per_document", 1, 5),
+        "evidence_limit": _bounded_integer(raw["evidence_limit"], "evidence_limit", 1, 100),
+        "candidate_limit": _bounded_integer(raw["candidate_limit"], "candidate_limit", 1, 150),
+        "retrieval": retrieval,
+    }
+    if projection["evidence_limit"] > projection["candidate_limit"]:
+        raise ArtifactContractError("evidence_limit must not exceed candidate_limit")
+    return projection
+
+
+def _project_corpus_context(value: Any) -> dict[str, Any]:
+    raw = _project_fields(value, _CORPUS_CONTEXT_FIELDS, "corpus context")
+    database = raw["database"]
+    model = raw["embedding_model"]
+    if not isinstance(database, str) or not database or not isinstance(model, str) or not model:
+        raise ArtifactContractError("corpus context database and embedding model must be non-empty strings")
+    similarity = raw["retrieval_min_similarity"]
+    if isinstance(similarity, bool) or not isinstance(similarity, int | float) or not math.isfinite(similarity):
+        raise ArtifactContractError("corpus context similarity must be a finite number")
+    if not -1 <= similarity <= 1:
+        raise ArtifactContractError("corpus context similarity must be within -1..1")
+    projection = {
+        "database": database,
+        "built_at": _timestamp(raw["built_at"], "corpus context built_at"),
+        "embedding_model": model,
+        "embedding_dimension": _bounded_integer(raw["embedding_dimension"], "embedding_dimension", 1),
+        "retrieval_min_similarity": float(similarity),
+        "latest_import_run_key": _optional_string(raw["latest_import_run_key"], "latest_import_run_key"),
+        "latest_index_runs": _project_index_runs(raw["latest_index_runs"]),
+        "git_revision": _optional_string(raw["git_revision"], "git_revision"),
+        "warnings": _bounded_strings(raw["warnings"], "corpus context warnings", 100, 2000),
+    }
+    return projection
+
+
+def _project_index_runs(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ArtifactContractError("latest_index_runs must be an object")
+    unknown = set(value) - _INDEX_TARGETS
+    if unknown:
+        raise ArtifactContractError(f"unknown index run targets: {', '.join(sorted(unknown))}")
+    result: dict[str, Any] = {}
+    for target, raw_run in value.items():
+        run = _allowlisted_mapping(raw_run, _INDEX_RUN_FIELDS, f"{target} index run", require_all=False)
+        result[target] = run
+    return result
+
+
+def _project_candidate(value: Any) -> dict[str, Any]:
+    raw = _project_fields(value, _CANDIDATE_FIELDS, "evidence candidate")
+    score = raw["score"]
+    if isinstance(score, bool) or not isinstance(score, int | float) or not math.isfinite(score):
+        raise ArtifactContractError("evidence candidate score must be finite")
+    components = _allowlisted_mapping(raw["score_components"], _SCORE_COMPONENT_FIELDS, "score components")
+    for component in components.values():
+        if component is not None and (
+            isinstance(component, bool) or not isinstance(component, int | float) or not math.isfinite(component)
+        ):
+            raise ArtifactContractError("score components must be finite numbers or null")
+    selection_state = _enum_value(raw["selection_state"])
+    if selection_state not in {"candidate", "selected", "pinned", "excluded"}:
+        raise ArtifactContractError("unsupported evidence selection state")
+    reason = raw["selection_reason"]
+    if not isinstance(reason, str) or not 1 <= len(reason) <= 500:
+        raise ArtifactContractError("selection reason must contain 1..500 characters")
+    return {
+        "citation": _project_citation(raw["citation"]),
+        "document_rank": _bounded_integer(raw["document_rank"], "document_rank", 1),
+        "fragment_rank": _bounded_integer(raw["fragment_rank"], "fragment_rank", 1),
+        "score": float(score),
+        "score_components": components,
+        "selection_state": selection_state,
+        "selection_reason": reason,
+    }
+
+
+def _project_citation(value: Any) -> dict[str, Any]:
+    raw = _project_fields(value, _CITATION_FIELDS, "citation")
+    citation = {field: _copy_json(_enum_value(raw[field])) for field in _CITATION_FIELDS}
+    citation_id = citation["citation_id"]
+    identity = citation["identity_sha256"]
+    excerpt = citation["excerpt"]
+    excerpt_digest = citation["excerpt_sha256"]
+    _validate_citation_identifiers(citation_id, identity)
+    _bounded_string(citation["source_key"], "citation source_key", 1, 256)
+    _bounded_string(citation["canonical_id"], "citation canonical_id", 1, 1024)
+    _bounded_string(citation["document_key"], "citation document_key", 1, 256)
+    _bounded_string(citation["chunk_key"], "citation chunk_key", 1, 256)
+    citation["chunk_ordinal"] = _bounded_integer(citation["chunk_ordinal"], "citation chunk_ordinal", 0)
+    _bounded_string(citation["title"], "citation title", 0, 2000)
+    citation["published_at"] = _optional_timestamp(citation["published_at"], "citation published_at")
+    citation["captured_at"] = _optional_timestamp(citation["captured_at"], "citation captured_at")
+    citation["raw_snapshot_key"] = _optional_bounded_string(citation["raw_snapshot_key"], "citation raw_snapshot_key", 256)
+    citation["import_run_key"] = _optional_bounded_string(citation["import_run_key"], "citation import_run_key", 256)
+    if not isinstance(excerpt, str) or not 1 <= len(excerpt) <= 20_000:
+        raise ArtifactContractError("citation excerpt must contain 1..20000 characters")
+    if not isinstance(excerpt_digest, str) or excerpt_digest != hashlib.sha256(excerpt.encode()).hexdigest():
+        raise ArtifactContractError("citation excerpt digest does not match exact excerpt")
+    start = _bounded_integer(citation["char_start"], "citation char_start", 0)
+    end = _bounded_integer(citation["char_end"], "citation char_end", 1)
+    if start >= end or end - start != len(excerpt):
+        raise ArtifactContractError("citation offsets must cover the exact excerpt")
+    if citation["projection_version"] != "citation-v1" or citation["offset_basis"] != "normalized_whitespace_v1":
+        raise ArtifactContractError("unsupported citation projection")
+    if citation["document_status"] not in {"published", "draft"}:
+        raise ArtifactContractError("unsupported citation document status")
+    if citation["url"] is not None and safe_http_url(citation["url"]) != citation["url"]:
+        raise ArtifactContractError("citation URL must be canonical credential-free HTTP(S)")
+    identity_projection = {
+        "projection_version": citation["projection_version"],
+        "source_key": citation["source_key"],
+        "canonical_id": citation["canonical_id"],
+        "document_key": citation["document_key"],
+        "chunk_key": citation["chunk_key"],
+        "char_start": start,
+        "char_end": end,
+        "offset_basis": citation["offset_basis"],
+        "excerpt_sha256": excerpt_digest,
+    }
+    expected_identity = canonical_sha256(identity_projection)
+    if identity != expected_identity or citation_id != f"cit-{expected_identity[:16]}":
+        raise ArtifactContractError("citation identity does not match its exact projection")
+    return citation
+
+
+def _validate_citation_identifiers(citation_id: Any, identity: Any) -> None:
+    if not isinstance(citation_id, str) or not _CITATION_ID_RE.fullmatch(citation_id):
+        raise ArtifactContractError("invalid citation_id")
+    if not isinstance(identity, str) or not _DIGEST_RE.fullmatch(identity):
+        raise ArtifactContractError("invalid citation identity digest")
+
+
+def _project_curation_operation(value: Any) -> dict[str, Any]:
+    raw = _project_fields(value, _CURATION_FIELDS, "curation operation")
+    operation = _enum_value(raw["operation"])
+    if operation not in {"include", "exclude", "pin"}:
+        raise ArtifactContractError("unsupported curation operation")
+    citation_id = raw["citation_id"]
+    if not isinstance(citation_id, str) or not _CITATION_ID_RE.fullmatch(citation_id):
+        raise ArtifactContractError("invalid curation citation_id")
+    reason = raw["reason"]
+    if reason is not None and (not isinstance(reason, str) or len(reason) > 500):
+        raise ArtifactContractError("curation reason must contain at most 500 characters")
+    return {
+        "operation": operation,
+        "citation_id": citation_id,
+        "reason": reason,
+        "ordinal": _bounded_integer(raw["ordinal"], "curation ordinal", 0),
+    }
+
+
+def _project_derived_context(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {"topics", "leads"}:
+        raise ArtifactContractError("derived context must contain only topics and leads")
+    projection: dict[str, Any] = {}
+    for name in ("topics", "leads"):
+        rows = _bounded_sequence(value[name], f"derived context {name}", 100)
+        projection[name] = [
+            _allowlisted_mapping(row, _DERIVED_ROW_FIELDS, f"derived context {name} row", require_all=False) for row in rows
+        ]
+    return projection
+
+
+def _dossier_key(request: Mapping[str, Any]) -> str:
+    slug = re.sub(r"[^a-z0-9_-]+", "-", str(request["query"]).strip().lower()).strip("-_") or "topic"
+    return f"research-{slug[:64]}-{canonical_sha256(request)[:12]}"
+
+
+def _dossier_content_projection(manifest: Mapping[str, Any]) -> dict[str, Any]:
+    projection = _copy_json(manifest)
+    assert isinstance(projection, dict)
+    for field in ("content_digest", "revision_id", "parent_revision_id", "files"):
+        projection.pop(field, None)
+    context = projection["corpus_context"]
+    for field in ("built_at", "latest_import_run_key", "latest_index_runs"):
+        context.pop(field, None)
+    for candidate in projection["candidate_evidence"]:
+        candidate["citation"].pop("import_run_key", None)
+    return projection
+
+
+def _render_dossier_markdown(manifest: Mapping[str, Any]) -> str:
+    selected = set(manifest["selected_citation_ids"])
+    citations = {
+        candidate["citation"]["citation_id"]: candidate["citation"]
+        for candidate in manifest["candidate_evidence"]
+        if candidate["citation"]["citation_id"] in selected
+    }
+    lines = [
+        "# Исследовательское досье",
+        "",
+        f"Запрос: {_safe_markdown_inline(manifest['request']['query'])}",
+        "",
+    ]
+    if "draft_visibility_enabled" in manifest["warnings"]:
+        detail = ": в эту ревизию явно включены черновики." if manifest["includes_drafts"] else ""
+        lines.extend((f"> ⚠️ draft_visibility_enabled{detail}", ""))
+    for warning in manifest["warnings"]:
+        if warning == "draft_visibility_enabled":
+            continue
+        lines.extend((f"> Предупреждение: {_safe_markdown_inline(warning)}", ""))
+    for citation_id in manifest["selected_citation_ids"]:
+        citation = citations[citation_id]
+        lines.extend(
+            (
+                f"## {citation_id}",
+                "",
+                f"Заголовок: {_safe_markdown_inline(citation['title'])}",
+                f"Источник: {_safe_markdown_inline(citation['source_key'])}",
+                f"Статус: {_safe_markdown_inline(citation['document_status'])}",
+                "",
+                "Фрагмент:",
+                *_safe_markdown_quote(citation["excerpt"]),
+                "",
+            )
+        )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _initial_dossier_validation(manifest: Mapping[str, Any], *, validated_at: str) -> dict[str, Any]:
+    warnings = list(manifest["warnings"])
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "artifact_type": "validation_result",
+        "target_type": "dossier_revision",
+        "target_id": manifest["revision_id"],
+        "target_digest": manifest["content_digest"],
+        "status": "valid_with_warnings" if warnings else "valid",
+        "schema_valid": True,
+        "package_integrity": True,
+        "dossier_current": True,
+        "citations_resolved": True,
+        "coverage_complete": True,
+        "human_reviewed": False,
+        "citations": [
+            {"citation_id": citation_id, "status": "valid", "reason": None} for citation_id in manifest["selected_citation_ids"]
+        ],
+        "warnings": warnings,
+        "errors": [],
+        "validated_at": validated_at,
+    }
+
+
+def _validate_initial_dossier_validation(
+    manifest: Mapping[str, Any],
+    validation: Mapping[str, Any],
+) -> None:
+    warnings = manifest.get("warnings")
+    if not isinstance(warnings, list) or any(not isinstance(value, str) for value in warnings):
+        raise ArtifactContractError("dossier warnings must be an array of strings")
+    if manifest.get("status") not in {"ready", "degraded"}:
+        raise ArtifactContractError("final dossier status must be ready or degraded")
+    if manifest.get("status") == "degraded" and not warnings:
+        raise ArtifactContractError("degraded dossier status requires an explanatory warning")
+    includes_drafts = manifest.get("includes_drafts") is True
+    if includes_drafts != (manifest.get("request", {}).get("visibility") == "published_and_drafts"):
+        raise ArtifactContractError("dossier draft flag must mirror request visibility")
+    if includes_drafts and "draft_visibility_enabled" not in warnings:
+        raise ArtifactContractError("draft visibility warning is required for draft scope")
+
+    expected_citations = [
+        {"citation_id": citation_id, "status": "valid", "reason": None} for citation_id in manifest["selected_citation_ids"]
+    ]
+    expected_status = "valid_with_warnings" if warnings else "valid"
+    claims = ("schema_valid", "package_integrity", "dossier_current", "citations_resolved", "coverage_complete")
+    if (
+        validation.get("schema_version") != _SCHEMA_VERSION
+        or validation.get("artifact_type") != "validation_result"
+        or validation.get("target_type") != "dossier_revision"
+        or validation.get("target_id") != manifest.get("revision_id")
+        or validation.get("target_digest") != manifest.get("content_digest")
+        or validation.get("status") != expected_status
+        or validation.get("warnings") != warnings
+        or validation.get("errors") != []
+        or validation.get("citations") != expected_citations
+        or validation.get("human_reviewed") is not False
+        or any(validation.get(claim) is not True for claim in claims)
+    ):
+        raise ArtifactContractError("initial dossier validation claims are inconsistent")
+    _timestamp(validation.get("validated_at"), "initial validation timestamp")
+
+
+def _validate_dossier_package(package: DossierPackage) -> None:
+    _validate_dossier_package_structure(package)
+    try:
+        serialized_manifest = json.loads(package.files[_MANIFEST_FILENAME])
+        serialized_validation = json.loads(package.files[_VALIDATION_FILENAME])
+        serialized_markdown = package.files[_DOSSIER_FILENAME].decode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ArtifactContractError("dossier package files must be valid UTF-8 JSON/Markdown") from error
+    if serialized_manifest != package.manifest or serialized_validation != package.validation:
+        raise ArtifactContractError("dossier package object and serialized JSON disagree")
+    if serialized_markdown != package.markdown:
+        raise ArtifactContractError("dossier package object and serialized Markdown disagree")
+    expected_digest = canonical_sha256(_dossier_content_projection(package.manifest))
+    if package.manifest.get("content_digest") != expected_digest:
+        raise ArtifactContractError("dossier package content digest mismatch")
+    selected_ids = [
+        candidate["citation"]["citation_id"]
+        for candidate in package.manifest["candidate_evidence"]
+        if candidate["selection_state"] in {"selected", "pinned"}
+    ]
+    if package.manifest.get("selected_citation_ids") != selected_ids:
+        raise ArtifactContractError("dossier selected evidence set/order mismatch")
+    if package.markdown != _render_dossier_markdown(package.manifest):
+        raise ArtifactContractError("dossier Markdown does not match selected evidence")
+    for label, name in (("dossier", _DOSSIER_FILENAME), ("validation", _VALIDATION_FILENAME)):
+        if package.manifest["files"].get(label) != _file_digest(name, package.files[name]):
+            raise ArtifactContractError(f"dossier package {name} digest mismatch")
+    if package.validation.get("target_id") != package.manifest["revision_id"]:
+        raise ArtifactContractError("dossier validation targets another revision")
+    if package.validation.get("target_digest") != package.manifest["content_digest"]:
+        raise ArtifactContractError("dossier validation targets another content digest")
+
+
+def _validate_dossier_package_structure(package: DossierPackage) -> None:
+    if not isinstance(package, DossierPackage):
+        raise TypeError("package must be a DossierPackage")
+    if set(package.files) != _DOSSIER_PACKAGE_FILENAMES:
+        raise ArtifactContractError("dossier package must contain exactly three files")
+    if set(package.manifest) != _MANIFEST_FIELDS or set(package.validation) != _VALIDATION_FIELDS:
+        raise ArtifactContractError("dossier package fields do not match the contract allowlist")
+    _validate_initial_dossier_validation(package.manifest, package.validation)
+    if not _DOSSIER_KEY_RE.fullmatch(str(package.manifest.get("dossier_key", ""))):
+        raise ArtifactContractError("invalid dossier package key")
+    if not _REVISION_ID_RE.fullmatch(str(package.manifest.get("revision_id", ""))):
+        raise ArtifactContractError("invalid dossier revision identifier")
+
+
+def _project_fields(value: Any, fields: Sequence[str], label: str) -> dict[str, Any]:
+    expected = set(fields)
+    if isinstance(value, Mapping):
+        if set(value) != expected:
+            raise ArtifactContractError(f"{label} fields do not match the allowlist")
+        return {field: value[field] for field in fields}
+    try:
+        return {field: getattr(value, field) for field in fields}
+    except AttributeError as error:
+        raise ArtifactContractError(f"{label} does not expose the required fields") from error
+
+
+def _allowlisted_mapping(
+    value: Any,
+    allowed: frozenset[str],
+    label: str,
+    *,
+    require_all: bool = False,
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or any(not isinstance(key, str) for key in value):
+        raise ArtifactContractError(f"{label} must be an object")
+    fields = set(value)
+    if not fields <= allowed or (require_all and fields != allowed):
+        raise ArtifactContractError(f"{label} fields do not match the allowlist")
+    return {key: _copy_json(item) for key, item in value.items()}
+
+
+def _copy_json(value: Any) -> Any:
+    if isinstance(value, Enum):
+        return _copy_json(value.value)
+    if value is None or isinstance(value, str | bool | int):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ArtifactContractError("artifact JSON cannot contain non-finite numbers")
+        return value
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ArtifactContractError("artifact JSON object keys must be strings")
+        return {key: _copy_json(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return [_copy_json(item) for item in value]
+    raise ArtifactContractError(f"unsupported artifact JSON value: {type(value).__name__}")
+
+
+def _bounded_sequence(value: Any, label: str, maximum: int) -> list[Any]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray) or len(value) > maximum:
+        raise ArtifactContractError(f"{label} must be an array with at most {maximum} items")
+    return list(value)
+
+
+def _bounded_strings(value: Any, label: str, maximum_items: int, maximum_length: int) -> list[str]:
+    values = _bounded_sequence(value, label, maximum_items)
+    if any(not isinstance(item, str) or len(item) > maximum_length for item in values):
+        raise ArtifactContractError(f"{label} must contain bounded strings")
+    return values
+
+
+def _deduplicated_strings(values: Sequence[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def _bounded_integer(value: Any, label: str, minimum: int, maximum: int | None = None) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ArtifactContractError(f"{label} must be an integer")
+    if value < minimum or (maximum is not None and value > maximum):
+        raise ArtifactContractError(f"{label} is outside its supported bounds")
+    return value
+
+
+def _bounded_string(value: Any, label: str, minimum: int, maximum: int) -> str:
+    if not isinstance(value, str) or not minimum <= len(value) <= maximum:
+        raise ArtifactContractError(f"{label} must contain {minimum}..{maximum} characters")
+    return value
+
+
+def _optional_string(value: Any, label: str) -> str | None:
+    if value is not None and (not isinstance(value, str) or not value):
+        raise ArtifactContractError(f"{label} must be a non-empty string or null")
+    return value
+
+
+def _optional_bounded_string(value: Any, label: str, maximum: int) -> str | None:
+    if value is None:
+        return None
+    return _bounded_string(value, label, 1, maximum)
+
+
+def _calendar_date(value: Any, label: str) -> date | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
+        raise ArtifactContractError(f"{label} must be YYYY-MM-DD or null")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise ArtifactContractError(f"{label} must be a valid calendar date") from error
+
+
+def _optional_timestamp(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    return _timestamp(value, label)
+
+
+def _enum_value(value: Any) -> Any:
+    return value.value if isinstance(value, Enum) else value
+
+
+def _timestamp(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not _UTC_TIMESTAMP_RE.fullmatch(value):
+        raise ArtifactContractError(f"{label} must be an RFC 3339 UTC timestamp")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + _UTC_OFFSET)
+    except ValueError as error:
+        raise ArtifactContractError(f"{label} must be an RFC 3339 UTC timestamp") from error
+    offset = parsed.utcoffset()
+    if offset is None or offset.total_seconds() != 0:
+        raise ArtifactContractError(f"{label} must be UTC")
+    return value
+
+
+def _clock_values(clock: Callable[[], str | datetime]) -> tuple[str, str]:
+    value = clock()
+    if isinstance(value, datetime):
+        offset = value.utcoffset()
+        if offset is None or offset.total_seconds() != 0:
+            raise ArtifactContractError("dossier clock must return a UTC time")
+        parsed = value.astimezone(UTC)
+    elif isinstance(value, str):
+        _timestamp(value, "dossier clock")
+        parsed = datetime.fromisoformat(value[:-1] + _UTC_OFFSET).astimezone(UTC)
+    else:
+        raise ArtifactContractError("dossier clock must return a UTC timestamp")
+    validated_at = parsed.isoformat(timespec="seconds").replace(_UTC_OFFSET, "Z")
+    return validated_at, parsed.strftime("%Y%m%dT%H%M%SZ")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _random_entropy() -> str:
+    return secrets.token_hex(4)
+
+
+def _file_digest(path: str, payload: bytes) -> dict[str, Any]:
+    return {"path": path, "sha256": hashlib.sha256(payload).hexdigest(), "bytes": len(payload)}
+
+
+def _json_file_bytes(value: Any) -> bytes:
+    return (json.dumps(value, ensure_ascii=False, allow_nan=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _safe_markdown_inline(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ArtifactContractError("Markdown fields must be strings")
+    return _escape_markdown(_escape_controls(value, keep_newlines=False))
+
+
+def _safe_markdown_quote(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        raise ArtifactContractError("citation excerpt must be a string")
+    escaped = _escape_markdown(_escape_controls(value, keep_newlines=True))
+    return [f"> {line}" for line in escaped.split("\n")]
+
+
+def _escape_controls(value: str, *, keep_newlines: bool) -> str:
+    output: list[str] = []
+    for character in value:
+        codepoint = ord(character)
+        if character == "\n" and keep_newlines:
+            output.append(character)
+        elif codepoint < 0x20 or 0x7F <= codepoint < 0xA0:
+            output.append(f"\\u{codepoint:04x}")
+        else:
+            output.append(character)
+    return "".join(output)
+
+
+def _escape_markdown(value: str) -> str:
+    escaped = html.escape(value, quote=True)
+    for character in "\\`*_{}[]()#+-.!|>":
+        escaped = escaped.replace(character, f"\\{character}")
+    return escaped
+
+
+def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ArtifactContractError(f"duplicate JSON field: {key}")
+        value[key] = item
+    return value
+
+
+def _absolute_path(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+
+def _ensure_owner_directory(path: Path) -> None:
+    absolute = _absolute_path(path)
+    assert_no_symlink_components(absolute)
+    missing: list[Path] = []
+    current = absolute
+    while not os.path.lexists(current):
+        missing.append(current)
+        parent = current.parent
+        if parent == current:
+            raise UnsafeArtifactPathError(f"cannot establish artifact directory: {absolute}")
+        current = parent
+    mode = os.lstat(current).st_mode
+    if not stat.S_ISDIR(mode):
+        raise UnsafeArtifactPathError(f"artifact parent is not a directory: {current}")
+
+    for directory in reversed(missing):
+        try:
+            os.mkdir(directory, 0o700)
+        except FileExistsError:
+            assert_no_symlink_components(directory)
+        mode = os.lstat(directory).st_mode
+        if not stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
+            raise UnsafeArtifactPathError(f"artifact path is not a real directory: {directory}")
+        os.chmod(directory, 0o700)
+
+    assert_no_symlink_components(absolute)
+    mode = os.lstat(absolute).st_mode
+    if not stat.S_ISDIR(mode):
+        raise UnsafeArtifactPathError(f"artifact parent is not a directory: {absolute}")
+    if stat.S_IMODE(mode) != 0o700:
+        raise UnsafeArtifactPathError(f"artifact directory must have mode 0700: {absolute}")
+
+
+def _validated_package_files(files: Mapping[str, bytes]) -> dict[str, bytes]:
+    validated: dict[str, bytes] = {}
+    for name, payload in files.items():
+        if not isinstance(name, str) or not name or name in {".", ".."} or "/" in name or "\\" in name or "\x00" in name:
+            raise UnsafeArtifactPathError(f"package file must be one safe relative name: {name!r}")
+        if not isinstance(payload, bytes):
+            raise TypeError(f"package payload for {name!r} must be bytes")
+        validated[name] = payload
+    return validated
+
+
+def _write_owner_file(path: Path, payload: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(descriptor)
+
+
+def _reuse_file_or_raise(path: Path, payload: bytes) -> PublishStatus:
+    try:
+        mode = os.lstat(path).st_mode
+    except FileNotFoundError as error:
+        raise ArtifactCollisionError(f"artifact disappeared during collision check: {path}") from error
+    if stat.S_ISLNK(mode):
+        raise UnsafeArtifactPathError(f"symlink artifact target is forbidden: {path}")
+    if not stat.S_ISREG(mode) or path.read_bytes() != payload:
+        raise ArtifactCollisionError(f"immutable artifact collision: {path}")
+    os.chmod(path, 0o600)
+    return "reused"
+
+
+def _reuse_directory_or_raise(path: Path, files: Mapping[str, bytes]) -> PublishStatus:
+    mode = os.lstat(path).st_mode
+    if stat.S_ISLNK(mode):
+        raise UnsafeArtifactPathError(f"symlink artifact target is forbidden: {path}")
+    if not stat.S_ISDIR(mode):
+        raise ArtifactCollisionError(f"immutable artifact collision: {path}")
+    entries = {entry.name: entry for entry in os.scandir(path)}
+    if set(entries) != set(files):
+        raise ArtifactCollisionError(f"immutable artifact collision: {path}")
+    for name, payload in files.items():
+        entry = entries[name]
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False) or Path(entry.path).read_bytes() != payload:
+            raise ArtifactCollisionError(f"immutable artifact collision: {path / name}")
+    os.chmod(path, 0o700)
+    for name in files:
+        os.chmod(path / name, 0o600)
+    return "reused"
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)

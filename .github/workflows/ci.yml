@@ -9,13 +9,14 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: "24"
+          package-manager-cache: false
       - run: pip install uv
       - name: Offline visualization template syntax and safety
         run: node scripts/check-viz-template.mjs
@@ -45,8 +46,8 @@ jobs:
       KB_ARANGO_PASSWORD: knowledge-base-dev
       KB_RUN_INTEGRATION: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install uv

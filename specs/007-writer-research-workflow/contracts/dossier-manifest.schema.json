@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-base.local/schemas/v5/dossier-manifest.schema.json",
+  "title": "Knowledge Base V5 Dossier Revision Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_type",
+    "dossier_key",
+    "revision_id",
+    "parent_revision_id",
+    "content_digest",
+    "request",
+    "corpus_context",
+    "candidate_evidence",
+    "selected_citation_ids",
+    "curation_operations",
+    "derived_context",
+    "status",
+    "includes_drafts",
+    "warnings",
+    "files"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "artifact_type": { "const": "dossier_revision" },
+    "dossier_key": { "type": "string", "pattern": "^research-[a-z0-9_-]+-[0-9a-f]{12}$" },
+    "revision_id": { "type": "string", "pattern": "^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
+    "parent_revision_id": {
+      "oneOf": [
+        { "type": "string", "pattern": "^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
+        { "type": "null" }
+      ]
+    },
+    "content_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "request": { "$ref": "#/$defs/researchRequest" },
+    "corpus_context": { "$ref": "#/$defs/corpusContext" },
+    "candidate_evidence": {
+      "type": "array",
+      "maxItems": 150,
+      "items": { "$ref": "#/$defs/evidenceCandidate" }
+    },
+    "selected_citation_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^cit-[0-9a-f]{16}$" }
+    },
+    "curation_operations": {
+      "type": "array",
+      "maxItems": 300,
+      "items": { "$ref": "#/$defs/curationOperation" }
+    },
+    "derived_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["topics", "leads"],
+      "properties": {
+        "topics": { "type": "array", "maxItems": 100, "items": { "type": "object" } },
+        "leads": { "type": "array", "maxItems": 100, "items": { "type": "object" } }
+      }
+    },
+    "status": { "enum": ["ready", "degraded"] },
+    "includes_drafts": { "type": "boolean" },
+    "warnings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "string", "maxLength": 2000 }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dossier", "validation"],
+      "properties": {
+        "dossier": { "$ref": "#/$defs/fileDigest" },
+        "validation": { "$ref": "#/$defs/fileDigest" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "request": {
+            "properties": { "visibility": { "const": "published_and_drafts" } },
+            "required": ["visibility"]
+          }
+        },
+        "required": ["request"]
+      },
+      "then": {
+        "properties": { "includes_drafts": { "const": true } }
+      },
+      "else": {
+        "properties": { "includes_drafts": { "const": false } }
+      }
+    }
+  ],
+  "$defs": {
+    "researchRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "query",
+        "source_key",
+        "published_from",
+        "published_to",
+        "visibility",
+        "document_limit",
+        "fragments_per_document",
+        "evidence_limit",
+        "candidate_limit",
+        "retrieval"
+      ],
+      "properties": {
+        "query": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "source_key": { "oneOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+        "published_from": { "oneOf": [{ "type": "string", "format": "date" }, { "type": "null" }] },
+        "published_to": { "oneOf": [{ "type": "string", "format": "date" }, { "type": "null" }] },
+        "visibility": { "enum": ["published_only", "published_and_drafts"] },
+        "document_limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "fragments_per_document": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "evidence_limit": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "candidate_limit": { "type": "integer", "minimum": 1, "maximum": 150 },
+        "retrieval": { "type": "object" }
+      }
+    },
+    "corpusContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "database",
+        "built_at",
+        "embedding_model",
+        "embedding_dimension",
+        "retrieval_min_similarity",
+        "latest_import_run_key",
+        "latest_index_runs",
+        "git_revision",
+        "warnings"
+      ],
+      "properties": {
+        "database": { "type": "string", "minLength": 1 },
+        "built_at": { "type": "string", "format": "date-time" },
+        "embedding_model": { "type": "string", "minLength": 1 },
+        "embedding_dimension": { "type": "integer", "minimum": 1 },
+        "retrieval_min_similarity": { "type": "number", "minimum": -1, "maximum": 1 },
+        "latest_import_run_key": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "latest_index_runs": { "type": "object" },
+        "git_revision": { "oneOf": [{ "type": "string" }, { "type": "null" }] },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "evidenceCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "citation",
+        "document_rank",
+        "fragment_rank",
+        "score",
+        "score_components",
+        "selection_state",
+        "selection_reason"
+      ],
+      "properties": {
+        "citation": { "$ref": "citation.schema.json" },
+        "document_rank": { "type": "integer", "minimum": 1 },
+        "fragment_rank": { "type": "integer", "minimum": 1 },
+        "score": { "type": "number" },
+        "score_components": { "type": "object" },
+        "selection_state": { "enum": ["candidate", "selected", "pinned", "excluded"] },
+        "selection_reason": { "type": "string", "minLength": 1, "maxLength": 500 }
+      }
+    },
+    "curationOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "citation_id", "reason", "ordinal"],
+      "properties": {
+        "operation": { "enum": ["include", "exclude", "pin"] },
+        "citation_id": { "type": "string", "pattern": "^cit-[0-9a-f]{16}$" },
+        "reason": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "ordinal": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "fileDigest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^[^/]+$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

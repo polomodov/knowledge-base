@@ -1,0 +1,206 @@
+{
+  "schema_version": "1.0",
+  "fixture_type": "safe_research_corpus",
+  "description": "Fully synthetic corpus for writer/research workflow integration tests.",
+  "embedding": {
+    "provider": "hash",
+    "model": "hash-v1",
+    "dimension": 8
+  },
+  "sources": [
+    {
+      "_key": "research-source-a",
+      "type": "synthetic_fixture",
+      "display_name": "Synthetic Research Source A",
+      "created_at": "2026-07-12T08:00:00Z",
+      "metadata": {"fixture": true, "safe_for_git": true}
+    },
+    {
+      "_key": "research-source-b",
+      "type": "synthetic_fixture",
+      "display_name": "Synthetic Research Source B",
+      "created_at": "2026-07-12T08:00:00Z",
+      "metadata": {"fixture": true, "safe_for_git": true}
+    }
+  ],
+  "raw_snapshots": [
+    {
+      "_key": "research-raw-a-001",
+      "source_key": "research-source-a",
+      "sha256": "40f2a7a55365b3917cce1829f8d409093baa39b02a51b21947dff1e4540196bc",
+      "size_bytes": 68,
+      "media_type": "text/plain",
+      "storage_kind": "inline",
+      "storage_uri": "fixture://safe-research/source-a",
+      "captured_at": "2026-07-12T08:05:00Z",
+      "payload": "Synthetic source A snapshot for research workflow integration tests.",
+      "metadata": {"fixture": true, "safe_for_git": true}
+    },
+    {
+      "_key": "research-raw-b-001",
+      "source_key": "research-source-b",
+      "sha256": "7b700663a6b65e0ff994139e36cd5bbd473e0e51009b564fedba27e555945cb6",
+      "size_bytes": 82,
+      "media_type": "text/plain",
+      "storage_kind": "inline",
+      "storage_uri": "fixture://safe-research/source-b",
+      "captured_at": "2026-07-12T08:06:00Z",
+      "payload": "Synthetic source B snapshot with published and draft records for visibility tests.",
+      "metadata": {"fixture": true, "safe_for_git": true}
+    }
+  ],
+  "import_runs": [
+    {
+      "_key": "research-import-a-001",
+      "source_key": "research-source-a",
+      "status": "ok",
+      "started_at": "2026-07-12T08:10:00Z",
+      "finished_at": "2026-07-12T08:10:01Z",
+      "command": "fixture seed research-source-a",
+      "input_ref": "fixture://safe-research/source-a",
+      "counts": {"documents": 2, "chunks": 3},
+      "error": null
+    },
+    {
+      "_key": "research-import-b-001",
+      "source_key": "research-source-b",
+      "status": "ok",
+      "started_at": "2026-07-12T08:11:00Z",
+      "finished_at": "2026-07-12T08:11:01Z",
+      "command": "fixture seed research-source-b",
+      "input_ref": "fixture://safe-research/source-b",
+      "counts": {"documents": 2, "chunks": 2},
+      "error": null
+    }
+  ],
+  "documents": [
+    {
+      "_key": "research-published-a",
+      "source_key": "research-source-a",
+      "canonical_id": "published-systems-note",
+      "title": "Synthetic Systems Note",
+      "text": "Systems thinking connects evidence, feedback, and careful writing. Reproducible notes keep each claim linked to a precise source.",
+      "language": "en",
+      "published_at": "2026-01-10T00:00:00Z",
+      "url": "https://fixture.invalid/research/published-systems-note",
+      "status": "published",
+      "metadata": {"fixture": true, "raw_snapshot_key": "research-raw-a-001", "import_run_key": "research-import-a-001"}
+    },
+    {
+      "_key": "research-published-b",
+      "source_key": "research-source-a",
+      "canonical_id": "published-evidence-map",
+      "title": "Synthetic Evidence Map",
+      "text": "Evidence maps compare sources before drafting a summary.",
+      "language": "en",
+      "published_at": "2026-02-12T00:00:00Z",
+      "url": "https://fixture.invalid/research/published-evidence-map",
+      "status": "published",
+      "metadata": {"fixture": true, "raw_snapshot_key": "research-raw-a-001", "import_run_key": "research-import-a-001"}
+    },
+    {
+      "_key": "research-published-tainted",
+      "source_key": "research-source-b",
+      "canonical_id": "published-grounded-graph-context",
+      "title": "Synthetic Grounded Graph Note",
+      "text": "Visible graph context remains grounded in published evidence.",
+      "language": "en",
+      "published_at": "2026-03-14T00:00:00Z",
+      "url": "https://fixture.invalid/research/published-grounded-graph-context",
+      "status": "published",
+      "metadata": {"fixture": true, "raw_snapshot_key": "research-raw-b-001", "import_run_key": "research-import-b-001"}
+    },
+    {
+      "_key": "research-draft-hidden",
+      "source_key": "research-source-b",
+      "canonical_id": "draft-hidden-lunar-archive",
+      "title": "Synthetic Draft Telescope Note",
+      "text": "Draft-only telescope notes describe a hidden lunar archive signal.",
+      "language": "en",
+      "published_at": null,
+      "url": null,
+      "status": "draft",
+      "metadata": {"fixture": true, "raw_snapshot_key": "research-raw-b-001", "import_run_key": "research-import-b-001"}
+    }
+  ],
+  "chunks": [
+    {"_key": "research-published-a-c0", "document_key": "research-published-a", "ordinal": 0, "text": "Systems thinking connects evidence, feedback, and careful writing.", "token_count": 8, "char_start": 0, "char_end": 66},
+    {"_key": "research-published-a-c1", "document_key": "research-published-a", "ordinal": 1, "text": "Reproducible notes keep each claim linked to a precise source.", "token_count": 10, "char_start": 67, "char_end": 129},
+    {"_key": "research-published-b-c0", "document_key": "research-published-b", "ordinal": 0, "text": "Evidence maps compare sources before drafting a summary.", "token_count": 8, "char_start": 0, "char_end": 56},
+    {"_key": "research-published-tainted-c0", "document_key": "research-published-tainted", "ordinal": 0, "text": "Visible graph context remains grounded in published evidence.", "token_count": 8, "char_start": 0, "char_end": 61},
+    {"_key": "research-draft-hidden-c0", "document_key": "research-draft-hidden", "ordinal": 0, "text": "Draft-only telescope notes describe a hidden lunar archive signal.", "token_count": 9, "char_start": 0, "char_end": 66}
+  ],
+  "topics": [
+    {"_key": "evidence-writing", "label": "Evidence writing", "language": "en", "description": "Linking synthetic claims to evidence.", "confidence": 1.0},
+    {"_key": "grounded-graph", "label": "Grounded graph context", "language": "en", "description": "Visible graph context.", "confidence": 1.0},
+    {"_key": "hidden-lunar-archive", "label": "Hidden lunar archive", "language": "en", "description": "Synthetic draft-only topic.", "confidence": 1.0},
+    {"_key": "systems-thinking", "label": "Systems thinking", "language": "en", "description": "Synthetic systems topic.", "confidence": 1.0}
+  ],
+  "communities": [
+    {
+      "_key": "research-community-clean",
+      "size": 2,
+      "method": "synthetic-fixture",
+      "top_topics": ["Systems thinking", "Evidence writing"],
+      "summary": "Synthetic published notes about evidence workflows.",
+      "metadata": {"fixture": true, "tainted_by_draft": false}
+    },
+    {
+      "_key": "research-community-tainted",
+      "size": 2,
+      "method": "synthetic-fixture",
+      "top_topics": ["Grounded graph context", "HIDDEN_DRAFT_SIGNAL_MUST_NOT_LEAK"],
+      "summary": "HIDDEN_DRAFT_SIGNAL_MUST_NOT_LEAK from a mixed synthetic community.",
+      "metadata": {"fixture": true, "tainted_by_draft": true}
+    }
+  ],
+  "edges": {
+    "document_from_source": [
+      {"_key": "research-published-a-source", "_from": "documents/research-published-a", "_to": "sources/research-source-a", "import_run_key": "research-import-a-001", "provenance": {"raw_snapshot_key": "research-raw-a-001", "url": "https://fixture.invalid/research/published-systems-note", "captured_at": "2026-07-12T08:05:00Z"}},
+      {"_key": "research-published-b-source", "_from": "documents/research-published-b", "_to": "sources/research-source-a", "import_run_key": "research-import-a-001", "provenance": {"raw_snapshot_key": "research-raw-a-001", "url": "https://fixture.invalid/research/published-evidence-map", "captured_at": "2026-07-12T08:05:00Z"}},
+      {"_key": "research-published-tainted-source", "_from": "documents/research-published-tainted", "_to": "sources/research-source-b", "import_run_key": "research-import-b-001", "provenance": {"raw_snapshot_key": "research-raw-b-001", "url": "https://fixture.invalid/research/published-grounded-graph-context", "captured_at": "2026-07-12T08:06:00Z"}},
+      {"_key": "research-draft-hidden-source", "_from": "documents/research-draft-hidden", "_to": "sources/research-source-b", "import_run_key": "research-import-b-001", "provenance": {"raw_snapshot_key": "research-raw-b-001", "url": null, "captured_at": "2026-07-12T08:06:00Z"}}
+    ],
+    "chunk_of_document": [
+      {"_key": "research-published-a-c0-document", "_from": "chunks/research-published-a-c0", "_to": "documents/research-published-a", "ordinal": 0},
+      {"_key": "research-published-a-c1-document", "_from": "chunks/research-published-a-c1", "_to": "documents/research-published-a", "ordinal": 1},
+      {"_key": "research-published-b-c0-document", "_from": "chunks/research-published-b-c0", "_to": "documents/research-published-b", "ordinal": 0},
+      {"_key": "research-published-tainted-c0-document", "_from": "chunks/research-published-tainted-c0", "_to": "documents/research-published-tainted", "ordinal": 0},
+      {"_key": "research-draft-hidden-c0-document", "_from": "chunks/research-draft-hidden-c0", "_to": "documents/research-draft-hidden", "ordinal": 0}
+    ],
+    "chunk_derived_from_raw": [
+      {"_key": "research-published-a-c0-raw", "_from": "chunks/research-published-a-c0", "_to": "raw_snapshots/research-raw-a-001", "document_key": "research-published-a", "char_start": 0, "char_end": 66, "import_run_key": "research-import-a-001"},
+      {"_key": "research-published-a-c1-raw", "_from": "chunks/research-published-a-c1", "_to": "raw_snapshots/research-raw-a-001", "document_key": "research-published-a", "char_start": 67, "char_end": 129, "import_run_key": "research-import-a-001"},
+      {"_key": "research-published-b-c0-raw", "_from": "chunks/research-published-b-c0", "_to": "raw_snapshots/research-raw-a-001", "document_key": "research-published-b", "char_start": 0, "char_end": 56, "import_run_key": "research-import-a-001"},
+      {"_key": "research-published-tainted-c0-raw", "_from": "chunks/research-published-tainted-c0", "_to": "raw_snapshots/research-raw-b-001", "document_key": "research-published-tainted", "char_start": 0, "char_end": 61, "import_run_key": "research-import-b-001"},
+      {"_key": "research-draft-hidden-c0-raw", "_from": "chunks/research-draft-hidden-c0", "_to": "raw_snapshots/research-raw-b-001", "document_key": "research-draft-hidden", "char_start": 0, "char_end": 66, "import_run_key": "research-import-b-001"}
+    ],
+    "document_mentions_topic": [
+      {"_key": "research-published-a-systems-document", "_from": "documents/research-published-a", "_to": "topics/systems-thinking", "confidence": 1.0, "method": "synthetic-fixture"},
+      {"_key": "research-published-a-systems-chunk", "_from": "chunks/research-published-a-c0", "_to": "topics/systems-thinking", "confidence": 1.0, "method": "synthetic-fixture"},
+      {"_key": "research-published-a-evidence", "_from": "documents/research-published-a", "_to": "topics/evidence-writing", "confidence": 1.0, "method": "synthetic-fixture"},
+      {"_key": "research-published-b-evidence", "_from": "documents/research-published-b", "_to": "topics/evidence-writing", "confidence": 1.0, "method": "synthetic-fixture"},
+      {"_key": "research-published-tainted-grounded", "_from": "documents/research-published-tainted", "_to": "topics/grounded-graph", "confidence": 1.0, "method": "synthetic-fixture"},
+      {"_key": "research-draft-hidden-topic", "_from": "documents/research-draft-hidden", "_to": "topics/hidden-lunar-archive", "confidence": 1.0, "method": "synthetic-fixture"}
+    ],
+    "item_related_to_item": [
+      {"_key": "research-related-a0-b0", "_from": "chunks/research-published-a-c0", "_to": "chunks/research-published-b-c0", "weight": 0.92, "method": "embedding-similarity"},
+      {"_key": "research-related-a1-tainted0", "_from": "chunks/research-published-a-c1", "_to": "chunks/research-published-tainted-c0", "weight": 0.81, "method": "embedding-similarity"},
+      {"_key": "research-related-b0-draft0", "_from": "chunks/research-published-b-c0", "_to": "chunks/research-draft-hidden-c0", "weight": 0.98, "method": "embedding-similarity"},
+      {"_key": "research-related-tainted0-draft0", "_from": "chunks/research-published-tainted-c0", "_to": "chunks/research-draft-hidden-c0", "weight": 0.99, "method": "embedding-similarity"}
+    ],
+    "document_in_community": [
+      {"_key": "research-published-a-clean-community", "_from": "documents/research-published-a", "_to": "communities/research-community-clean", "method": "synthetic-fixture"},
+      {"_key": "research-published-b-clean-community", "_from": "documents/research-published-b", "_to": "communities/research-community-clean", "method": "synthetic-fixture"},
+      {"_key": "research-published-tainted-mixed-community", "_from": "documents/research-published-tainted", "_to": "communities/research-community-tainted", "method": "synthetic-fixture"},
+      {"_key": "research-draft-hidden-mixed-community", "_from": "documents/research-draft-hidden", "_to": "communities/research-community-tainted", "method": "synthetic-fixture"}
+    ]
+  },
+  "expectations": {
+    "default_visible_document_keys": ["research-published-a", "research-published-b", "research-published-tainted"],
+    "draft_document_keys": ["research-draft-hidden"],
+    "clean_community_key": "research-community-clean",
+    "tainted_community_key": "research-community-tainted",
+    "forbidden_published_only_markers": ["HIDDEN_DRAFT_SIGNAL_MUST_NOT_LEAK", "hidden lunar archive"]
+  }
+}

@@ -11,6 +11,10 @@ build/
 .coverage
 coverage.xml
 htmlcov/
+node_modules/
+*.log
+*.tmp
+*.swp
 
 # Local runtime and secrets
 .env
@@ -28,3 +32,5 @@ data/generated/
 
 # OS/editor
 .DS_Store
+.vscode/
+.idea/

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-base.local/schemas/v5/validation-result.schema.json",
+  "title": "Knowledge Base V5 Validation Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_type",
+    "target_type",
+    "target_id",
+    "target_digest",
+    "status",
+    "schema_valid",
+    "package_integrity",
+    "dossier_current",
+    "citations_resolved",
+    "coverage_complete",
+    "human_reviewed",
+    "citations",
+    "warnings",
+    "errors",
+    "validated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "artifact_type": { "const": "validation_result" },
+    "target_type": { "enum": ["dossier_revision", "writing_handoff", "writing_output", "imported_writing"] },
+    "target_id": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "target_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "status": { "enum": ["valid", "valid_with_warnings", "invalid"] },
+    "schema_valid": { "type": "boolean" },
+    "package_integrity": { "type": "boolean" },
+    "dossier_current": { "type": "boolean" },
+    "citations_resolved": { "type": "boolean" },
+    "coverage_complete": { "type": "boolean" },
+    "human_reviewed": { "const": false },
+    "citations": {
+      "type": "array",
+      "maxItems": 250,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["citation_id", "status", "reason"],
+        "properties": {
+          "citation_id": { "type": "string", "pattern": "^cit-[0-9a-f]{16}$" },
+          "status": { "enum": ["valid", "missing", "changed", "hidden"] },
+          "reason": { "oneOf": [{ "type": "string", "maxLength": 2000 }, { "type": "null" }] }
+        }
+      }
+    },
+    "warnings": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 2000 } },
+    "errors": { "type": "array", "maxItems": 100, "items": { "type": "string", "maxLength": 2000 } },
+    "validated_at": { "type": "string", "format": "date-time" }
+  }
+}
