@@ -10,6 +10,7 @@ from xml.etree import ElementTree
 
 from knowledge_base.config import Settings
 from knowledge_base.ids import sha256_text, slugify, stable_key
+from knowledge_base.language import detect_language
 from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
@@ -290,14 +291,15 @@ def _rss_item(item: ElementTree.Element) -> NormalizedSourceItem:
     author = _child_text(item, "creator") or _child_text(item, "author")
     published_at = parse_date(_child_text(item, "pubDate"))
     canonical_id = canonical_id_from_url_or_guid(url, guid)
+    body = html_to_text(content)
     return NormalizedSourceItem(
         canonical_id=canonical_id,
         title=title,
-        text=html_to_text(content),
+        text=body,
         url=url,
         guid=guid,
         published_at=published_at,
-        language="unknown",
+        language=detect_language(body),
         author=author,
         tags=tags,
         metadata={"guid": guid, "feed_item_type": "rss"},
@@ -318,14 +320,15 @@ def _atom_entry(entry: ElementTree.Element) -> NormalizedSourceItem:
     author = _child_text(author_node, "name") if author_node is not None else None
     published_at = parse_date(_child_text(entry, "published") or _child_text(entry, "updated"))
     canonical_id = canonical_id_from_url_or_guid(url, guid)
+    body = html_to_text(content)
     return NormalizedSourceItem(
         canonical_id=canonical_id,
         title=title,
-        text=html_to_text(content),
+        text=body,
         url=url,
         guid=guid,
         published_at=published_at,
-        language="unknown",
+        language=detect_language(body),
         author=author,
         tags=[tag for tag in tags if tag],
         metadata={"guid": guid, "feed_item_type": "atom"},
