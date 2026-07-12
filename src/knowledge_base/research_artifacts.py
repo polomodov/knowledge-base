@@ -438,6 +438,7 @@ def materialize_dossier_package(
     corpus_context: Any,
     candidate_evidence: Sequence[Any],
     derived_context: Any,
+    selected_citation_ids: Sequence[str] | None = None,
     warnings: Sequence[str] = (),
     status: Literal["ready", "degraded"] | None = None,
     parent_revision_id: str | None = None,
@@ -450,7 +451,7 @@ def materialize_dossier_package(
     request_projection = _project_request(request)
     context_projection = _project_corpus_context(corpus_context)
     candidates = [_project_candidate(value) for value in _bounded_sequence(candidate_evidence, "candidate evidence", 150)]
-    selected_ids = _selected_citation_ids(candidates)
+    selected_ids = _validated_selected_citation_ids(candidates, selected_citation_ids)
 
     derived_projection = _project_derived_context(derived_context)
     operations = [
@@ -518,6 +519,77 @@ def materialize_dossier_package(
     return package
 
 
+def materialize_curated_dossier_package(
+    parent: DossierPackage,
+    result: Any,
+    clock: Callable[[], str | datetime] | None = None,
+    entropy: Callable[[], str] | None = None,
+) -> DossierPackage:
+    """Materialize one immutable curation child over an already verified parent."""
+
+    _validate_dossier_package(parent)
+    parent_manifest = parent.manifest
+
+    parent_revision_id = _result_field(result, "parent_revision_id")
+    if parent_revision_id != parent_manifest["revision_id"]:
+        raise ArtifactContractError("curation result must target the supplied parent revision")
+
+    request = _project_request(_result_field(result, "request"))
+    corpus_context = _project_corpus_context(_result_field(result, "corpus_context"))
+    derived_context = _project_derived_context(_result_field(result, "derived_context"))
+    if request != parent_manifest["request"]:
+        raise ArtifactContractError("curation must preserve the parent research request")
+    if corpus_context != parent_manifest["corpus_context"]:
+        raise ArtifactContractError("curation must preserve the parent corpus context")
+    if derived_context != parent_manifest["derived_context"]:
+        raise ArtifactContractError("curation must preserve the parent derived context")
+
+    candidates = [
+        _project_candidate(value)
+        for value in _bounded_sequence(_result_field(result, "candidate_evidence"), "candidate evidence", 150)
+    ]
+    _validate_curated_candidate_lineage(parent_manifest["candidate_evidence"], candidates)
+    selected_ids = _validated_selected_citation_ids(
+        candidates,
+        _result_field(result, "selected_citation_ids"),
+    )
+
+    operations = [
+        _project_curation_operation(value)
+        for value in _bounded_sequence(
+            _result_field(result, "curation_operations"),
+            "curation operations",
+            300,
+        )
+    ]
+    if not operations:
+        raise ArtifactContractError("curation child requires at least one operation")
+    _validate_curated_operation_replay(parent_manifest["candidate_evidence"], candidates, operations)
+
+    status = _result_field(result, "status")
+    warnings = _bounded_strings(_result_field(result, "warnings"), "dossier warnings", 100, 2000)
+    includes_drafts = _result_field(result, "includes_drafts")
+    if status != parent_manifest["status"] or warnings != parent_manifest["warnings"]:
+        raise ArtifactContractError("curation must preserve parent status and warnings")
+    if includes_drafts is not parent_manifest["includes_drafts"]:
+        raise ArtifactContractError("curation must preserve the parent draft scope")
+    _validate_curated_parent_gate(parent_manifest, _result_field(result, "parent_validation"))
+
+    return materialize_dossier_package(
+        request=request,
+        corpus_context=corpus_context,
+        candidate_evidence=candidates,
+        selected_citation_ids=selected_ids,
+        derived_context=derived_context,
+        warnings=warnings,
+        status=status,
+        parent_revision_id=parent_revision_id,
+        curation_operations=operations,
+        clock=clock,
+        entropy=entropy,
+    )
+
+
 def publish_dossier_package(output_root: Path, package: DossierPackage) -> PublishStatus:
     """Atomically publish one immutable three-file dossier revision."""
 
@@ -563,13 +635,122 @@ def load_dossier_package(revision_dir: Path) -> DossierPackage:
 
 def _selected_citation_ids(candidates: Sequence[Mapping[str, Any]]) -> list[str]:
     selected_ids = [
-        candidate["citation"]["citation_id"] for candidate in candidates if candidate["selection_state"] in {"selected", "pinned"}
+        candidate["citation"]["citation_id"]
+        for state in ("pinned", "selected")
+        for candidate in candidates
+        if candidate["selection_state"] == state
     ]
     if not selected_ids:
         raise ArtifactContractError("dossier requires at least one selected evidence citation")
     if len(selected_ids) > 100 or len(selected_ids) != len(set(selected_ids)):
         raise ArtifactContractError("selected evidence must contain at most 100 unique citations")
     return selected_ids
+
+
+def _validated_selected_citation_ids(
+    candidates: Sequence[Mapping[str, Any]],
+    selected_citation_ids: Sequence[str] | None,
+) -> list[str]:
+    evidence_ids = _selected_citation_ids(candidates)
+    if selected_citation_ids is None:
+        return evidence_ids
+
+    selected_ids = _bounded_strings(selected_citation_ids, "selected citation IDs", 100, 20)
+    if not selected_ids or len(selected_ids) != len(set(selected_ids)):
+        raise ArtifactContractError("selected evidence must contain 1..100 unique citations")
+    if any(not _CITATION_ID_RE.fullmatch(citation_id) for citation_id in selected_ids):
+        raise ArtifactContractError("invalid selected citation ID")
+    if selected_ids != evidence_ids:
+        raise ArtifactContractError("selected citations must present pinned then selected evidence in stable candidate order")
+    return selected_ids
+
+
+def _validate_curated_candidate_lineage(
+    parent_candidates: Sequence[Mapping[str, Any]],
+    child_candidates: Sequence[Mapping[str, Any]],
+) -> None:
+    if len(parent_candidates) != len(child_candidates):
+        raise ArtifactContractError("curation must preserve the exact parent candidate universe")
+    mutable_fields = {"selection_state", "selection_reason"}
+    for parent, child in zip(parent_candidates, child_candidates, strict=True):
+        parent_identity = {key: value for key, value in parent.items() if key not in mutable_fields}
+        child_identity = {key: value for key, value in child.items() if key not in mutable_fields}
+        if parent_identity != child_identity:
+            raise ArtifactContractError("curation must preserve parent candidate order and evidence")
+
+
+def _validate_curated_operation_replay(
+    parent_candidates: Sequence[Mapping[str, Any]],
+    child_candidates: Sequence[Mapping[str, Any]],
+    operations: Sequence[Mapping[str, Any]],
+) -> None:
+    if [operation["ordinal"] for operation in operations] != list(range(len(operations))):
+        raise ArtifactContractError("curation operation ordinals must be contiguous and ordered from zero")
+
+    candidate_index: dict[str, int] = {}
+    expected_state_and_reason: list[tuple[str, str]] = []
+    for index, candidate in enumerate(parent_candidates):
+        citation_id = candidate["citation"]["citation_id"]
+        if citation_id in candidate_index:
+            raise ArtifactContractError("curation parent candidate IDs must be unique")
+        candidate_index[citation_id] = index
+        expected_state_and_reason.append((candidate["selection_state"], candidate["selection_reason"]))
+
+    seen_targets: set[str] = set()
+    transitions = {
+        "include": ({"candidate", "excluded"}, "selected"),
+        "exclude": ({"selected", "pinned"}, "excluded"),
+        "pin": ({"selected"}, "pinned"),
+    }
+    for operation in operations:
+        citation_id = operation["citation_id"]
+        if citation_id in seen_targets:
+            raise ArtifactContractError("curation operation targets must be unique")
+        seen_targets.add(citation_id)
+        target_index = candidate_index.get(citation_id)
+        if target_index is None:
+            raise ArtifactContractError("curation operation target must exist in the parent candidate universe")
+
+        operation_name = operation["operation"]
+        allowed_states, next_state = transitions[operation_name]
+        current_state, _ = expected_state_and_reason[target_index]
+        if current_state not in allowed_states:
+            raise ArtifactContractError(f"curation {operation_name} operation is invalid from {current_state} state")
+        expected_state_and_reason[target_index] = (next_state, f"owner-{operation_name}")
+
+    for child, expected in zip(child_candidates, expected_state_and_reason, strict=True):
+        actual = (child["selection_state"], child["selection_reason"])
+        if actual != expected:
+            raise ArtifactContractError("curation child state/reason does not match the ordered operation replay")
+
+
+def _validate_curated_parent_gate(parent_manifest: Mapping[str, Any], validation: Any) -> None:
+    required_true = (
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+    )
+    if (
+        _result_field(validation, "target_type") != "dossier_revision"
+        or _result_field(validation, "target_id") != parent_manifest["revision_id"]
+        or _result_field(validation, "target_digest") != parent_manifest["content_digest"]
+        or _result_field(validation, "status") not in {"valid", "valid_with_warnings"}
+        or any(_result_field(validation, field) is not True for field in required_true)
+    ):
+        raise ArtifactContractError("curation requires a current, resolved parent validation")
+
+
+def _result_field(value: Any, field: str) -> Any:
+    if isinstance(value, Mapping):
+        if field not in value:
+            raise ArtifactContractError(f"curation result is missing {field}")
+        return value[field]
+    try:
+        return getattr(value, field)
+    except AttributeError as error:
+        raise ArtifactContractError(f"curation result is missing {field}") from error
 
 
 def _project_request(value: Any) -> dict[str, Any]:
@@ -901,10 +1082,7 @@ def _validate_loaded_dossier_manifest(manifest: Mapping[str, Any]) -> None:
         raise ArtifactContractError("dossier derived context does not match its strict projection")
 
     selected_ids = _bounded_strings(manifest["selected_citation_ids"], "selected citation IDs", 100, 20)
-    if any(not _CITATION_ID_RE.fullmatch(citation_id) for citation_id in selected_ids):
-        raise ArtifactContractError("invalid selected citation ID")
-    if selected_ids != _selected_citation_ids(candidates):
-        raise ArtifactContractError("dossier selected evidence set/order mismatch")
+    _validated_selected_citation_ids(candidates, selected_ids)
 
     warnings = _bounded_strings(manifest["warnings"], "dossier warnings", 100, 2000)
     if warnings != manifest["warnings"]:
@@ -1006,13 +1184,10 @@ def _validate_dossier_package(package: DossierPackage) -> None:
     expected_digest = canonical_sha256(_dossier_content_projection(package.manifest))
     if package.manifest.get("content_digest") != expected_digest:
         raise ArtifactContractError("dossier package content digest mismatch")
-    selected_ids = [
-        candidate["citation"]["citation_id"]
-        for candidate in package.manifest["candidate_evidence"]
-        if candidate["selection_state"] in {"selected", "pinned"}
-    ]
-    if package.manifest.get("selected_citation_ids") != selected_ids:
-        raise ArtifactContractError("dossier selected evidence set/order mismatch")
+    _validated_selected_citation_ids(
+        package.manifest["candidate_evidence"],
+        package.manifest.get("selected_citation_ids"),
+    )
     if package.markdown != _render_dossier_markdown(package.manifest):
         raise ArtifactContractError("dossier Markdown does not match selected evidence")
     for label, name in (("dossier", _DOSSIER_FILENAME), ("validation", _VALIDATION_FILENAME)):

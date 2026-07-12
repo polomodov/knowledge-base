@@ -25,6 +25,7 @@ from knowledge_base.research_artifacts import (
     assert_no_symlink_components,
     canonical_json_bytes,
     canonical_sha256,
+    materialize_curated_dossier_package,
     materialize_dossier_package,
     parse_strict_object,
     publish_directory_atomic,
@@ -875,6 +876,99 @@ def test_child_publication_preserves_explicit_lineage_deterministic_inputs_and_p
     original_parent = {path.name: path.read_bytes() for path in parent_path.iterdir()}
     assert publish_dossier_package(output_root, child) == "created"
     assert {path.name: path.read_bytes() for path in parent_path.iterdir()} == original_parent
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [
+        "declared_transition_missing",
+        "declared_reason_mismatch",
+        "unannounced_state_change",
+        "unannounced_reason_change",
+        "non_contiguous_ordinal",
+    ],
+)
+def test_materialize_curated_dossier_rejects_operation_log_state_or_reason_mismatch(
+    research_request_builder,
+    citation_builder,
+    evidence_candidate_builder,
+    dossier_manifest_builder,
+    mismatch: str,
+) -> None:
+    selected = evidence_candidate_builder()
+    included_excerpt = "Synthetic candidate included by the owner."
+    included_citation = citation_builder(
+        canonical_id="synthetic-curation-candidate",
+        document_key="doc-synthetic-curation-candidate-0123456789ab",
+        chunk_key="chunk-synthetic-curation-candidate-0-0123456789ab",
+        excerpt=included_excerpt,
+        char_end=len(included_excerpt),
+    )
+    candidate = evidence_candidate_builder(
+        citation=included_citation,
+        document_rank=2,
+        selection_state="candidate",
+        selection_reason="bounded-candidate-pool",
+    )
+    parent = _materialize(
+        research_request_builder(),
+        dossier_manifest_builder()["corpus_context"],
+        [selected, candidate],
+        clock="2026-07-12T12:00:00Z",
+        entropy="01234567",
+    )
+    child_candidates = deepcopy(parent.manifest["candidate_evidence"])
+    child_candidates[1]["selection_state"] = "selected"
+    child_candidates[1]["selection_reason"] = "owner-include"
+    operations = [
+        {
+            "operation": "include",
+            "citation_id": included_citation["citation_id"],
+            "reason": "owner-selected complementary evidence",
+            "ordinal": 0,
+        }
+    ]
+
+    if mismatch == "declared_transition_missing":
+        child_candidates[1]["selection_state"] = "candidate"
+        child_candidates[1]["selection_reason"] = "bounded-candidate-pool"
+    elif mismatch == "declared_reason_mismatch":
+        child_candidates[1]["selection_reason"] = "owner-pin"
+    elif mismatch == "unannounced_state_change":
+        child_candidates[0]["selection_state"] = "pinned"
+        child_candidates[0]["selection_reason"] = "owner-pin"
+    elif mismatch == "unannounced_reason_change":
+        child_candidates[0]["selection_reason"] = "owner-include"
+    else:
+        operations[0]["ordinal"] = 1
+
+    selected_ids = [
+        row["citation"]["citation_id"]
+        for state in ("pinned", "selected")
+        for row in child_candidates
+        if row["selection_state"] == state
+    ]
+    result = {
+        "parent_revision_id": parent.manifest["revision_id"],
+        "request": parent.manifest["request"],
+        "corpus_context": parent.manifest["corpus_context"],
+        "candidate_evidence": child_candidates,
+        "selected_citation_ids": selected_ids,
+        "curation_operations": operations,
+        "derived_context": parent.manifest["derived_context"],
+        "status": parent.manifest["status"],
+        "includes_drafts": parent.manifest["includes_drafts"],
+        "warnings": parent.manifest["warnings"],
+        "parent_validation": parent.validation,
+    }
+
+    with pytest.raises(ArtifactContractError, match=r"curation|operation|transition|state|reason"):
+        materialize_curated_dossier_package(
+            parent,
+            result,
+            clock=lambda: "2026-07-12T12:01:00Z",
+            entropy=lambda: "89abcdef",
+        )
 
 
 def _materialize(

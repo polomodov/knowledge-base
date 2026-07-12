@@ -83,19 +83,19 @@
 ### Tests first
 
 - [X] T020 [P] [US2] Написать failing tests для document/chunk ownership, normalized offsets, excerpt/provenance hashes и citation states `valid|missing|changed|hidden` в `tests/unit/test_research_workflow.py`
-- [ ] T021 [US2] Написать failing tests для ordered include/exclude/pin, bounded parent candidate universe, unknown/no-op/conflicting rejection и запрета retrieval во время curation в `tests/unit/test_research_workflow.py`
+- [X] T021 [US2] Написать failing tests для ordered include/exclude/pin, bounded parent candidate universe, unknown/no-op/conflicting rejection и запрета retrieval во время curation в `tests/unit/test_research_workflow.py`
 - [X] T022 [P] [US2] Написать failing tests для artifact loading/integrity, deterministic validation report, child lineage/content digest и byte-identical parent files в `tests/unit/test_research_artifacts.py`
-- [ ] T023 [P] [US2] Написать failing CLI tests для `kb research validate` и `kb research curate`, repeated operation flags, current-parent gate, custom-root acknowledgement и rejection exits в `tests/unit/test_cli.py`
-- [ ] T024 [P] [US2] Расширить failing integration cases repeat-build determinism, successful child revision, missing/changed/hidden parent rejection и before/after content snapshots в `tests/integration/test_research_workflow_pipeline.py`
+- [X] T023 [P] [US2] Написать failing CLI tests для `kb research validate` и `kb research curate`, repeated operation flags, current-parent gate, custom-root acknowledgement и rejection exits в `tests/unit/test_cli.py`
+- [X] T024 [P] [US2] Расширить failing integration cases repeat-build determinism, successful child revision, missing/changed/hidden parent rejection и before/after content snapshots в `tests/integration/test_research_workflow_pipeline.py`
 
 ### Implementation
 
 - [X] T025 [US2] Реализовать strict dossier directory loading, manifest/schema/version parsing и file digest/integrity checks до обращения к corpus в `src/knowledge_base/research_artifacts.py`
 - [X] T026 [US2] Реализовать citation revalidation загруженного dossier против current documents/chunks/provenance со всеми четырьмя states в `src/knowledge_base/research_workflow.py`
 - [X] T027 [US2] Реализовать read-only dossier validation service и deterministic aggregate ValidationResult без repair/rewrite target revision в `src/knowledge_base/research_workflow.py`
-- [ ] T028 [US2] Реализовать include/exclude/pin state transitions, ordered operation log, parent validation gate и child revision construction без retrieval в `src/knowledge_base/research_workflow.py`
-- [ ] T029 [US2] Реализовать child manifest/Markdown/validation rendering и immutable publication поверх уже проверенного parent в `src/knowledge_base/research_artifacts.py`
-- [ ] T030 [US2] Добавить dossier dispatch для `kb research validate` и handler `kb research curate` с contract exit/warning semantics в `src/knowledge_base/cli/main.py`
+- [X] T028 [US2] Реализовать include/exclude/pin state transitions, ordered operation log, parent validation gate и child revision construction без retrieval в `src/knowledge_base/research_workflow.py`
+- [X] T029 [US2] Реализовать child manifest/Markdown/validation rendering и immutable publication поверх уже проверенного parent в `src/knowledge_base/research_artifacts.py`
+- [X] T030 [US2] Добавить dossier dispatch для `kb research validate` и handler `kb research curate` с contract exit/warning semantics в `src/knowledge_base/cli/main.py`
 
 **Checkpoint**: US2 воспроизводимо проверяет и курирует US1 artifacts, не изменяя parent или ArangoDB.
 

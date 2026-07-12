@@ -4,9 +4,11 @@ import argparse
 import os
 import sys
 import traceback
+from collections.abc import Sequence
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Never
+from typing import Any, Literal, Never
 
 from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import load_settings
@@ -19,11 +21,22 @@ from knowledge_base.json_output import emit_json
 from knowledge_base.platform import platform_down, platform_up
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.research_artifacts import (
+    load_dossier_package,
+    materialize_curated_dossier_package,
     materialize_dossier_package,
     publish_dossier_package,
     validate_output_root,
 )
-from knowledge_base.research_workflow import ResearchRequest, ResearchVisibility, build_dossier
+from knowledge_base.research_workflow import (
+    CurationOperation,
+    DossierCurationError,
+    DossierRevision,
+    ResearchRequest,
+    ResearchVisibility,
+    build_dossier,
+    curate_dossier_revision,
+    validate_dossier_revision,
+)
 from knowledge_base.retrieval import (
     global_search,
     graph_neighbors,
@@ -44,6 +57,23 @@ _RESEARCH_WARNING_MESSAGES = {
     "draft_visibility_enabled": "draft evidence visibility is enabled; exact excerpts may contain private material",
     "output_outside_generated_zone": "output root is outside data/generated; explicit acknowledgement was accepted",
 }
+_SAFE_CURATION_REJECTION_CODES = frozenset(
+    {
+        "parent_not_current",
+        "include_not_current",
+        "unknown_citation",
+        "invalid_transition",
+        "invalid_operation",
+        "empty_operations",
+        "invalid_operation_order",
+        "duplicate_operation",
+        "conflicting_operation",
+        "empty_selection",
+        "selection_limit_exceeded",
+        "validation_unavailable",
+        "invalid_parent",
+    }
+)
 
 
 class CliUsageError(ValueError):
@@ -64,6 +94,26 @@ class _CliArgumentParser(argparse.ArgumentParser):
         if status == 0:
             raise _CliHelpRequested
         raise CliUsageError(message or f"argument parser exited with status {status}")
+
+
+class _CurationOperationAction(argparse.Action):
+    """Collect mixed repeated curation flags in their exact command-line order."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: str | Sequence[Any] | None,
+        option_string: str | None = None,
+    ) -> None:
+        del parser
+        if option_string is None or not isinstance(values, str):
+            raise CliUsageError("curation operations require one citation identifier")
+        operation = option_string.removeprefix("--")
+        current = getattr(namespace, self.dest, None)
+        ordered = [] if current is None else list(current)
+        ordered.append((operation, values))
+        setattr(namespace, self.dest, ordered)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -217,6 +267,25 @@ def _build_parser() -> argparse.ArgumentParser:
     research_build.add_argument("--fragments-per-document", type=int, default=2)
     research_build.add_argument("--include-drafts", action="store_true")
     research_build.set_defaults(handler=_research_build)
+
+    research_validate = research_sub.add_parser("validate", help="Validate an immutable research artifact")
+    research_validate.add_argument("artifact")
+    research_validate.add_argument("--output-root", help="Research artifact root for related local artifacts")
+    research_validate.set_defaults(handler=_research_validate)
+
+    research_curate = research_sub.add_parser("curate", help="Create an immutable child dossier revision")
+    research_curate.add_argument("revision")
+    for operation in ("include", "exclude", "pin"):
+        research_curate.add_argument(
+            f"--{operation}",
+            dest="curation_operations",
+            action=_CurationOperationAction,
+            metavar="CITATION_ID",
+        )
+    research_curate.add_argument("--reason", help="Optional owner note applied to every ordered operation")
+    research_curate.add_argument("--output-root", help="Dossier output root (default: data/generated/research)")
+    research_curate.add_argument("--acknowledge-unsafe-output", action="store_true")
+    research_curate.set_defaults(handler=_research_curate)
 
     return parser
 
@@ -478,6 +547,91 @@ def _research_build(args: argparse.Namespace) -> int:
             "includes_drafts": manifest["includes_drafts"],
             "warnings": list(warnings),
         },
+    )
+
+
+def _research_validate(args: argparse.Namespace) -> int:
+    package = load_dossier_package(Path(args.artifact).expanduser())
+    revision = DossierRevision(**package.manifest)
+    result = validate_dossier_revision(
+        _repo(args),
+        revision,
+        validated_at=_utc_timestamp(),
+    )
+    warnings = _research_warning_codes(result.warnings)
+    args._error_warnings = warnings
+    _emit_research_warnings(warnings)
+    return emit_json(asdict(result), exit_code=0 if result.status in {"valid", "valid_with_warnings"} else 1)
+
+
+def _research_curate(args: argparse.Namespace) -> int:
+    raw_operations = args.curation_operations
+    if not raw_operations:
+        raise CliUsageError("at least one include, exclude or pin operation is required")
+    operations = tuple(
+        CurationOperation(
+            operation=operation,
+            citation_id=citation_id,
+            reason=args.reason,
+            ordinal=ordinal,
+        )
+        for ordinal, (operation, citation_id) in enumerate(raw_operations)
+    )
+
+    settings = _settings(args)
+    generated_root = Path(settings.repo_root) / "data" / "generated"
+    output_root = Path(args.output_root).expanduser() if args.output_root is not None else generated_root / "research"
+    location_warning = validate_output_root(
+        output_root,
+        generated_root=generated_root,
+        acknowledge_unsafe=args.acknowledge_unsafe_output,
+    )
+    args._error_warnings = _research_warning_codes((location_warning,))
+
+    parent_package = load_dossier_package(Path(args.revision).expanduser())
+    parent_revision = DossierRevision(**parent_package.manifest)
+    repository = KnowledgeRepository(ArangoClient(settings))
+    try:
+        result = curate_dossier_revision(
+            repository,
+            parent_revision,
+            operations,
+            validated_at=_utc_timestamp(),
+        )
+    except DossierCurationError as error:
+        validation_warnings = error.parent_validation.warnings if error.parent_validation is not None else ()
+        warnings = _research_warning_codes(validation_warnings, (location_warning,))
+        args._error_warnings = warnings
+        _emit_research_warnings(warnings)
+        reason = error.code if error.code in _SAFE_CURATION_REJECTION_CODES else "curation_rejected"
+        payload: dict[str, Any] = {
+            "status": "rejected",
+            "reason": reason,
+            "warnings": list(warnings),
+        }
+        if error.parent_validation is not None:
+            payload["validation"] = asdict(error.parent_validation)
+        return emit_json(payload, exit_code=1)
+
+    child_package = materialize_curated_dossier_package(parent_package, result)
+    publish_dossier_package(output_root, child_package)
+    manifest = child_package.manifest
+    warnings = _research_warning_codes(manifest["warnings"], (location_warning,))
+    args._error_warnings = warnings
+    _emit_research_warnings(warnings)
+    revision_path = output_root / manifest["dossier_key"] / "revisions" / manifest["revision_id"]
+    return emit_json(
+        {
+            "status": "ok",
+            "dossier_key": manifest["dossier_key"],
+            "revision_id": manifest["revision_id"],
+            "parent_revision_id": manifest["parent_revision_id"],
+            "content_digest": manifest["content_digest"],
+            "output": str(revision_path),
+            "operations": len(manifest["curation_operations"]),
+            "includes_drafts": manifest["includes_drafts"],
+            "warnings": list(warnings),
+        }
     )
 
 

@@ -7,7 +7,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from knowledge_base.arango import ArangoError
 from knowledge_base.research_artifacts import (
@@ -548,6 +548,21 @@ class DossierValidationError(RuntimeError):
     """Current-corpus dossier validation failed without a citation verdict."""
 
 
+class DossierCurationError(RuntimeError):
+    """A dossier curation request was rejected without exposing private details."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        parent_validation: ValidationResult | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.parent_validation = parent_validation
+
+
 _DRAFT_SCOPE_WARNING = "draft_visibility_enabled"
 _CONTEXT_WARNING = "optional corpus/index freshness context is unavailable"
 _TOPIC_WARNING = "optional topic context is unavailable"
@@ -1041,6 +1056,69 @@ class ValidationResult:
         _validate_validation_result_status(self)
 
 
+@dataclass(frozen=True, slots=True)
+class DossierCurationResult:
+    parent_revision_id: str
+    request: ResearchRequest | Mapping[str, Any]
+    corpus_context: Mapping[str, Any]
+    candidate_evidence: Sequence[EvidenceCandidate | Mapping[str, Any]]
+    selected_citation_ids: Sequence[str]
+    curation_operations: Sequence[CurationOperation | Mapping[str, Any]]
+    derived_context: Mapping[str, Any]
+    status: str
+    includes_drafts: bool
+    warnings: Sequence[str]
+    parent_validation: ValidationResult
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.parent_revision_id, str) or not _REVISION_ID_RE.fullmatch(self.parent_revision_id):
+            raise ValueError("invalid parent_revision_id")
+
+        request = self.request if isinstance(self.request, ResearchRequest) else ResearchRequest(**dict(self.request))
+        object.__setattr__(self, "request", request)
+        _validate_corpus_context(self.corpus_context)
+        object.__setattr__(self, "corpus_context", dict(self.corpus_context))
+
+        candidates = _normalize_dossier_candidates(self.candidate_evidence)
+        object.__setattr__(self, "candidate_evidence", candidates)
+        selected_ids = _normalize_selected_citation_ids(self.selected_citation_ids, candidates)
+        expected_selected_ids = tuple(
+            candidate.citation.citation_id
+            for state in ("pinned", "selected")
+            for candidate in candidates
+            if candidate.selection_state == state and isinstance(candidate.citation, Citation)
+        )
+        if selected_ids != expected_selected_ids:
+            raise ValueError("selected_citation_ids must present pinned then selected evidence in stable order")
+        object.__setattr__(self, "selected_citation_ids", selected_ids)
+
+        operations = _normalize_curation_operations(self.curation_operations)
+        if not operations:
+            raise ValueError("curation result requires at least one operation")
+        object.__setattr__(self, "curation_operations", operations)
+        _validate_derived_context(self.derived_context)
+        object.__setattr__(self, "derived_context", dict(self.derived_context))
+
+        if self.status not in {"ready", "degraded"}:
+            raise ValueError("curated dossier status must be ready or degraded")
+        if not isinstance(self.includes_drafts, bool) or self.includes_drafts is not request.includes_drafts:
+            raise ValueError("includes_drafts must mirror request visibility")
+        _validate_string_sequence("warnings", self.warnings, maximum_items=100, maximum_length=2000)
+        object.__setattr__(self, "warnings", tuple(self.warnings))
+
+        validation = self.parent_validation
+        if not isinstance(validation, ValidationResult):
+            raise ValueError("parent_validation must be a ValidationResult")
+        if (
+            validation.target_type != "dossier_revision"
+            or validation.target_id != self.parent_revision_id
+            or validation.status not in {"valid", "valid_with_warnings"}
+            or not validation.dossier_current
+            or not validation.citations_resolved
+        ):
+            raise ValueError("parent_validation must confirm the current parent revision")
+
+
 def _validate_validation_result_identity(result: ValidationResult) -> None:
     if result.schema_version != "1.0" or result.artifact_type != "validation_result":
         raise ValueError("unsupported validation contract")
@@ -1118,6 +1196,14 @@ def revalidate_dossier_citations(
     """Resolve the selected evidence against current allowlisted corpus state."""
 
     citations = _selected_revision_citations(revision)
+    return _revalidate_revision_citations(repository, revision, citations)
+
+
+def _revalidate_revision_citations(
+    repository: KnowledgeRepository,
+    revision: DossierRevision,
+    citations: Sequence[Citation],
+) -> tuple[JsonObject, ...]:
     refs = tuple(_citation_validation_ref(citation) for citation in citations)
     try:
         current_rows = hydrate_current_citations(repository, refs)
@@ -1169,6 +1255,186 @@ def validate_dossier_revision(
         warnings=warnings,
         errors=errors,
         validated_at=validated_at,
+    )
+
+
+def curate_dossier_revision(
+    repository: KnowledgeRepository,
+    parent: DossierRevision,
+    operations: Sequence[CurationOperation],
+    *,
+    validated_at: str,
+) -> DossierCurationResult:
+    """Apply bounded owner curation to a current immutable dossier revision."""
+
+    effective_operations = _normalize_requested_curation_operations(operations)
+    _validate_requested_operation_order(effective_operations)
+
+    try:
+        parent_validation = validate_dossier_revision(repository, parent, validated_at=validated_at)
+    except DossierValidationError:
+        raise DossierCurationError(
+            "parent current validation is unavailable",
+            code="validation_unavailable",
+        ) from None
+    if parent_validation.status == "invalid":
+        raise DossierCurationError(
+            "parent revision is not current",
+            code="parent_not_current",
+            parent_validation=parent_validation,
+        )
+
+    candidates = cast(tuple[EvidenceCandidate, ...], tuple(parent.candidate_evidence))
+    candidates_by_id = {
+        candidate.citation.citation_id: candidate for candidate in candidates if isinstance(candidate.citation, Citation)
+    }
+    if len(candidates_by_id) != len(candidates):  # pragma: no cover - loaded manifests enforce citation shape
+        raise DossierCurationError("parent candidate universe is invalid", code="invalid_parent")
+    _validate_parent_selection_state(parent, candidates)
+
+    curated_by_id = dict(candidates_by_id)
+    include_citations: list[Citation] = []
+    for operation in effective_operations:
+        candidate = curated_by_id.get(operation.citation_id)
+        if candidate is None:
+            raise DossierCurationError(
+                "curation operation references an unknown citation",
+                code="unknown_citation",
+            )
+        next_state = _curation_transition(candidate.selection_state, operation.operation)
+        if next_state is None:
+            raise DossierCurationError(
+                "curation operation is not valid for the current evidence state",
+                code="invalid_transition",
+            )
+        curated_by_id[operation.citation_id] = _curated_candidate(
+            candidate,
+            selection_state=next_state,
+            selection_reason=f"owner-{operation.operation}",
+        )
+        if operation.operation == "include":
+            citation = candidate.citation
+            if not isinstance(citation, Citation):  # pragma: no cover - normalized by EvidenceCandidate
+                raise DossierCurationError("parent citation projection is invalid", code="invalid_parent")
+            include_citations.append(citation)
+
+    curated_candidates = tuple(
+        curated_by_id[candidate.citation.citation_id] for candidate in candidates if isinstance(candidate.citation, Citation)
+    )
+    selected_ids = _curated_selected_ids(curated_candidates)
+    if not selected_ids:
+        raise DossierCurationError("curation cannot remove all selected evidence", code="empty_selection")
+    if len(selected_ids) > 100:
+        raise DossierCurationError("curation exceeds the selected evidence limit", code="selection_limit_exceeded")
+
+    if include_citations:
+        try:
+            include_states = _revalidate_revision_citations(repository, parent, include_citations)
+        except DossierValidationError:
+            raise DossierCurationError(
+                "include target current validation is unavailable",
+                code="validation_unavailable",
+            ) from None
+        stale_include = next((state for state in include_states if state["status"] != "valid"), None)
+        if stale_include is not None:
+            raise DossierCurationError(
+                f"include target is not current: {stale_include['status']}",
+                code="include_not_current",
+            )
+
+    return DossierCurationResult(
+        parent_revision_id=parent.revision_id,
+        request=parent.request,
+        corpus_context=parent.corpus_context,
+        candidate_evidence=curated_candidates,
+        selected_citation_ids=selected_ids,
+        curation_operations=effective_operations,
+        derived_context=parent.derived_context,
+        status=parent.status,
+        includes_drafts=parent.includes_drafts,
+        warnings=parent.warnings,
+        parent_validation=parent_validation,
+    )
+
+
+def _normalize_requested_curation_operations(
+    operations: Sequence[CurationOperation],
+) -> tuple[CurationOperation, ...]:
+    if any(not isinstance(operation, CurationOperation) for operation in operations):
+        raise DossierCurationError("curation operations are invalid", code="invalid_operation") from None
+    normalized = tuple(operations)
+    if not normalized:
+        raise DossierCurationError("curation requires at least one operation", code="empty_operations")
+    return normalized
+
+
+def _validate_requested_operation_order(operations: Sequence[CurationOperation]) -> None:
+    if any(operation.ordinal != ordinal for ordinal, operation in enumerate(operations)):
+        raise DossierCurationError(
+            "curation operation ordinals must be contiguous and ordered from zero",
+            code="invalid_operation_order",
+        )
+
+    seen: dict[str, str] = {}
+    for operation in operations:
+        previous = seen.get(operation.citation_id)
+        if previous is None:
+            seen[operation.citation_id] = operation.operation
+            continue
+        if previous != operation.operation:
+            raise DossierCurationError(
+                "conflicting operations for one citation are not allowed",
+                code="conflicting_operation",
+            )
+        raise DossierCurationError(
+            "duplicate operations for one citation are not allowed",
+            code="duplicate_operation",
+        )
+
+
+def _validate_parent_selection_state(
+    parent: DossierRevision,
+    candidates: Sequence[EvidenceCandidate],
+) -> None:
+    expected_ids = _curated_selected_ids(candidates)
+    if set(parent.selected_citation_ids) != set(expected_ids):
+        raise DossierCurationError("parent selected evidence state is inconsistent", code="invalid_parent")
+
+
+def _curation_transition(selection_state: str, operation: str) -> str | None:
+    allowed = {
+        ("candidate", "include"): "selected",
+        ("excluded", "include"): "selected",
+        ("selected", "exclude"): "excluded",
+        ("pinned", "exclude"): "excluded",
+        ("selected", "pin"): "pinned",
+    }
+    return allowed.get((selection_state, operation))
+
+
+def _curated_candidate(
+    candidate: EvidenceCandidate,
+    *,
+    selection_state: str,
+    selection_reason: str,
+) -> EvidenceCandidate:
+    return EvidenceCandidate(
+        citation=candidate.citation,
+        document_rank=candidate.document_rank,
+        fragment_rank=candidate.fragment_rank,
+        score=candidate.score,
+        score_components=candidate.score_components,
+        selection_state=selection_state,
+        selection_reason=selection_reason,
+    )
+
+
+def _curated_selected_ids(candidates: Sequence[EvidenceCandidate]) -> tuple[str, ...]:
+    return tuple(
+        candidate.citation.citation_id
+        for state in ("pinned", "selected")
+        for candidate in candidates
+        if candidate.selection_state == state and isinstance(candidate.citation, Citation)
     )
 
 
