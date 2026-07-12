@@ -51,10 +51,12 @@ Success:
 Validates a dossier revision directory, handoff JSON, incoming writing-output JSON or imported writing directory by `artifact_type`.
 
 ```bash
-uv run kb research validate data/generated/research/.../revisions/REVISION_ID
+uv run kb research validate ARTIFACT \
+  [--handoff PATH_TO_HANDOFF] \
+  [--output-root data/generated/research]
 ```
 
-Output includes the booleans and per-citation states from `validation-result.schema.json`. `valid` and `valid_with_warnings` exit 0; `invalid` exits 1. Validation never repairs or rewrites the target.
+`--handoff` обязателен только для standalone incoming `artifact_type=writing_output`, потому что такой untrusted package ещё не находится в local artifact tree. Для dossier, handoff и imported-writing directory validator разрешает связанные local artifacts через их IDs относительно `--output-root` (или default root). Output включает booleans и per-citation states из `validation-result.schema.json`. `valid` и `valid_with_warnings` exit 0; `invalid` exits 1. Validation never repairs or rewrites the target.
 
 ## `kb research curate REVISION`
 

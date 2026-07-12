@@ -90,6 +90,7 @@ tests/
 ├── integration/
 │   └── test_research_workflow_pipeline.py
 └── fixtures/research/
+    ├── safe-research-corpus.json
     ├── valid-writing-output-draft.json
     ├── valid-writing-output-summary.json
     └── invalid-writing-output.json
