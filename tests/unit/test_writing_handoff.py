@@ -20,11 +20,12 @@ import pytest
 import knowledge_base.research_artifacts as research_artifacts
 import knowledge_base.research_workflow as research_workflow
 from knowledge_base.research_artifacts import (
+    ArtifactCollisionError,
     OutputRootAcknowledgementRequired,
     UnsafeArtifactPathError,
     canonical_sha256,
 )
-from knowledge_base.research_workflow import DossierRevision, ValidationResult
+from knowledge_base.research_workflow import DossierRevision, DossierValidationError, ValidationResult
 
 JsonObject = dict[str, Any]
 Builder = Callable[..., JsonObject]
@@ -642,6 +643,80 @@ def test_acknowledged_draft_handoff_records_both_decisions(
     assert handoff.draft_evidence_acknowledged is True
 
 
+def _oversized_handoff_evidence(citation_builder: Builder) -> list[JsonObject]:
+    citations: list[JsonObject] = []
+    for index in range(100):
+        prefix = f"Synthetic oversized evidence {index:03d}: "
+        excerpt = prefix + "я" * (20_000 - len(prefix))
+        citations.append(
+            citation_builder(
+                canonical_id=f"oversized-{index}",
+                document_key=f"doc-oversized-{index}",
+                chunk_key=f"chunk-oversized-{index}-0",
+                char_start=0,
+                char_end=len(excerpt),
+                excerpt=excerpt,
+                title=f"Oversized evidence {index}",
+                url=f"https://example.test/oversized/{index}",
+                raw_snapshot_key=f"raw-oversized-{index}",
+                import_run_key=f"import-oversized-{index}",
+            )
+        )
+    return citations
+
+
+def test_build_and_publish_reject_handoff_that_cannot_be_loaded_under_two_mib_cap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    handoff_package_builder: Builder,
+) -> None:
+    citations = _oversized_handoff_evidence(citation_builder)
+    candidates = [
+        evidence_candidate_builder(
+            citation=citation,
+            document_rank=(index % 50) + 1,
+            fragment_rank=(index // 50) + 1,
+            selection_state="selected",
+            selection_reason="oversized-contract-test",
+        )
+        for index, citation in enumerate(citations)
+    ]
+    request = dossier_manifest_builder()["request"]
+    request.update(
+        document_limit=50,
+        fragments_per_document=5,
+        evidence_limit=100,
+        candidate_limit=150,
+    )
+    revision = DossierRevision(**dossier_manifest_builder(request=request, candidate_evidence=candidates))
+
+    with pytest.raises(_api("WritingHandoffError")) as raised:
+        _build_handoff(monkeypatch, revision)
+    assert raised.value.code == "handoff_too_large"
+
+    payload = handoff_package_builder(evidence=citations)
+    package = _api("HandoffPackage")(**payload)
+    assert len((json.dumps(asdict(package), ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()) > (
+        MAX_WRITING_PACKAGE_BYTES
+    )
+    generated_root = tmp_path / "data" / "generated"
+    generated_root.mkdir(parents=True)
+    output_root = generated_root / "research"
+    with pytest.raises(_api("WritingHandoffError")) as publish_error:
+        _api("publish_writing_handoff")(
+            output_root,
+            package,
+            generated_root=generated_root,
+            acknowledge_unsafe=False,
+        )
+    assert publish_error.value.code == "handoff_too_large"
+    target = output_root / package.dossier_key / "handoffs" / f"{package.handoff_id}.json"
+    assert not target.exists()
+
+
 def test_build_and_validate_handoff_require_a_current_dossier_gate(
     monkeypatch: pytest.MonkeyPatch,
     dossier_manifest_builder: Builder,
@@ -742,6 +817,12 @@ def test_publish_handoff_is_owner_only_and_semantically_reuses_created_at_varian
         generated_root=generated_root,
         acknowledge_unsafe=False,
     )
+
+    def forbid_path_chmod(*args: Any, **kwargs: Any) -> None:
+        del args, kwargs
+        raise AssertionError("semantic reuse must enforce modes through verified descriptors")
+
+    monkeypatch.setattr(_writing_handoff().os, "chmod", forbid_path_chmod)
     reused = _api("publish_writing_handoff")(
         output_root,
         repeated,
@@ -761,6 +842,60 @@ def test_publish_handoff_is_owner_only_and_semantically_reuses_created_at_varian
     assert stat.S_IMODE(expected_path.parent.stat().st_mode) == 0o700
     assert _api("load_writing_handoff")(expected_path) == first
     assert not any(path.name.endswith(".tmp") for path in expected_path.parent.iterdir())
+
+
+@pytest.mark.skipif(os.name != "posix", reason="atomic collision recovery targets POSIX")
+@pytest.mark.parametrize("semantic_match", [True, False], ids=["semantic-reuse", "true-collision"])
+def test_publish_handoff_recovers_only_semantically_identical_collision_race(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    semantic_match: bool,
+) -> None:
+    revision = _revision(dossier_manifest_builder, evidence_candidate_builder, citation_builder)
+    requested = _build_handoff(monkeypatch, revision, created_at="2026-07-13T08:00:00Z")
+    raced = _build_handoff(
+        monkeypatch,
+        revision,
+        kind="draft" if semantic_match else "summary",
+        created_at="2026-07-12T16:01:00Z",
+    )
+    generated_root = tmp_path / "data" / "generated"
+    generated_root.mkdir(parents=True)
+    output_root = generated_root / "research"
+    target = output_root / revision.dossier_key / "handoffs" / f"{requested.handoff_id}.json"
+    original_publish = research_artifacts.publish_file_atomic
+    collision = ArtifactCollisionError("synthetic concurrent publication")
+
+    def race_publish(actual_target: Path, payload: bytes) -> str:
+        del payload
+        assert actual_target == target
+        original_publish(actual_target, _json_bytes(asdict(raced), sort_keys=True))
+        raise collision
+
+    monkeypatch.setattr(_writing_handoff(), "publish_file_atomic", race_publish)
+
+    if semantic_match:
+        publication = _api("publish_writing_handoff")(
+            output_root,
+            requested,
+            generated_root=generated_root,
+            acknowledge_unsafe=False,
+        )
+        assert publication.status == "reused"
+        assert publication.package == raced
+        assert publication.path == target
+    else:
+        with pytest.raises(ArtifactCollisionError) as raised:
+            _api("publish_writing_handoff")(
+                output_root,
+                requested,
+                generated_root=generated_root,
+                acknowledge_unsafe=False,
+            )
+        assert raised.value is collision
 
 
 def test_publish_handoff_custom_root_requires_location_ack_and_keeps_warning_out_of_package(
@@ -820,6 +955,33 @@ def test_publish_handoff_rejects_symlink_even_with_location_ack(
             acknowledge_unsafe=True,
         )
     assert list(real.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="no-follow input traversal targets POSIX")
+@pytest.mark.parametrize("artifact_kind", ["handoff", "writing_output"])
+def test_writing_loaders_reject_an_intermediate_symlink_component(
+    tmp_path: Path,
+    handoff_package_builder: Builder,
+    writing_output_package_builder: Builder,
+    artifact_kind: str,
+) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(real, target_is_directory=True)
+    if artifact_kind == "handoff":
+        payload = handoff_package_builder()
+        loader = _api("load_writing_handoff")
+        error_type = _api("WritingHandoffError")
+    else:
+        payload = writing_output_package_builder()
+        loader = _api("load_writing_output_package")
+        error_type = _api("WritingOutputContractError")
+    target = real / "artifact.json"
+    target.write_bytes(_json_bytes(payload))
+
+    with pytest.raises(error_type):
+        loader(linked / target.name)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="atomic file publication targets POSIX")
@@ -895,6 +1057,33 @@ def _parsed_round_trip(
     )
     output = _api("parse_writing_output_package")(_json_bytes(output_payload))
     return revision, handoff, output
+
+
+def _materialized_imported_round_trip(
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    handoff_package_builder: Builder,
+    writing_output_package_builder: Builder,
+) -> tuple[DossierRevision, Any, Any]:
+    revision, handoff, output = _parsed_round_trip(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        citation_builder,
+        handoff_package_builder,
+        writing_output_package_builder,
+    )
+    _patch_dossier_validation(monkeypatch, revision)
+    validation = _api("validate_writing_output_package")(object(), revision, handoff, output, validated_at=VALIDATED_AT)
+    assert validation.status == "valid"
+    package = research_artifacts.materialize_imported_writing_package(
+        output,
+        handoff,
+        validation,
+        imported_at="2026-07-12T16:05:00Z",
+    )
+    return revision, handoff, package
 
 
 @pytest.mark.parametrize("kind", ["draft", "summary"])
@@ -1032,6 +1221,61 @@ def test_output_identity_digest_visibility_and_allowlist_mismatches_reject_whole
             output,
             validated_at=VALIDATED_AT,
         )
+    assert raised.value.code == "writing_output_invalid"
+    assert raised.value.validation.status == "invalid"
+
+
+def test_self_consistent_forged_handoff_cannot_expand_revision_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    handoff_package_builder: Builder,
+    writing_output_package_builder: Builder,
+    writing_section_builder: Builder,
+) -> None:
+    revision = _revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        citation_builder,
+        states=("pinned", "selected"),
+    )
+    selected = [
+        asdict(candidate.citation)
+        for candidate in revision.candidate_evidence
+        if candidate.citation.citation_id in revision.selected_citation_ids
+    ]
+    forged = _citation(citation_builder, "forged-added-evidence")
+    handoff_payload = handoff_package_builder(
+        dossier_manifest=asdict(revision),
+        evidence=[*selected, forged],
+    )
+    handoff = _api("parse_handoff_package")(_json_bytes(handoff_payload))
+    content = "Self-consistent but unauthorized evidence."
+    output_payload = writing_output_package_builder(
+        handoff=handoff_payload,
+        content_markdown=content,
+        sections=[
+            writing_section_builder(
+                content_markdown=content,
+                char_start=0,
+                char_end=len(content),
+                citation_ids=[forged["citation_id"]],
+            )
+        ],
+    )
+    output = _api("parse_writing_output_package")(_json_bytes(output_payload))
+    _patch_dossier_validation(monkeypatch, revision)
+
+    validation = _api("validate_writing_output_package")(object(), revision, handoff, output, validated_at=VALIDATED_AT)
+
+    assert validation.status == "invalid"
+    assert validation.package_integrity is True
+    assert validation.dossier_current is False
+    forged_state = next(row for row in validation.citations if row["citation_id"] == forged["citation_id"])
+    assert forged_state["status"] == "missing"
+    with pytest.raises(_api("WritingImportError")) as raised:
+        _api("prepare_writing_import")(object(), revision, handoff, output, validated_at=VALIDATED_AT)
     assert raised.value.code == "writing_output_invalid"
     assert raised.value.validation.status == "invalid"
 
@@ -1292,6 +1536,137 @@ def test_stale_dossier_blocks_writing_import_even_when_package_is_structurally_v
         _api("prepare_writing_import")(object(), revision, handoff, output, validated_at=VALIDATED_AT)
     assert raised.value.code == "writing_output_invalid"
     assert raised.value.validation == validation
+
+
+def test_imported_validation_reports_malformed_contract_as_schema_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    handoff_package_builder: Builder,
+    writing_output_package_builder: Builder,
+) -> None:
+    revision, handoff, package = _materialized_imported_round_trip(
+        monkeypatch,
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        citation_builder,
+        handoff_package_builder,
+        writing_output_package_builder,
+    )
+    malformed = SimpleNamespace(
+        manifest={**deepcopy(package.manifest), "provider_api_key": PRIVATE_MARKER},
+        validation=deepcopy(package.validation),
+        markdown=package.markdown,
+        files=deepcopy(package.files),
+    )
+
+    validation = _api("validate_imported_writing_package")(object(), revision, handoff, malformed, validated_at=VALIDATED_AT)
+
+    assert validation.status == "invalid"
+    assert validation.schema_valid is False
+    assert validation.errors
+
+
+def test_imported_validation_keeps_intrinsic_integrity_when_only_dossier_is_stale(
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    handoff_package_builder: Builder,
+    writing_output_package_builder: Builder,
+) -> None:
+    revision, handoff, package = _materialized_imported_round_trip(
+        monkeypatch,
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        citation_builder,
+        handoff_package_builder,
+        writing_output_package_builder,
+    )
+    _patch_dossier_validation(monkeypatch, revision, status="invalid")
+
+    validation = _api("validate_imported_writing_package")(object(), revision, handoff, package, validated_at=VALIDATED_AT)
+
+    assert validation.status == "invalid"
+    assert validation.schema_valid is True
+    assert validation.package_integrity is True
+    assert validation.dossier_current is False
+    assert validation.citations_resolved is False
+
+
+def test_imported_manifest_output_kind_is_bound_to_handoff_request(
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    handoff_package_builder: Builder,
+    writing_output_package_builder: Builder,
+) -> None:
+    revision, handoff, package = _materialized_imported_round_trip(
+        monkeypatch,
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        citation_builder,
+        handoff_package_builder,
+        writing_output_package_builder,
+    )
+    manifest = deepcopy(package.manifest)
+    manifest["output_kind"] = "summary"
+    forged = SimpleNamespace(
+        manifest=manifest,
+        validation=deepcopy(package.validation),
+        markdown=package.markdown,
+        files={
+            **deepcopy(package.files),
+            "manifest.json": (json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(),
+        },
+    )
+
+    validation = _api("validate_imported_writing_package")(object(), revision, handoff, forged, validated_at=VALIDATED_AT)
+
+    assert handoff.requested_output.kind == "draft"
+    assert validation.status == "invalid"
+    assert validation.schema_valid is True
+    assert validation.package_integrity is True
+    assert validation.dossier_current is False
+    assert validation.errors
+
+
+def test_dossier_validation_operational_failure_is_safe_and_non_publishable(
+    monkeypatch: pytest.MonkeyPatch,
+    dossier_manifest_builder: Builder,
+    evidence_candidate_builder: Builder,
+    citation_builder: Builder,
+    handoff_package_builder: Builder,
+) -> None:
+    revision = _revision(dossier_manifest_builder, evidence_candidate_builder, citation_builder)
+    handoff = _api("parse_handoff_package")(_json_bytes(handoff_package_builder(dossier_manifest=asdict(revision))))
+
+    def unavailable(*args: Any, **kwargs: Any) -> ValidationResult:
+        del args, kwargs
+        raise DossierValidationError("private operational diagnostic")
+
+    monkeypatch.setattr(research_workflow, "validate_dossier_revision", unavailable)
+    monkeypatch.setattr(_writing_handoff(), "validate_dossier_revision", unavailable, raising=False)
+
+    validation = _api("validate_writing_handoff")(object(), revision, handoff, validated_at=VALIDATED_AT)
+    assert validation.status == "invalid"
+    assert validation.dossier_current is False
+    assert "private operational diagnostic" not in repr(validation)
+
+    with pytest.raises(_api("WritingHandoffError")) as raised:
+        _api("build_writing_handoff")(
+            object(),
+            revision,
+            _requested_output(),
+            egress_acknowledged=True,
+            allow_draft_evidence=False,
+            validated_at=VALIDATED_AT,
+            created_at=CREATED_AT,
+        )
+    assert raised.value.code == "dossier_validation_unavailable"
+    assert "private operational diagnostic" not in str(raised.value)
 
 
 def test_error_types_expose_only_stable_code_and_optional_validation(

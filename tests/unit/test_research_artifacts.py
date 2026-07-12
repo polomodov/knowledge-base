@@ -1083,6 +1083,9 @@ def test_imported_writing_materialization_matches_schema_and_runtime_contract_fo
     assert set(package.files) == {"manifest.json", "output.md", "validation.json"}
     assert package.manifest["files"]["output"]["path"] == "output.md"
     assert package.manifest["files"]["validation"]["path"] == "validation.json"
+    assert package.validation["status"] == ("valid_with_warnings" if package.manifest["warnings"] else "valid")
+    if unsupported_sections:
+        assert "unsupported_sections_present" in package.manifest["warnings"]
 
 
 def test_imported_writing_inherits_privacy_decisions_only_from_validated_handoff(
@@ -1335,7 +1338,14 @@ def test_load_imported_writing_requires_exact_three_file_set(
 
 @pytest.mark.parametrize(
     "mutation",
-    ["invalid_json", "unknown_manifest", "unknown_nested", "output_digest", "validation_target"],
+    [
+        "invalid_json",
+        "unknown_manifest",
+        "unknown_nested",
+        "output_digest",
+        "validation_target",
+        "validation_status",
+    ],
 )
 def test_load_imported_writing_strictly_rejects_unknown_corrupt_or_digest_mismatched_package(
     tmp_path: Path,
@@ -1362,7 +1372,10 @@ def test_load_imported_writing_strictly_rejects_unknown_corrupt_or_digest_mismat
         (path / "output.md").write_text("changed generated output", encoding="utf-8")
     else:
         validation = _read_json_object(path / "validation.json")
-        validation["target_id"] = "writing-0000000000000000"
+        if mutation == "validation_target":
+            validation["target_id"] = "writing-0000000000000000"
+        else:
+            validation["status"] = "valid"
         validation_payload = _json_file_bytes(validation)
         (path / "validation.json").write_bytes(validation_payload)
         manifest["files"]["validation"] = _file_digest("validation.json", validation_payload)

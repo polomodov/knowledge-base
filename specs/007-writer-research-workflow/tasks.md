@@ -110,20 +110,20 @@
 ### Tests first
 
 - [X] T031 [US3] Создать writing-output fixtures `tests/fixtures/research/valid-writing-output-draft.json`, `tests/fixtures/research/valid-writing-output-summary.json`, `tests/fixtures/research/invalid-writing-output.json` и добавить handoff/writing builders в `tests/conftest.py`
-- [ ] T032 [US3] Написать failing schema+runtime-parser tests для writing-output fixtures и strict size/version/unknown-field bounds в `tests/unit/test_writing_handoff.py`
-- [ ] T033 [US3] Написать failing schema+runtime tests для HandoffPackage и non-circular identity, idempotent reuse, evidence allowlist, every-handoff egress acknowledgement, second draft acknowledgement, standalone `0600`, symlink/custom-root rejection и atomic cleanup в `tests/unit/test_writing_handoff.py`
-- [ ] T034 [US3] Написать failing tests для `draft|summary` symmetry, cross-kind rejection, content/package digests, exhaustive section ranges, allowlisted citations, unsupported reasons, handoff/imported-artifact validation и запрета чтения package paths/URLs в `tests/unit/test_writing_handoff.py`
-- [ ] T035 [P] [US3] Написать failing schema+runtime tests для ImportedWritingManifest, inherited acknowledgements/warnings, `human_reviewed=false`, atomic/idempotent output publication и path permissions в `tests/unit/test_research_artifacts.py`
-- [ ] T036 [P] [US3] Написать failing CLI tests для `kb research handoff`, `kb research import-output` и `kb research validate --handoff`, обоих output kinds, acknowledgement truth table, stderr warnings и stable JSON exit codes в `tests/unit/test_cli.py`
-- [ ] T037 [P] [US3] Добавить failing integration round-trips для draft и summary, validators всех artifact types, identical re-import, wrong-kind/unknown-citation/changed-evidence rejection и DB content snapshots в `tests/integration/test_research_workflow_pipeline.py`
+- [X] T032 [US3] Написать failing schema+runtime-parser tests для writing-output fixtures и strict size/version/unknown-field bounds в `tests/unit/test_writing_handoff.py`
+- [X] T033 [US3] Написать failing schema+runtime tests для HandoffPackage и non-circular identity, idempotent reuse, evidence allowlist, every-handoff egress acknowledgement, second draft acknowledgement, standalone `0600`, symlink/custom-root rejection и atomic cleanup в `tests/unit/test_writing_handoff.py`
+- [X] T034 [US3] Написать failing tests для `draft|summary` symmetry, cross-kind rejection, content/package digests, exhaustive section ranges, allowlisted citations, unsupported reasons, handoff/imported-artifact validation и запрета чтения package paths/URLs в `tests/unit/test_writing_handoff.py`
+- [X] T035 [P] [US3] Написать failing schema+runtime tests для ImportedWritingManifest, inherited acknowledgements/warnings, `human_reviewed=false`, atomic/idempotent output publication и path permissions в `tests/unit/test_research_artifacts.py`
+- [X] T036 [P] [US3] Написать failing CLI tests для `kb research handoff`, `kb research import-output` и `kb research validate --handoff`, обоих output kinds, acknowledgement truth table, stderr warnings и stable JSON exit codes в `tests/unit/test_cli.py`
+- [X] T037 [P] [US3] Добавить failing integration round-trips для draft и summary, validators всех artifact types, identical re-import, wrong-kind/unknown-citation/changed-evidence rejection и DB content snapshots в `tests/integration/test_research_workflow_pipeline.py`
 
 ### Implementation
 
-- [ ] T038 [P] [US3] Реализовать handoff projection, non-circular identity/package digests, citation allowlist, quoted-data instructions, egress/draft gates и secure atomic standalone-file reuse через `research_artifacts.py` в `src/knowledge_base/writing_handoff.py`
-- [ ] T039 [US3] Реализовать bounded manual parser и structural validator writing-output package для обоих kinds, digest/identity/visibility/coverage/citation/current-dossier checks в `src/knowledge_base/writing_handoff.py`
-- [ ] T040 [P] [US3] Реализовать imported-writing manifest/output/validation rendering, content-derived `writing_id` и atomic idempotent publication в `src/knowledge_base/research_artifacts.py`
-- [ ] T041 [US3] Реализовать import orchestration и service-level validators для handoff, incoming writing-output с explicit handoff и imported-writing artifacts, включая acknowledgement propagation и whole-package rejection, в `src/knowledge_base/writing_handoff.py`
-- [ ] T042 [US3] Добавить handlers `kb research handoff` и `kb research import-output` и полный validate dispatch с `--handoff`/`--output-root` resolution в `src/knowledge_base/cli/main.py`
+- [X] T038 [P] [US3] Реализовать handoff projection, non-circular identity/package digests, citation allowlist, quoted-data instructions, egress/draft gates и secure atomic standalone-file reuse через `research_artifacts.py` в `src/knowledge_base/writing_handoff.py`
+- [X] T039 [US3] Реализовать bounded manual parser и structural validator writing-output package для обоих kinds, digest/identity/visibility/coverage/citation/current-dossier checks в `src/knowledge_base/writing_handoff.py`
+- [X] T040 [P] [US3] Реализовать imported-writing manifest/output/validation rendering, content-derived `writing_id` и atomic idempotent publication в `src/knowledge_base/research_artifacts.py`
+- [X] T041 [US3] Реализовать import orchestration и service-level validators для handoff, incoming writing-output с explicit handoff и imported-writing artifacts, включая acknowledgement propagation и whole-package rejection, в `src/knowledge_base/writing_handoff.py`
+- [X] T042 [US3] Добавить handlers `kb research handoff` и `kb research import-output` и полный validate dispatch с `--handoff`/`--output-root` resolution в `src/knowledge_base/cli/main.py`
 
 **Checkpoint**: US3 независимо принимает и draft, и summary, сохраняя generated/source-of-truth boundary и read-only MCP.
 

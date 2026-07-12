@@ -1373,6 +1373,45 @@ def test_research_handoff_external_disclosure_ack_does_not_acknowledge_custom_ou
     assert calls["publish_handoff"]["acknowledge_unsafe"] is False
 
 
+def test_research_handoff_preserves_acknowledged_location_warning_when_publication_fails(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    dossier_manifest_builder,
+    handoff_package_builder,
+) -> None:
+    dossier_manifest = dossier_manifest_builder()
+    handoff_payload = handoff_package_builder(
+        dossier_manifest=dossier_manifest,
+        warnings=["exact_evidence_requires_owner_review"],
+    )
+    _install_research_handoff_seams(
+        monkeypatch,
+        tmp_path,
+        dossier_manifest,
+        handoff_payload,
+        publication_error=OSError("synthetic handoff publish failure"),
+    )
+
+    code = cli.main(
+        [
+            "research",
+            "handoff",
+            str(tmp_path / "immutable-revision"),
+            "--output-root",
+            str(tmp_path / "acknowledged-external-handoffs"),
+            "--acknowledge-external-disclosure",
+            "--acknowledge-unsafe-output",
+        ]
+    )
+    payload, stderr = _read_cli_output(capsys)
+
+    assert code == 1 and payload["error_type"] == "OSError"
+    assert payload["warnings"] == ["exact_evidence_requires_owner_review", "output_outside_generated_zone"]
+    assert "exact_evidence_requires_owner_review" in stderr
+    assert "output_outside_generated_zone" in stderr
+
+
 @pytest.mark.parametrize(
     ("includes_drafts", "egress_acknowledged", "allow_draft_evidence", "expected_code"),
     [
@@ -2015,3 +2054,25 @@ def test_research_validate_writing_output_requires_explicit_handoff_before_relat
     assert "handoff" in payload["error"].lower()
     assert "usage:" not in stderr.lower()
     assert calls in ([], [("load_output", artifact)])
+
+
+def test_research_validate_rejects_oversized_standalone_artifact_before_strict_loader(
+    capsys,
+    monkeypatch,
+    tmp_path,
+) -> None:
+    artifact = tmp_path / "oversized-writing-output.json"
+    artifact.write_bytes(b"{}" + b" " * (2 * 1024 * 1024))
+
+    def forbidden_loader(*_args, **_kwargs):
+        pytest.fail("oversized standalone artifact must fail at the bounded type probe")
+
+    monkeypatch.setattr(cli, "load_writing_output_package", forbidden_loader, raising=False)
+    monkeypatch.setattr(cli, "load_writing_handoff", forbidden_loader, raising=False)
+
+    code = cli.main(["research", "validate", str(artifact)])
+    payload, _ = _read_cli_output(capsys)
+
+    assert code == 1
+    assert payload["error_type"] == "ArtifactContractError"
+    assert "size limit" in payload["error"]
