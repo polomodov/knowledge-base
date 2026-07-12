@@ -35,13 +35,6 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    services:
-      arangodb:
-        image: arangodb:3.12
-        env:
-          ARANGO_ROOT_PASSWORD: knowledge-base-dev
-        ports:
-          - 8529:8529
     env:
       KB_ARANGO_URL: http://127.0.0.1:8529
       KB_ARANGO_USER: root
@@ -55,6 +48,13 @@ jobs:
       - run: pip install uv
       - name: Base package imports without MCP extra
         run: uv run --isolated --extra dev python -c 'import importlib.util; import knowledge_base.mcp_server; assert importlib.util.find_spec("mcp") is None'
+      - name: Start ArangoDB with vector index
+        # Parity with compose/arangodb.compose.yml — GHA service containers cannot set `command`.
+        run: |
+          docker run -d --name knowledge-base-arangodb \
+            -e ARANGO_ROOT_PASSWORD=knowledge-base-dev \
+            -p 8529:8529 \
+            arangodb:3.12 arangod --vector-index
       - name: Wait for ArangoDB
         run: |
           for _ in $(seq 1 60); do
