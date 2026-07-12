@@ -68,7 +68,7 @@
 - [X] T016 [P] [US1] Реализовать Citation identity/provenance projection и deterministic multi-fragment selection с dedupe, diversity, caps и stable tie-breaks в `src/knowledge_base/research_workflow.py`
 - [X] T017 [US1] Реализовать dossier build orchestration, request validation, optional-context degradation и честный no-evidence outcome без DB mutations в `src/knowledge_base/research_workflow.py`
 - [X] T018 [US1] Реализовать dossier manifest, human-readable Markdown, initial validation projection и immutable root revision publication в `src/knowledge_base/research_artifacts.py`
-- [ ] T019 [US1] Добавить parser/handler `kb research build` с embedding provider, output-root safety flags и contract exit codes в `src/knowledge_base/cli/main.py`
+- [X] T019 [US1] Добавить parser/handler `kb research build` с embedding provider, output-root safety flags и contract exit codes в `src/knowledge_base/cli/main.py`
 
 **Checkpoint**: US1 самостоятельно создаёт и валидно читает extractive dossier; legacy `kb search` и MCP остаются неизменными.
 

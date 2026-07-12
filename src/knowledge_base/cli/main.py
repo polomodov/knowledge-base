@@ -4,7 +4,9 @@ import argparse
 import os
 import sys
 import traceback
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal, Never
 
 from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import load_settings
@@ -16,6 +18,12 @@ from knowledge_base.indexing import rebuild_indexes
 from knowledge_base.json_output import emit_json
 from knowledge_base.platform import platform_down, platform_up
 from knowledge_base.repository import KnowledgeRepository
+from knowledge_base.research_artifacts import (
+    materialize_dossier_package,
+    publish_dossier_package,
+    validate_output_root,
+)
+from knowledge_base.research_workflow import ResearchRequest, ResearchVisibility, build_dossier
 from knowledge_base.retrieval import (
     global_search,
     graph_neighbors,
@@ -32,30 +40,64 @@ from knowledge_base.sources.tellmeabout_tech import DEFAULT_FEED_URL, ingest_tel
 from knowledge_base.viz_builder import DEFAULT_VIZ_OUTPUT, build_visualization
 
 _MIN_SIMILARITY_HELP = "Relevance floor for semantic hits (default from config)"
+_RESEARCH_WARNING_MESSAGES = {
+    "draft_visibility_enabled": "draft evidence visibility is enabled; exact excerpts may contain private material",
+    "output_outside_generated_zone": "output root is outside data/generated; explicit acknowledgement was accepted",
+}
+
+
+class CliUsageError(ValueError):
+    """Command-line syntax or command selection is invalid."""
+
+
+class _CliHelpRequested(Exception):
+    pass
+
+
+class _CliArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> Never:
+        raise CliUsageError(message)
+
+    def exit(self, status: int = 0, message: str | None = None) -> Never:
+        if message:
+            self._print_message(message)
+        if status == 0:
+            raise _CliHelpRequested
+        raise CliUsageError(message or f"argument parser exited with status {status}")
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
-    if not hasattr(args, "handler"):
-        parser.print_help()
-        return 2
-
+    args: argparse.Namespace | None = None
     try:
+        args = parser.parse_args(argv)
+        if not hasattr(args, "handler"):
+            raise CliUsageError("a complete command is required")
         return args.handler(args)
+    except _CliHelpRequested:
+        return 0
     except ArangoError as error:
-        return emit_json({"status": "error", "error": str(error), "details": error.payload}, exit_code=1)
+        warnings = _error_warnings(args)
+        _emit_research_warnings(warnings)
+        payload = {"status": "error", "error": str(error), "details": error.payload}
+        if warnings:
+            payload["warnings"] = list(warnings)
+        return emit_json(payload, exit_code=1)
     except Exception as error:  # defensive CLI boundary
         # Keep the exception type (and, under KB_DEBUG, the traceback) instead of flattening
         # every failure to a bare message (finding #30).
         payload = {"status": "error", "error": str(error), "error_type": type(error).__name__}
+        warnings = _error_warnings(args)
+        _emit_research_warnings(warnings)
+        if warnings:
+            payload["warnings"] = list(warnings)
         if os.getenv("KB_DEBUG"):
             payload["traceback"] = traceback.format_exc()
         return emit_json(payload, exit_code=1)
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="kb", description="knowledge-base pipeline CLI")
+    parser = _CliArgumentParser(prog="kb", description="knowledge-base pipeline CLI")
     parser.add_argument("--config", help="Optional TOML config path")
     subcommands = parser.add_subparsers(dest="command")
 
@@ -161,6 +203,20 @@ def _build_parser() -> argparse.ArgumentParser:
     viz_build.add_argument("--timeline-top-topics", type=int, default=10)
     viz_build.add_argument("--include-drafts", action="store_true")
     viz_build.set_defaults(handler=_viz_build)
+
+    research = subcommands.add_parser("research", help="Build and manage research dossiers")
+    research_sub = research.add_subparsers(dest="research_command")
+    research_build = research_sub.add_parser("build", help="Build an immutable evidence dossier")
+    research_build.add_argument("topic")
+    research_build.add_argument("--output-root", help="Dossier output root (default: data/generated/research)")
+    research_build.add_argument("--acknowledge-unsafe-output", action="store_true")
+    research_build.add_argument("--source", help="Optional exact source_key filter")
+    research_build.add_argument("--published-from", help="Inclusive UTC date (YYYY-MM-DD)")
+    research_build.add_argument("--published-to", help="Inclusive UTC date (YYYY-MM-DD)")
+    research_build.add_argument("--documents", type=int, default=12)
+    research_build.add_argument("--fragments-per-document", type=int, default=2)
+    research_build.add_argument("--include-drafts", action="store_true")
+    research_build.set_defaults(handler=_research_build)
 
     return parser
 
@@ -346,6 +402,111 @@ def _export_graph(args: argparse.Namespace) -> int:
         ego_document_key=args.ego,
     )
     return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)
+
+
+def _research_build(args: argparse.Namespace) -> int:
+    request = ResearchRequest(
+        query=args.topic,
+        source_key=args.source,
+        published_from=args.published_from,
+        published_to=args.published_to,
+        visibility=(ResearchVisibility.PUBLISHED_AND_DRAFTS if args.include_drafts else ResearchVisibility.PUBLISHED_ONLY),
+        document_limit=args.documents,
+        fragments_per_document=args.fragments_per_document,
+    )
+    settings = _settings(args)
+    generated_root = Path(settings.repo_root) / "data" / "generated"
+    output_root = Path(args.output_root).expanduser() if args.output_root is not None else generated_root / "research"
+    location_warning = validate_output_root(
+        output_root,
+        generated_root=generated_root,
+        acknowledge_unsafe=args.acknowledge_unsafe_output,
+    )
+    args._error_warnings = _research_warning_codes((location_warning,))
+
+    repository = KnowledgeRepository(ArangoClient(settings))
+    provider = build_embedding_provider(settings)
+    result = build_dossier(
+        repository,
+        request,
+        provider=provider,
+        built_at=_utc_timestamp(),
+    )
+    args._error_warnings = _research_warning_codes(result.warnings, (location_warning,))
+    if not result.publishable:
+        warnings = _research_warning_codes(result.warnings, (location_warning,))
+        _emit_research_warnings(warnings)
+        return emit_json(
+            {
+                "status": "no_evidence",
+                "dossier_key": None,
+                "revision_id": None,
+                "content_digest": None,
+                "output": None,
+                "evidence": len(result.selected_citation_ids),
+                "candidates": len(result.candidate_evidence),
+                "includes_drafts": result.includes_drafts,
+                "warnings": list(warnings),
+            },
+            exit_code=1,
+        )
+
+    artifact_status: Literal["ready", "degraded"] = "ready" if result.status == "ready" else "degraded"
+    package = materialize_dossier_package(
+        request=result.request,
+        corpus_context=result.corpus_context,
+        candidate_evidence=result.candidate_evidence,
+        derived_context=result.derived_context,
+        warnings=result.warnings,
+        status=artifact_status,
+    )
+    publish_dossier_package(output_root, package)
+    manifest = package.manifest
+    warnings = _research_warning_codes(manifest["warnings"], (location_warning,))
+    _emit_research_warnings(warnings)
+    revision_path = output_root / manifest["dossier_key"] / "revisions" / manifest["revision_id"]
+    status = {"ready": "ok", "degraded": "degraded"}[manifest["status"]]
+    return emit_json(
+        {
+            "status": status,
+            "dossier_key": manifest["dossier_key"],
+            "revision_id": manifest["revision_id"],
+            "content_digest": manifest["content_digest"],
+            "output": str(revision_path),
+            "evidence": len(manifest["selected_citation_ids"]),
+            "candidates": len(manifest["candidate_evidence"]),
+            "includes_drafts": manifest["includes_drafts"],
+            "warnings": list(warnings),
+        },
+    )
+
+
+def _utc_timestamp() -> str:
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _research_warning_codes(*groups) -> tuple[str, ...]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for value in group:
+            if isinstance(value, str) and value and value not in seen:
+                seen.add(value)
+                values.append(value)
+    return tuple(values)
+
+
+def _error_warnings(args: argparse.Namespace | None) -> tuple[str, ...]:
+    if args is None:
+        return ()
+    return _research_warning_codes(getattr(args, "_error_warnings", ()))
+
+
+def _emit_research_warnings(warnings: tuple[str, ...]) -> None:
+    for warning in warnings:
+        message = _RESEARCH_WARNING_MESSAGES.get(warning)
+        suffix = f": {message}" if message is not None else ""
+        sys.stderr.write(f"warning: {warning}{suffix}\n")
 
 
 def _viz_build(args: argparse.Namespace) -> int:
