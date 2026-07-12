@@ -891,13 +891,13 @@ def test_revalidate_dossier_citations_returns_selected_order_with_state_preceden
     states = workflow.revalidate_dossier_citations(repository, revision)
 
     assert [(row["citation_id"], row["status"]) for row in states] == [
-        (citations[0].citation_id, "valid"),
         (citations[1].citation_id, "missing"),
-        (citations[2].citation_id, "changed"),
         (citations[3].citation_id, "hidden"),
+        (citations[0].citation_id, "valid"),
+        (citations[2].citation_id, "changed"),
     ]
-    assert states[0]["reason"] is None
-    assert all(isinstance(row["reason"], str) and row["reason"] for row in states[1:])
+    assert states[2]["reason"] is None
+    assert all(isinstance(states[index]["reason"], str) and states[index]["reason"] for index in (0, 1, 3))
 
 
 def test_revalidate_dossier_citations_does_not_make_stale_unselected_candidates_block_validation(

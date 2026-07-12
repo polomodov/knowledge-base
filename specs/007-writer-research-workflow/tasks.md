@@ -109,7 +109,7 @@
 
 ### Tests first
 
-- [ ] T031 [US3] Создать writing-output fixtures `tests/fixtures/research/valid-writing-output-draft.json`, `tests/fixtures/research/valid-writing-output-summary.json`, `tests/fixtures/research/invalid-writing-output.json` и добавить handoff/writing builders в `tests/conftest.py`
+- [X] T031 [US3] Создать writing-output fixtures `tests/fixtures/research/valid-writing-output-draft.json`, `tests/fixtures/research/valid-writing-output-summary.json`, `tests/fixtures/research/invalid-writing-output.json` и добавить handoff/writing builders в `tests/conftest.py`
 - [ ] T032 [US3] Написать failing schema+runtime-parser tests для writing-output fixtures и strict size/version/unknown-field bounds в `tests/unit/test_writing_handoff.py`
 - [ ] T033 [US3] Написать failing schema+runtime tests для HandoffPackage и non-circular identity, idempotent reuse, evidence allowlist, every-handoff egress acknowledgement, second draft acknowledgement, standalone `0600`, symlink/custom-root rejection и atomic cleanup в `tests/unit/test_writing_handoff.py`
 - [ ] T034 [US3] Написать failing tests для `draft|summary` symmetry, cross-kind rejection, content/package digests, exhaustive section ranges, allowlisted citations, unsupported reasons, handoff/imported-artifact validation и запрета чтения package paths/URLs в `tests/unit/test_writing_handoff.py`
