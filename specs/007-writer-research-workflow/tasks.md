@@ -34,8 +34,8 @@
 
 ### Tests first
 
-- [ ] T004 [P] Написать failing tests для Draft 2020-12 validity всех шести schemas, Citation/DossierManifest/ValidationResult examples, canonical JSON, digests, collision detection, strict unknown/version rejection, HTTP(S)-only URL projection, directory/single-file output safety, `0700`/`0600` и atomic cleanup в `tests/unit/test_research_artifacts.py`
-- [ ] T005 [P] Написать failing tests для `ResearchVisibility`, ResearchRequest bounds/date conversion, Citation/EvidenceCandidate invariants и ValidationResult states в `tests/unit/test_research_workflow.py`
+- [X] T004 [P] Написать failing tests для Draft 2020-12 validity всех шести schemas, Citation/DossierManifest/ValidationResult examples, canonical JSON, digests, collision detection, strict unknown/version rejection, HTTP(S)-only URL projection, directory/single-file output safety, `0700`/`0600` и atomic cleanup в `tests/unit/test_research_artifacts.py`
+- [X] T005 [P] Написать failing tests для `ResearchVisibility`, ResearchRequest bounds/date conversion, Citation/EvidenceCandidate invariants и ValidationResult states в `tests/unit/test_research_workflow.py`
 
 ### Implementation
 
