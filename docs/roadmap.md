@@ -98,18 +98,25 @@
 
 Цель: использовать knowledge database при написании постов, исследований и книг.
 
-- подбор релевантных фрагментов под тему;
-- цитирование с provenance;
-- сбор исследовательских подборок;
-- черновики и summaries в `generated`;
-- проверка, что generated outputs отделены от исходной базы.
+Реализовано:
 
-Проектирование V5 ведётся как Spec Kit feature [007 — Writer/Research Workflow](../specs/007-writer-research-workflow/spec.md). Принятый design direction: chunk-level citations, immutable file-first dossier revisions, ручной versioned round-trip с внешним writing-agent и локальная structural validation возвращённого writing-output package с `output_kind=draft|summary`; MCP сохраняется read-only. V5 завершается только после четырёх записанных independent acceptance sections: dossier/citation/curation, `draft`, `summary` и privacy/path safety. Технический план и контракты — в [plan.md](../specs/007-writer-research-workflow/plan.md), архитектурная граница зафиксирована в принятом [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md). Реализация ещё не начата.
+- `kb research build` с source/date/volume filters, published-only default и явным `--include-drafts`;
+- immutable dossier revisions с exact chunk excerpts, canonical citations, provenance, digests и Markdown/manifest parity;
+- `kb research validate` для dossier, handoff, входящего writing-output package и импортированного output относительно текущего корпуса;
+- immutable curation через упорядоченные `include`/`exclude`/`pin` operations и parent/child lineage;
+- versioned handoff для `draft`/`summary` с обязательным acknowledgement внешнего раскрытия и отдельным разрешением draft evidence;
+- строгий импорт недоверенного writing-output package с проверкой integrity, citation allowlist и structural coverage;
+- generated-data boundary: file artifacts по умолчанию находятся в `data/generated/research/`, custom root требует acknowledgement, symlinks запрещены;
+- read-only DB/MCP boundary: workflow не меняет ArangoDB, а MCP не получает write tools;
+- stdlib-only parsing и secure artifact I/O в runtime; JSON Schemas применяются только в dev/tests;
+- автоматизированные unit/integration, typing, formatting, ADR и documentation gates.
+
+V5 ведётся как Spec Kit feature [007 — Writer/Research Workflow](../specs/007-writer-research-workflow/spec.md). Structural validation не является factual verification или автоматической secret redaction, а generated outputs не становятся источником истины. Реализация и automated gates готовы, однако V5 завершается только после четырёх записанных independent acceptance sections: dossier/citation/curation, `draft`, `summary` и privacy/path safety. T050–T053 ещё не проводились, поэтому feature пока не считается принятой. Технический план и контракты — в [plan.md](../specs/007-writer-research-workflow/plan.md), исполнимый flow — в [quickstart.md](../specs/007-writer-research-workflow/quickstart.md), форма независимой проверки — в [acceptance.md](../specs/007-writer-research-workflow/acceptance.md), архитектурная граница — в принятом [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md).
 
 ## Текущий статус
 
-Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server**; и **v4 — graph export + самодостаточная offline-визуализация трёх видов** (команды и контракты — [docs/visualization.md](visualization.md)).
+Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server**; и **v4 — graph export + самодостаточная offline-визуализация трёх видов** (команды и контракты — [docs/visualization.md](visualization.md)). Для **v5** runtime и automated gates реализованы; независимая приёмка T050–T053 ещё не запускалась.
 
 **Аудит реализации (июль 2026) полностью отработан:** все 46 находок устранены и смерджены в `main` — единый `topic_key`, провенанс и честный дедуп (`created_at`, корректные счётчики), качество retrieval (дедуп выдачи, корректный фьюжн скора, реальное использование vector index, устранение N+1), безопасность и приватность (учётные данные, валидация fetch-URL/SSRF, path traversal, зона экспорта), инженерная гигиена (общий `ingest_core`, ruff + mypy + pytest-cov, CI против ArangoDB service-container) и робастность парсеров источников. Подробности и трекер MR - в [docs/implementation-audit-plan.md](implementation-audit-plan.md).
 
-Следующий фокус — writer/research workflow поверх готовых retrieval, MCP и visualization read models (v5).
+Следующий фокус — независимая проверка dossier/citations/curation, `draft`, `summary` и privacy/path safety для V5; до её записи feature остаётся непринятой.
