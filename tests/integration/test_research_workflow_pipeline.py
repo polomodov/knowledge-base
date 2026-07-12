@@ -1,0 +1,285 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass, replace
+from pathlib import Path
+from urllib.parse import quote
+from uuid import uuid4
+
+import pytest
+
+from knowledge_base.arango import ArangoClient, ArangoError
+from knowledge_base.cli.main import main as cli_main
+from knowledge_base.config import Settings, load_settings
+from knowledge_base.constants import DOCUMENT_COLLECTIONS, EDGE_COLLECTIONS
+from knowledge_base.embeddings import hash_embedding
+from knowledge_base.repository import KnowledgeRepository
+from knowledge_base.research_artifacts import canonical_json_bytes
+from knowledge_base.research_retrieval import lexical_chunk_candidates
+from knowledge_base.research_workflow import ResearchRequest
+from knowledge_base.schema import bootstrap_schema
+
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(os.getenv("KB_RUN_INTEGRATION") != "1", reason="set KB_RUN_INTEGRATION=1 with ArangoDB running"),
+]
+
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures/research/safe-research-corpus.json"
+QUERY = "grounded graph context evidence telescope notes"
+COLLECTIONS = tuple(sorted([*DOCUMENT_COLLECTIONS, *EDGE_COLLECTIONS]))
+
+
+@dataclass(frozen=True)
+class SeededResearchCorpus:
+    settings: Settings
+    repository: KnowledgeRepository
+    fixture: dict[str, object]
+
+
+@pytest.fixture
+def seeded_research_corpus(monkeypatch: pytest.MonkeyPatch) -> Iterator[SeededResearchCorpus]:
+    base = load_settings()
+    database = f"kb_research_{uuid4().hex[:16]}"
+    settings = replace(
+        base,
+        arango_database=database,
+        embedding_provider="hash",
+        embedding_dimension=8,
+        retrieval_min_similarity=0.0,
+    )
+    client = ArangoClient(settings)
+    fixture = _load_fixture()
+
+    monkeypatch.setenv("KB_ARANGO_URL", settings.arango_url)
+    monkeypatch.setenv("KB_ARANGO_DATABASE", database)
+    monkeypatch.setenv("KB_ARANGO_USER", settings.arango_user)
+    monkeypatch.setenv("KB_ARANGO_PASSWORD", settings.arango_password)
+    monkeypatch.setenv("KB_EMBEDDING_PROVIDER", "hash")
+    monkeypatch.setenv("KB_EMBEDDING_DIMENSION", "8")
+    monkeypatch.setenv("KB_RETRIEVAL_MIN_SIMILARITY", "0")
+
+    try:
+        client.ensure_database()
+        # The first bootstrap establishes collections. The second, after strict fixture
+        # seeding, is the only index build and can train the vector index over real rows.
+        bootstrap_schema(client, embedding_dimension=8)
+        repository = KnowledgeRepository(client)
+        _seed_fixture(repository, fixture)
+        bootstrap_schema(client, embedding_dimension=8)
+        _wait_for_text_index(repository)
+        yield SeededResearchCorpus(settings=settings, repository=repository, fixture=fixture)
+    finally:
+        try:
+            ArangoClient(base).request(
+                "DELETE",
+                f"/_api/database/{quote(database)}",
+                expected=(200, 202),
+            )
+        except ArangoError as error:
+            if error.status != 404:
+                raise
+
+
+def test_research_build_pipeline_is_visibility_safe_reproducible_and_read_only(
+    seeded_research_corpus: SeededResearchCorpus,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository = seeded_research_corpus.repository
+    fixture = seeded_research_corpus.fixture
+    output_root = tmp_path / "research"
+    before = _database_snapshot(repository)
+
+    common = [
+        "research",
+        "build",
+        QUERY,
+        "--output-root",
+        str(output_root),
+        "--acknowledge-unsafe-output",
+        "--documents",
+        "4",
+        "--fragments-per-document",
+        "2",
+    ]
+    first = _run_cli(capsys, common, expected_exit=0)
+    first_path, first_manifest, first_markdown = _read_package(first)
+    first_files = _tree_snapshot(first_path)
+
+    assert first["status"] in {"ok", "degraded"}
+    assert first_manifest["includes_drafts"] is False
+    assert first_manifest["request"]["visibility"] == "published_only"
+    assert "output_outside_generated_zone" not in first_manifest["warnings"]
+    assert "output_outside_generated_zone" not in first_manifest["corpus_context"]["warnings"]
+    assert all(row["citation"]["document_status"] == "published" for row in first_manifest["candidate_evidence"])
+    assert "research-draft-hidden" not in json.dumps(first_manifest, ensure_ascii=False)
+    exposed = json.dumps(first_manifest, ensure_ascii=False).lower() + first_markdown.lower()
+    for marker in fixture["expectations"]["forbidden_published_only_markers"]:  # type: ignore[index]
+        assert str(marker).lower() not in exposed
+    assert fixture["expectations"]["tainted_community_key"] not in exposed  # type: ignore[index]
+    _assert_exact_provenance(first_manifest, fixture)
+
+    repeated = _run_cli(capsys, common, expected_exit=0)
+    repeated_path, repeated_manifest, _ = _read_package(repeated)
+    assert repeated["dossier_key"] == first["dossier_key"]
+    assert repeated["content_digest"] == first["content_digest"]
+    assert repeated["revision_id"] != first["revision_id"]
+    assert repeated_path != first_path
+    assert _tree_snapshot(first_path) == first_files
+    assert repeated_manifest["content_digest"] == first_manifest["content_digest"]
+
+    draft = _run_cli(capsys, [*common, "--include-drafts"], expected_exit=0)
+    _, draft_manifest, draft_markdown = _read_package(draft)
+    assert draft_manifest["includes_drafts"] is True
+    assert draft_manifest["request"]["visibility"] == "published_and_drafts"
+    assert "draft_visibility_enabled" in draft_manifest["warnings"]
+    assert "draft_visibility_enabled" in draft_markdown
+    assert any(
+        row["selection_state"] in {"selected", "pinned"} and row["citation"]["document_status"] == "draft"
+        for row in draft_manifest["candidate_evidence"]
+    )
+
+    output_before_no_evidence = _tree_snapshot(output_root)
+    no_evidence = _run_cli(
+        capsys,
+        [*common, "--source", "research-source-that-does-not-exist"],
+        expected_exit=1,
+    )
+    assert no_evidence["status"] == "no_evidence"
+    assert _tree_snapshot(output_root) == output_before_no_evidence
+    assert _database_snapshot(repository) == before
+
+
+def _load_fixture() -> dict[str, object]:
+    fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+    expected_fields = {
+        "schema_version",
+        "fixture_type",
+        "description",
+        "embedding",
+        "sources",
+        "import_runs",
+        "raw_snapshots",
+        "documents",
+        "chunks",
+        "topics",
+        "communities",
+        "edges",
+        "expectations",
+    }
+    assert isinstance(fixture, dict) and set(fixture) == expected_fields
+    assert fixture["schema_version"] == "1.0"
+    assert fixture["fixture_type"] == "safe_research_corpus"
+    assert fixture["embedding"] == {"provider": "hash", "model": "hash-v1", "dimension": 8}
+    for field in ("sources", "import_runs", "raw_snapshots", "documents", "chunks", "topics", "communities"):
+        assert isinstance(fixture[field], list) and fixture[field]
+        assert all(isinstance(row, dict) and isinstance(row.get("_key"), str) for row in fixture[field])
+    edges = fixture["edges"]
+    assert isinstance(edges, dict) and set(edges) == {
+        "document_from_source",
+        "chunk_of_document",
+        "chunk_derived_from_raw",
+        "document_mentions_topic",
+        "item_related_to_item",
+        "document_in_community",
+    }
+    assert all(isinstance(rows, list) and rows for rows in edges.values())
+    return fixture
+
+
+def _seed_fixture(repository: KnowledgeRepository, fixture: dict[str, object]) -> None:
+    for field in ("sources", "raw_snapshots", "documents", "topics", "communities", "import_runs"):
+        for row in fixture[field]:  # type: ignore[union-attr]
+            repository.upsert(field, dict(row))
+    for row in fixture["chunks"]:  # type: ignore[union-attr]
+        chunk = dict(row)
+        chunk["embedding"] = hash_embedding(str(chunk["text"]), dimension=8)
+        chunk["embedding_model"] = "hash-v1"
+        repository.upsert("chunks", chunk)
+    for collection, rows in fixture["edges"].items():  # type: ignore[union-attr]
+        for row in rows:
+            repository.upsert_edge(collection, dict(row))
+
+
+def _wait_for_text_index(repository: KnowledgeRepository) -> None:
+    request = ResearchRequest(query=QUERY, candidate_limit=12, evidence_limit=8)
+    for _ in range(40):
+        if lexical_chunk_candidates(repository, request):
+            return
+        time.sleep(0.25)
+    raise AssertionError("research fixture did not become visible in ArangoSearch")
+
+
+def _run_cli(
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    *,
+    expected_exit: int,
+) -> dict[str, object]:
+    capsys.readouterr()
+    exit_code = cli_main(argv)
+    captured = capsys.readouterr()
+    assert exit_code == expected_exit, captured
+    payload = json.loads(captured.out)
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _read_package(payload: dict[str, object]) -> tuple[Path, dict[str, object], str]:
+    path = Path(str(payload["output"]))
+    assert path.is_dir()
+    assert {entry.name for entry in path.iterdir()} == {"manifest.json", "dossier.md", "validation.json"}
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    markdown = (path / "dossier.md").read_text(encoding="utf-8")
+    assert isinstance(manifest, dict)
+    return path, manifest, markdown
+
+
+def _assert_exact_provenance(manifest: dict[str, object], fixture: dict[str, object]) -> None:
+    documents = {row["_key"]: row for row in fixture["documents"]}  # type: ignore[union-attr]
+    chunks = {row["_key"]: row for row in fixture["chunks"]}  # type: ignore[union-attr]
+    raw_snapshots = {row["_key"]: row for row in fixture["raw_snapshots"]}  # type: ignore[union-attr]
+    raw_edges = {row["_from"].split("/", 1)[1]: row for row in fixture["edges"]["chunk_derived_from_raw"]}  # type: ignore[index]
+    source_edges = {row["_from"].split("/", 1)[1]: row for row in fixture["edges"]["document_from_source"]}  # type: ignore[index]
+
+    for candidate in manifest["candidate_evidence"]:  # type: ignore[union-attr]
+        citation = candidate["citation"]
+        chunk = chunks[citation["chunk_key"]]
+        document = documents[citation["document_key"]]
+        raw_edge = raw_edges[chunk["_key"]]
+        raw_key = raw_edge["_to"].split("/", 1)[1]
+        raw = raw_snapshots[raw_key]
+        source_edge = source_edges[document["_key"]]
+        normalized = " ".join(document["text"].split())
+
+        assert citation["excerpt"] == chunk["text"] == normalized[chunk["char_start"] : chunk["char_end"]]
+        assert citation["excerpt_sha256"] == hashlib.sha256(chunk["text"].encode()).hexdigest()
+        assert citation["source_key"] == document["source_key"] == raw["source_key"]
+        assert citation["raw_snapshot_key"] == raw_key == source_edge["provenance"]["raw_snapshot_key"]
+        assert citation["import_run_key"] == raw_edge["import_run_key"] == source_edge["import_run_key"]
+        assert citation["captured_at"] == raw["captured_at"]
+        assert citation["url"] == document["url"]
+
+
+def _database_snapshot(repository: KnowledgeRepository) -> dict[str, bytes]:
+    return {
+        collection: canonical_json_bytes(
+            repository.client.aql(
+                "FOR document IN @@collection SORT document._key ASC RETURN document",
+                {"@collection": collection},
+            )
+        )
+        for collection in COLLECTIONS
+    }
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes]:
+    if not root.exists():
+        return {}
+    return {
+        str(path.relative_to(root)): path.read_bytes() if path.is_file() else b"<directory>" for path in sorted(root.rglob("*"))
+    }

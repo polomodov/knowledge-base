@@ -58,8 +58,8 @@
 - [X] T009 [P] [US1] Написать failing query tests для status/source/date scope до ranking, lexical/vector exact chunk hydration, provenance ownership, related/topic leads, tainted-summary suppression и optional degradation в `tests/unit/test_research_retrieval.py`
 - [X] T010 [P] [US1] Написать failing pure tests для citation projection, deterministic fusion/tie-breaks, identity dedupe, round-robin document diversity, per-document/candidate/evidence caps и stable ordering в `tests/unit/test_research_workflow.py`
 - [X] T011 [P] [US1] Написать failing artifact tests для manifest↔Markdown selected-set parity, Unicode/control-character rendering, ready/degraded manifests, no-evidence non-publication и atomic root revision в `tests/unit/test_research_artifacts.py`
-- [ ] T012 [P] [US1] Написать failing CLI tests для `kb research build`, bounds/options, published default, draft opt-in banner, JSON stdout и `ok|degraded|no_evidence|error` exit semantics в `tests/unit/test_cli.py`
-- [ ] T013 [P] [US1] Создать failing end-to-end build cases с isolated published/draft corpus, raw/import provenance, related edges, tainted community и before/after collection snapshots в `tests/integration/test_research_workflow_pipeline.py`
+- [X] T012 [P] [US1] Написать failing CLI tests для `kb research build`, bounds/options, published default, draft opt-in banner, JSON stdout и `ok|degraded|no_evidence|error` exit semantics в `tests/unit/test_cli.py`
+- [X] T013 [P] [US1] Создать failing end-to-end build cases с isolated published/draft corpus, raw/import provenance, related edges, tainted community и before/after collection snapshots в `tests/integration/test_research_workflow_pipeline.py`
 
 ### Implementation
 
