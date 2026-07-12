@@ -39,9 +39,9 @@
 
 ### Implementation
 
-- [ ] T006 Реализовать typed domain models и invariant validation для ResearchVisibility, ResearchRequest, Citation, EvidenceCandidate, CurationOperation, DossierRevision и ValidationResult в `src/knowledge_base/research_workflow.py`
-- [ ] T007 Реализовать canonical JSON, SHA-256 projections/IDs, collision checks, safe HTTP(S) projection и reusable stdlib strict-object/version parsers в `src/knowledge_base/research_artifacts.py`
-- [ ] T008 Реализовать generated-zone classification, unsafe-root acknowledgement, component-wise symlink refusal, POSIX `0700`/`0600`, immutable collision handling и same-parent atomic publication как для directory packages, так и для standalone handoff JSON в `src/knowledge_base/research_artifacts.py`
+- [X] T006 Реализовать typed domain models и invariant validation для ResearchVisibility, ResearchRequest, Citation, EvidenceCandidate, CurationOperation, DossierRevision и ValidationResult в `src/knowledge_base/research_workflow.py`
+- [X] T007 Реализовать canonical JSON, SHA-256 projections/IDs, collision checks, safe HTTP(S) projection и reusable stdlib strict-object/version parsers в `src/knowledge_base/research_artifacts.py`
+- [X] T008 Реализовать generated-zone classification, unsafe-root acknowledgement, component-wise symlink refusal, POSIX `0700`/`0600`, immutable collision handling и same-parent atomic publication как для directory packages, так и для standalone handoff JSON в `src/knowledge_base/research_artifacts.py`
 
 **Checkpoint**: `tests/unit/test_research_artifacts.py` и foundational cases в `tests/unit/test_research_workflow.py` проходят без ArangoDB и без runtime `jsonschema` import.
 
