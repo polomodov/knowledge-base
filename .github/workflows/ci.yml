@@ -16,6 +16,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
+          package-manager-cache: false
       - run: pip install uv
       - name: Offline visualization template syntax and safety
         run: node scripts/check-viz-template.mjs
