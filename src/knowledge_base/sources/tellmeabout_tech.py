@@ -15,6 +15,7 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
 from knowledge_base.sources.ingest_core import (
+    finalize_import_run,
     empty_counts,
     parse_date,
     planned_chunk_count,
@@ -139,14 +140,24 @@ def ingest_tellmeabout_tech(
     }
     repository.upsert("import_runs", import_run)
 
-    for item in parsed.items:
-        counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
-
-    import_run["finished_at"] = utc_now()
-    import_run["status"] = "ok"
-    import_run["counts"] = counts
-    import_run["metadata"]["skipped"] = parsed.skipped
-    repository.upsert("import_runs", import_run)
+    failure: Exception | None = None
+    try:
+        for item in parsed.items:
+            counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
+        import_run["metadata"]["skipped"] = parsed.skipped
+        finalize_import_run(repository, import_run, status="ok", counts=counts)
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        if failure is not None and import_run["status"] == "running":
+            finalize_import_run(
+                repository,
+                import_run,
+                status="error",
+                counts=counts,
+                error=f"{type(failure).__name__}: {failure}",
+            )
 
     return {
         "status": "ok",
