@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-base.local/schemas/v5/handoff-package.schema.json",
+  "title": "Knowledge Base V5 Writing Handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_type",
+    "handoff_id",
+    "identity_sha256",
+    "dossier_key",
+    "revision_id",
+    "revision_content_digest",
+    "created_at",
+    "visibility",
+    "includes_drafts",
+    "egress_acknowledged",
+    "draft_evidence_acknowledged",
+    "query",
+    "requested_output",
+    "evidence",
+    "citation_allowlist",
+    "instructions",
+    "warnings",
+    "package_digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "artifact_type": { "const": "writing_handoff" },
+    "handoff_id": {
+      "type": "string",
+      "pattern": "^handoff-[0-9a-f]{16}$",
+      "$comment": "Prefix is derived from identity_sha256; see data-model.md for the canonical non-circular projection."
+    },
+    "identity_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "$comment": "Digest excludes created_at, handoff_id, identity_sha256, and package_digest."
+    },
+    "dossier_key": { "type": "string", "pattern": "^research-[a-z0-9_-]+-[0-9a-f]{12}$" },
+    "revision_id": { "type": "string", "pattern": "^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
+    "revision_content_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "visibility": { "enum": ["published_only", "published_and_drafts"] },
+    "includes_drafts": { "type": "boolean" },
+    "egress_acknowledged": { "const": true },
+    "draft_evidence_acknowledged": { "type": "boolean" },
+    "query": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "requested_output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "language", "style", "max_words"],
+      "properties": {
+        "kind": { "enum": ["draft", "summary"] },
+        "language": { "type": "string", "minLength": 2, "maxLength": 35 },
+        "style": { "oneOf": [{ "type": "string", "maxLength": 1000 }, { "type": "null" }] },
+        "max_words": { "oneOf": [{ "type": "integer", "minimum": 50, "maximum": 20000 }, { "type": "null" }] }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": { "$ref": "citation.schema.json" }
+    },
+    "citation_allowlist": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^cit-[0-9a-f]{16}$" }
+    },
+    "instructions": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 50,
+      "items": { "type": "string", "minLength": 1, "maxLength": 4000 }
+    },
+    "warnings": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "string", "maxLength": 2000 }
+    },
+    "package_digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "$comment": "Digest is computed after identity fields are inserted and excludes only created_at and package_digest."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "includes_drafts": { "const": true } },
+        "required": ["includes_drafts"]
+      },
+      "then": {
+        "properties": {
+          "visibility": { "const": "published_and_drafts" },
+          "draft_evidence_acknowledged": { "const": true }
+        }
+      },
+      "else": {
+        "properties": {
+          "visibility": { "const": "published_only" },
+          "draft_evidence_acknowledged": { "const": false }
+        }
+      }
+    }
+  ]
+}

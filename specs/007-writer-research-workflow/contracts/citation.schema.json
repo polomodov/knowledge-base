@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-base.local/schemas/v5/citation.schema.json",
+  "title": "Knowledge Base V5 Citation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "citation_id",
+    "identity_sha256",
+    "projection_version",
+    "source_key",
+    "canonical_id",
+    "document_key",
+    "chunk_key",
+    "chunk_ordinal",
+    "char_start",
+    "char_end",
+    "offset_basis",
+    "excerpt",
+    "excerpt_sha256",
+    "title",
+    "published_at",
+    "document_status",
+    "url",
+    "raw_snapshot_key",
+    "import_run_key",
+    "captured_at"
+  ],
+  "properties": {
+    "citation_id": { "type": "string", "pattern": "^cit-[0-9a-f]{16}$" },
+    "identity_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "projection_version": { "const": "citation-v1" },
+    "source_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "canonical_id": { "type": "string", "minLength": 1, "maxLength": 1024 },
+    "document_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "chunk_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "chunk_ordinal": { "type": "integer", "minimum": 0 },
+    "char_start": { "type": "integer", "minimum": 0 },
+    "char_end": { "type": "integer", "minimum": 1 },
+    "offset_basis": { "const": "normalized_whitespace_v1" },
+    "excerpt": { "type": "string", "minLength": 1, "maxLength": 20000 },
+    "excerpt_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "title": { "type": "string", "maxLength": 2000 },
+    "published_at": {
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "null" }
+      ]
+    },
+    "document_status": { "enum": ["published", "draft"] },
+    "url": {
+      "oneOf": [
+        {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https?://",
+          "maxLength": 4096,
+          "$comment": "Transferable origin URLs are canonical lowercase HTTP(S) URLs; file and custom schemes are forbidden."
+        },
+        { "type": "null" }
+      ]
+    },
+    "raw_snapshot_key": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 256 },
+        { "type": "null" }
+      ]
+    },
+    "import_run_key": {
+      "oneOf": [
+        { "type": "string", "minLength": 1, "maxLength": 256 },
+        { "type": "null" }
+      ]
+    },
+    "captured_at": {
+      "oneOf": [
+        { "type": "string", "format": "date-time" },
+        { "type": "null" }
+      ]
+    }
+  }
+}

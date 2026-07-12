@@ -77,4 +77,5 @@ data/generated/   # summaries, drafts, reports, LLM outputs
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
+at specs/007-writer-research-workflow/plan.md
 <!-- SPECKIT END -->

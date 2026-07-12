@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://knowledge-base.local/schemas/v5/writing-output-package.schema.json",
+  "title": "Knowledge Base V5 Incoming Writing Output",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "artifact_type",
+    "output_kind",
+    "handoff_id",
+    "handoff_digest",
+    "dossier_key",
+    "revision_id",
+    "visibility",
+    "includes_drafts",
+    "created_at",
+    "agent",
+    "title",
+    "content_markdown",
+    "content_sha256",
+    "sections",
+    "package_digest"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "artifact_type": { "const": "writing_output" },
+    "output_kind": { "enum": ["draft", "summary"] },
+    "handoff_id": { "type": "string", "pattern": "^handoff-[0-9a-f]{16}$" },
+    "handoff_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "dossier_key": { "type": "string", "pattern": "^research-[a-z0-9_-]+-[0-9a-f]{12}$" },
+    "revision_id": { "type": "string", "pattern": "^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$" },
+    "visibility": { "enum": ["published_only", "published_and_drafts"] },
+    "includes_drafts": { "type": "boolean" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "model", "run_id"],
+      "properties": {
+        "name": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "model": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "run_id": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] }
+      }
+    },
+    "title": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "content_markdown": { "type": "string", "minLength": 1, "maxLength": 1048576 },
+    "content_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sections": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 200,
+      "items": { "$ref": "#/$defs/writingSection" }
+    },
+    "package_digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "includes_drafts": { "const": true } },
+        "required": ["includes_drafts"]
+      },
+      "then": {
+        "properties": { "visibility": { "const": "published_and_drafts" } }
+      },
+      "else": {
+        "properties": { "visibility": { "const": "published_only" } }
+      }
+    }
+  ],
+  "$defs": {
+    "writingSection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "section_id",
+        "heading",
+        "char_start",
+        "char_end",
+        "citation_ids",
+        "unsupported_by_corpus",
+        "unsupported_reason"
+      ],
+      "properties": {
+        "section_id": { "type": "string", "pattern": "^section-[A-Za-z0-9_-]{1,100}$" },
+        "heading": { "oneOf": [{ "type": "string", "maxLength": 500 }, { "type": "null" }] },
+        "char_start": { "type": "integer", "minimum": 0 },
+        "char_end": { "type": "integer", "minimum": 1 },
+        "citation_ids": {
+          "type": "array",
+          "maxItems": 50,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^cit-[0-9a-f]{16}$" }
+        },
+        "unsupported_by_corpus": { "type": "boolean" },
+        "unsupported_reason": {
+          "oneOf": [
+            { "type": "string", "minLength": 1, "maxLength": 2000 },
+            { "type": "null" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "unsupported_by_corpus": { "const": true } },
+            "required": ["unsupported_by_corpus"]
+          },
+          "then": {
+            "properties": {
+              "unsupported_reason": { "type": "string", "minLength": 1, "maxLength": 2000 }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "unsupported_by_corpus": { "const": false } },
+            "required": ["unsupported_by_corpus"]
+          },
+          "then": {
+            "properties": {
+              "citation_ids": { "minItems": 1 },
+              "unsupported_reason": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "citation_ids": { "maxItems": 0 } },
+            "required": ["citation_ids"]
+          },
+          "then": {
+            "properties": { "unsupported_by_corpus": { "const": true } }
+          }
+        }
+      ]
+    }
+  }
+}
