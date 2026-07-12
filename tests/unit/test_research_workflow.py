@@ -1,18 +1,23 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+import knowledge_base.research_workflow as workflow
+from knowledge_base.arango import ArangoError
 from knowledge_base.research_workflow import (
     Citation,
     CurationOperation,
+    DossierBuildResult,
     DossierRevision,
     EvidenceCandidate,
     ResearchRequest,
     ResearchVisibility,
     ValidationResult,
+    build_dossier,
     fuse_and_select_candidates,
 )
 
@@ -119,6 +124,7 @@ def test_citation_accepts_verified_identity_and_excludes_run_provenance_from_ide
         {"excerpt_sha256": "0" * 64},
         {"identity_sha256": "0" * 64},
         {"citation_id": "cit-0000000000000000"},
+        {"published_at": "2026-01-15 10:00:00Z"},
     ],
 )
 def test_citation_rejects_invalid_offsets_hashes_and_identity(
@@ -351,6 +357,214 @@ def test_selection_enforces_all_caps_and_round_robin_with_stable_order(
     assert forward == reversed_inputs
 
 
+_PROVIDER = SimpleNamespace(model="hash-v1", dimension=2)
+_BUILT_AT = "2026-07-12T12:00:00Z"
+
+
+def _hydrated_retrieval_row(
+    *,
+    document: str = "success",
+    lexical: float | None = 0.8,
+    vector: float | None = None,
+) -> JsonObject:
+    excerpt = f"Synthetic hydrated evidence for {document}."
+    document_key = f"doc-{document}"
+    chunk_key = f"chunk-{document}-0"
+    return {
+        "chunk": {
+            "_key": chunk_key,
+            "document_key": document_key,
+            "ordinal": 0,
+            "text": excerpt,
+            "char_start": 0,
+            "char_end": len(excerpt),
+            "embedding": [1.0, 0.0],
+        },
+        "document": {
+            "_key": document_key,
+            "source_key": "synthetic-source",
+            "canonical_id": f"canonical-{document}",
+            "title": f"Synthetic {document}",
+            "text": excerpt,
+            "published_at": "2026-01-15T10:00:00Z",
+            "url": f"https://example.test/{document}",
+            "status": "published",
+        },
+        "raw_edge": {"import_run_key": "import-synthetic"},
+        "raw_snapshot": {
+            "_key": "raw-synthetic",
+            "captured_at": "2026-01-15T10:05:00Z",
+            "payload": {"secret": "must-not-leak"},
+        },
+        "source_edge": {
+            "import_run_key": "import-synthetic",
+            "provenance": {
+                "url": f"https://example.test/{document}",
+                "captured_at": "2026-01-15T10:05:00Z",
+            },
+        },
+        "score_components": {"lexical": lexical, "vector": vector},
+    }
+
+
+def _corpus_context() -> JsonObject:
+    return {
+        "database": "knowledge_base_test",
+        "built_at": _BUILT_AT,
+        "embedding_model": "hash-v1",
+        "embedding_dimension": 2,
+        "retrieval_min_similarity": 0.25,
+        "latest_import_run_key": "import-synthetic",
+        "latest_index_runs": {},
+        "git_revision": "0123456789abcdef",
+        "warnings": [],
+    }
+
+
+def _patch_build_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    lexical: list[JsonObject],
+    semantic: list[JsonObject],
+    topics: Sequence[JsonObject] | Exception = (),
+    related: Sequence[JsonObject] | Exception = (),
+    communities: Sequence[JsonObject] | Exception = (),
+) -> dict[str, Any]:
+    calls: dict[str, Any] = {}
+
+    def lexical_call(repository: object, request: ResearchRequest) -> list[JsonObject]:
+        calls["lexical"] = (repository, request)
+        return lexical
+
+    def semantic_call(
+        repository: object,
+        request: ResearchRequest,
+        *,
+        provider: object,
+    ) -> list[JsonObject]:
+        calls["semantic"] = (repository, request, provider)
+        return semantic
+
+    def context_call(
+        repository: object,
+        request: ResearchRequest,
+        *,
+        provider: object,
+        built_at: str,
+        git_revision: str | None,
+    ) -> JsonObject:
+        calls["context"] = (repository, request, provider, built_at, git_revision)
+        return _corpus_context()
+
+    def optional_call(name: str, value: Sequence[JsonObject] | Exception) -> Callable[..., list[JsonObject]]:
+        def call(
+            repository: object,
+            keys: list[str] | tuple[str, ...],
+            request: ResearchRequest,
+            *,
+            limit: int,
+        ) -> list[JsonObject]:
+            calls[name] = (tuple(keys), limit, repository, request)
+            if isinstance(value, Exception):
+                raise value
+            return list(value)
+
+        return call
+
+    monkeypatch.setattr(workflow, "lexical_chunk_candidates", lexical_call)
+    monkeypatch.setattr(workflow, "semantic_chunk_candidates", semantic_call)
+    monkeypatch.setattr(workflow, "load_corpus_context", context_call)
+    monkeypatch.setattr(workflow, "topic_leads", optional_call("topics", topics))
+    monkeypatch.setattr(workflow, "related_leads", optional_call("related", related))
+    monkeypatch.setattr(workflow, "clean_community_leads", optional_call("communities", communities))
+    return calls
+
+
+def test_build_dossier_projects_allowlisted_evidence_and_selected_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    lexical = _hydrated_retrieval_row()
+    semantic = _hydrated_retrieval_row(lexical=None, vector=0.7)
+    topic = {"topic_key": "topic-synthetic", "label": "Synthetic", "document_keys": ["doc-success"]}
+    related = {"document_key": "doc-related", "chunk_key": "chunk-related", "weight": 0.4}
+    community = {"community_key": "community-clean", "size": 1, "summary": "Derived context", "is_clean": True}
+    calls = _patch_build_reads(
+        monkeypatch,
+        lexical=[lexical],
+        semantic=[semantic],
+        topics=[topic],
+        related=[related],
+        communities=[community],
+    )
+    request = ResearchRequest(query="synthetic orchestration", document_limit=1, evidence_limit=1)
+
+    result = build_dossier(
+        object(),
+        request,
+        provider=_PROVIDER,
+        built_at=_BUILT_AT,
+        git_revision="0123456789abcdef",
+    )
+
+    assert isinstance(result, DossierBuildResult)
+    assert result.status == "ready" and result.publishable is True
+    assert result.request is request and result.corpus_context == _corpus_context()
+    assert result.selected_citation_ids == tuple(row.citation.citation_id for row in result.candidate_evidence)
+    citation = result.candidate_evidence[0].citation
+    assert (citation.document_key, citation.chunk_key, citation.raw_snapshot_key, citation.import_run_key) == (
+        "doc-success",
+        "chunk-success-0",
+        "raw-synthetic",
+        "import-synthetic",
+    )
+    assert result.candidate_evidence[0].score_components == {"lexical": 0.8, "vector": 0.7, "graph_lead": None}
+    assert [row["kind"] for row in result.derived_context["leads"]] == ["related_chunk", "clean_community"]
+    assert calls["topics"][0] == calls["communities"][0] == ("doc-success",)
+    assert calls["related"][0] == ("chunk-success-0",)
+    assert "must-not-leak" not in repr(result)
+
+
+def test_build_dossier_returns_non_publishable_no_evidence_without_optional_leads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _patch_build_reads(monkeypatch, lexical=[], semantic=[])
+
+    result = build_dossier(
+        object(),
+        ResearchRequest(query="no matching evidence"),
+        provider=_PROVIDER,
+        built_at=_BUILT_AT,
+    )
+
+    assert result.status == "no_evidence" and result.publishable is False
+    assert result.candidate_evidence == result.selected_citation_ids == ()
+    assert result.derived_context == {"topics": (), "leads": ()}
+    assert "context" in calls
+    assert not {"topics", "related", "communities"} & calls.keys()
+
+
+def test_build_dossier_degrades_optional_lead_failure_without_changing_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lexical = _hydrated_retrieval_row()
+    request = ResearchRequest(query="stable evidence", document_limit=1, evidence_limit=1)
+    _patch_build_reads(monkeypatch, lexical=[lexical], semantic=[])
+    ready = build_dossier(object(), request, provider=_PROVIDER, built_at=_BUILT_AT)
+
+    _patch_build_reads(
+        monkeypatch,
+        lexical=[lexical],
+        semantic=[],
+        related=ArangoError("database password=must-not-leak"),
+    )
+    degraded = build_dossier(object(), request, provider=_PROVIDER, built_at=_BUILT_AT)
+
+    assert ready.status == "ready"
+    assert degraded.status == "degraded" and degraded.publishable is True
+    assert degraded.candidate_evidence == ready.candidate_evidence
+    assert degraded.selected_citation_ids == ready.selected_citation_ids
+    assert degraded.warnings == ("optional related context is unavailable",)
+    assert "must-not-leak" not in repr(degraded)
+
+
 @pytest.mark.parametrize("operation", ["include", "exclude", "pin"])
 def test_curation_operation_accepts_basic_shape(operation: str) -> None:
     result = CurationOperation(operation=operation, citation_id="cit-0123456789abcdef", reason=None, ordinal=0)
@@ -427,8 +641,12 @@ def test_validation_result_rejects_unknown_citation_state_and_automatic_human_re
     unknown = _validation_payload(status="invalid", citation_status="unavailable")
     reviewed = _validation_payload()
     reviewed["human_reviewed"] = True
+    malformed_time = _validation_payload()
+    malformed_time["validated_at"] = "2026-07-12 12:00:00Z"
 
     with pytest.raises(ValueError):
         ValidationResult(**unknown)
     with pytest.raises(ValueError):
         ValidationResult(**reviewed)
+    with pytest.raises(ValueError):
+        ValidationResult(**malformed_time)
