@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект содержит исполнимый вертикальный срез с завершёнными GraphRAG- и visualization-слоями: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск**, локальный read-only MCP server, стандартный graph export и самодостаточная offline-визуализация.
+Проект содержит исполнимый вертикальный срез с GraphRAG-, visualization- и writer/research-слоями: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск**, локальный read-only MCP server, стандартный graph export, самодостаточная offline-визуализация и immutable research dossiers с проверяемым file round-trip для внешнего writing-agent. Независимая приёмка writer/research workflow ещё не проводилась.
 
 ## Зачем
 
@@ -50,6 +50,8 @@ Raw-данные, нормализованные данные и generated outpu
 - Retrieval-команды: `kb search text` (BM25), `kb search semantic` (ANN + relevance-гейт), `kb search hybrid` (BM25 + вектор + **graph_boost**, с расширением кандидатов графом), `kb graph neighbors` (обход графа знаний).
 - GraphRAG-поиск: `kb search local` (подграф вокруг релевантных сущностей) и `kb search global` (retrieval-conditioned обзор community summaries из bounded candidate pool) — экстрактивный цитируемый контекст с провенансом.
 - Read-only MCP server `kb-mcp` для локальных агентов и других проектов.
+- Writer/research workflow: published-only dossier по умолчанию, chunk-level citations, immutable curation revisions, handoff для `draft`/`summary` и импорт структурированного writing output.
+- Команды `kb research build`, `validate`, `curate`, `handoff` и `import-output`; они читают нормализованный корпус без изменений в ArangoDB и пишут только file artifacts.
 - `kb export jsonl` для generated exports в gitignored data zone.
 - `kb export graph` для полного doc-level графа и topic co-occurrence в node-link JSON/GraphML.
 - `kb viz build` для самодостаточного offline HTML: карта сообществ/топиков, таймлайн и ego-граф документов без CDN, сервера или npm runtime.
@@ -239,6 +241,43 @@ uv run --extra mcp kb-mcp --config config/pipeline.local.toml
 
 MCP v1 работает локально через stdio и открывает только read-only tools/resources/prompts: `kb_search`, `kb_get_document`, `kb_graph_neighbors`, `kb_list_sources`, `kb_health`, `kb://sources`, `kb://documents/{document_key}` и `research_knowledge_base`. `kb_search` поддерживает `text`, `semantic`, `hybrid`, `local` и `global`; embedding-backed режимы используют provider/model/dimension и `retrieval.min_similarity` из того же конфига, что CLI и индекс корпуса. `pipeline.example.toml` настроен на fixture/hash-эмбеддинги; для реального корпуса локальный конфиг обязан совпадать с моделью, которой выполнен `--target embeddings`, а provider `local` требует установленный `sentence-transformers`. Stdio/read-only не является per-client access control: любой local process с DB credentials может читать normalized corpus (trust boundary — [ADR 0006](docs/adr/0006-define-the-local-security-and-privacy-trust-boundary.md)).
 
+### Writer/research workflow (V5)
+
+Построить immutable dossier из опубликованных документов, проверить его и создать курированную child revision:
+
+```bash
+uv run kb research build "как связаны системное мышление и письмо" \
+  --source medium-export \
+  --published-from 2024-01-01 \
+  --documents 12 \
+  --fragments-per-document 2
+uv run kb research validate data/generated/research/DOSSIER_KEY/revisions/REVISION_ID
+uv run kb research curate data/generated/research/DOSSIER_KEY/revisions/REVISION_ID \
+  --exclude CITATION_ID \
+  --pin ANOTHER_CITATION_ID \
+  --reason "убрать повтор и закрепить ключевой тезис"
+```
+
+`build` по умолчанию выбирает только `status=published`; drafts требуют явного `--include-drafts`. Команды не изменяют ArangoDB и не расширяют MCP write-операциями. Dossier, handoff и импортированные материалы сохраняются в gitignored `data/generated/research/`; другой `--output-root` требует `--acknowledge-unsafe-output`. Symlink-компоненты пути всё равно запрещены, а создаваемые directories/files получают owner-only permissions на поддерживаемых POSIX-платформах.
+
+После просмотра selected evidence сформировать handoff и импортировать структурированный результат writing-agent:
+
+```bash
+uv run kb research handoff data/generated/research/DOSSIER_KEY/revisions/REVISION_ID \
+  --output-kind draft \
+  --language ru \
+  --max-words 1500 \
+  --acknowledge-external-disclosure
+uv run kb research import-output ./writing-output.json \
+  --handoff data/generated/research/DOSSIER_KEY/handoffs/HANDOFF_ID.json
+uv run kb research validate ./writing-output.json \
+  --handoff data/generated/research/DOSSIER_KEY/handoffs/HANDOFF_ID.json
+```
+
+Внешняя передача exact excerpts всегда требует `--acknowledge-external-disclosure`; handoff, содержащий draft evidence, дополнительно требует `--allow-draft-evidence`. Writing-agent следует передавать только handoff-файл, без DB credentials, raw exports и workspace. Импорт проверяет строгий JSON-контракт, digests, связь с доверенным handoff, допустимые citation IDs и structural coverage, но не выполняет factual verification и не гарантирует автоматическое удаление секретов. Парсинг и artifact I/O в установленном runtime используют стандартную библиотеку Python; JSON Schemas и `jsonschema` нужны только dev/tests.
+
+Полный исполнимый сценарий и отрицательные проверки описаны в [quickstart Feature 007](specs/007-writer-research-workflow/quickstart.md). Реализация и automated gates готовы, однако четыре independent acceptance секции в [acceptance.md](specs/007-writer-research-workflow/acceptance.md) ещё не выполнены, поэтому Feature 007 пока не считается принятой.
+
 Проверки:
 
 ```bash
@@ -309,7 +348,7 @@ Integration-тесты работают против выделенной БД `
 - [specs/004-book-cube-owner-archive-import/spec.md](specs/004-book-cube-owner-archive-import/spec.md) - Spec Kit feature для полного владельческого Telegram archive import.
 - [specs/005-medium-export-source/spec.md](specs/005-medium-export-source/spec.md) - Spec Kit feature для Medium account export import.
 - [specs/006-knowledge-base-mcp-server/spec.md](specs/006-knowledge-base-mcp-server/spec.md) - Spec Kit feature для read-only MCP server.
-- [specs/007-writer-research-workflow/spec.md](specs/007-writer-research-workflow/spec.md) - проектируемая Spec Kit feature V5 для provenance-first research dossier, citations и file round-trip с writing-agent.
+- [specs/007-writer-research-workflow/spec.md](specs/007-writer-research-workflow/spec.md) - Spec Kit feature V5 для provenance-first research dossier, citations и file round-trip с writing-agent; runtime реализован, independent acceptance ожидается.
 
 ## Spec-Driven Development
 
@@ -344,6 +383,8 @@ Feature specs по умолчанию пишутся на русском с кр
 
 Локальный read-only MCP-интерфейс: [Knowledge Base MCP Server](specs/006-knowledge-base-mcp-server/spec.md). Он открывает search, document expansion, graph neighbors, source inventory, health, resources and research prompt для других проектов без ingest/index/export mutations.
 
+Writer/research workflow: [Feature 007](specs/007-writer-research-workflow/spec.md). Он собирает immutable dossier revisions из read-only retrieval, поддерживает curation, создаёт явно подтверждённый handoff и импортирует проверяемый `draft`/`summary` package в generated-зону без записи в ArangoDB или MCP.
+
 ## Architecture Decisions
 
 Architecture Decision Records живут в [docs/adr](docs/adr). Это docs-only артефакты: они объясняют важные решения, но не являются исходными данными, обработанными данными или generated outputs.
@@ -368,6 +409,6 @@ npm run check:adr
 - **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб", включая полный владельческий archive import.
 - **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги, качество retrieval и локальный read-only MCP server — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
 - **v4** ✅ - node-link JSON/GraphML + самодостаточный offline HTML с картой сообществ/топиков, таймлайном и ego-графом документов (см. [docs/visualization.md](docs/visualization.md) и [ADR 0008](docs/adr/0008-adopt-offline-visualization-and-graph-export.md)).
-- **v5** 🟡 - writer/research workflow находится в design phase: Feature 007 проектирует immutable research dossier, chunk citations и проверяемый file round-trip с внешним writing-agent; runtime ещё не реализован.
+- **v5** 🟡 - runtime Feature 007 и automated gates реализованы: immutable research dossier, chunk citations, curation и проверяемый file round-trip с внешним writing-agent. Независимая приёмка T050–T053 ещё не проводилась, поэтому V5 пока не отмечен завершённым.
 
 Подробнее: [docs/roadmap.md](docs/roadmap.md).

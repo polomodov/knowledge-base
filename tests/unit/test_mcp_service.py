@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 
 import pytest
@@ -375,6 +377,246 @@ def test_document_query_projects_raw_snapshot_without_payload() -> None:
     assert "payload" not in captured["query"]
     assert "_key: raw_document._key" in captured["query"]
     assert "captured_at: raw_document.captured_at" in captured["query"]
+
+
+def _legacy_mcp_search_row(document_key: str, visibility: str) -> dict[str, Any]:
+    return {
+        "id": f"chunks/{document_key}-c0",
+        "title": f"{visibility} document",
+        "snippet": f"legacy {visibility} snippet",
+        "score": 0.9,
+        "score_components": {"bm25": 1.0, "vector": 0.8, "graph_boost": None},
+        "document_key": document_key,
+        "chunk_key": f"{document_key}-c0",
+        "provenance": {
+            "source_key": "legacy-source",
+            "raw_snapshot_key": f"raw-{document_key}",
+            "import_run_key": "legacy-import",
+            "url": f"https://example.test/{document_key}",
+        },
+    }
+
+
+def test_v5_keeps_legacy_mcp_search_visibility_defaults_and_stable_response_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    provider = object()
+
+    def fake_hybrid_search(
+        repository: object,
+        query: str,
+        *,
+        limit: int,
+        source_key: str | None,
+        provider: object,
+        min_similarity: float,
+    ) -> dict[str, Any]:
+        captured.update(
+            repository=repository,
+            query=query,
+            limit=limit,
+            source_key=source_key,
+            provider=provider,
+            min_similarity=min_similarity,
+        )
+        return {
+            "status": "ok",
+            "mode": "hybrid",
+            "query": query,
+            "degraded_components": [],
+            "results": [
+                _legacy_mcp_search_row("published-doc", "published"),
+                _legacy_mcp_search_row("draft-doc", "draft"),
+            ],
+        }
+
+    monkeypatch.setattr(mcp_service, "build_embedding_provider", lambda settings: provider)
+    monkeypatch.setattr(mcp_service, "hybrid_search", fake_hybrid_search)
+
+    service = _service()
+    response = service.search("legacy MCP query")
+
+    assert captured == {
+        "repository": service.repository,
+        "query": "legacy MCP query",
+        "limit": 5,
+        "source_key": None,
+        "provider": provider,
+        "min_similarity": pytest.approx(0.42),
+    }
+    assert set(response) == {"status", "mode", "query", "degraded_components", "results"}
+    assert (response["status"], response["mode"], response["query"]) == ("ok", "hybrid", "legacy MCP query")
+    assert [result["document_key"] for result in response["results"]] == ["published-doc", "draft-doc"]
+    for result in response["results"]:
+        assert set(result) == {
+            "id",
+            "kind",
+            "title",
+            "snippet",
+            "score",
+            "score_components",
+            "document_key",
+            "chunk_key",
+            "resource_uri",
+            "url",
+            "provenance",
+        }
+        assert set(result["provenance"]) == {
+            "source_key",
+            "raw_snapshot_key",
+            "import_run_key",
+            "medium_post",
+            "url",
+            "captured_at",
+        }
+        assert (
+            not {
+                "visibility",
+                "includes_drafts",
+                "dossier_key",
+                "revision_id",
+                "writing_id",
+            }
+            & result.keys()
+        )
+
+
+@pytest.mark.parametrize("document_status", ["published", "draft"])
+def test_v5_keeps_legacy_mcp_direct_document_visibility_and_envelope(
+    monkeypatch: pytest.MonkeyPatch,
+    document_status: str,
+) -> None:
+    def fake_document_row(repository: object, document_key: str) -> dict[str, Any]:
+        return {
+            "document": {
+                "_key": document_key,
+                "title": f"{document_status} document",
+                "text": "legacy body",
+                "url": "https://example.test/document",
+                "published_at": None,
+                "source_key": "legacy-source",
+                "metadata": {"status": document_status},
+            },
+            "raw": {"_key": "raw-legacy", "captured_at": "2026-07-12T12:00:00Z"},
+            "raw_edge": {"import_run_key": "import-legacy"},
+            "source_edge": None,
+        }
+
+    monkeypatch.setattr(mcp_service, "_document_row", fake_document_row)
+
+    response = _service().get_document("legacy-document")
+
+    assert set(response) == {
+        "status",
+        "document_key",
+        "resource_uri",
+        "title",
+        "url",
+        "published_at",
+        "source_key",
+        "text",
+        "truncated",
+        "metadata",
+        "provenance",
+    }
+    assert response["status"] == "ok"
+    assert response["metadata"] == {"status": document_status}
+    assert response["text"] == "legacy body"
+
+
+def test_mcp_registration_remains_exactly_read_only_without_optional_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import knowledge_base.mcp_server as server
+
+    class FakeToolAnnotations:
+        def __init__(self, **values: bool) -> None:
+            self.readOnlyHint = values["readOnlyHint"]
+            self.destructiveHint = values["destructiveHint"]
+            self.idempotentHint = values["idempotentHint"]
+            self.openWorldHint = values["openWorldHint"]
+
+    class FakeFastMCP:
+        def __init__(self, name: str, *, instructions: str) -> None:
+            self.name = name
+            self.instructions = instructions
+            self.tools: dict[str, tuple[Any, FakeToolAnnotations]] = {}
+            self.resources: dict[str, tuple[Any, str]] = {}
+            self.prompts: dict[str, Any] = {}
+
+        def tool(self, *, annotations: FakeToolAnnotations):
+            def register(function):
+                self.tools[function.__name__] = (function, annotations)
+                return function
+
+            return register
+
+        def resource(self, uri: str, *, mime_type: str):
+            def register(function):
+                self.resources[uri] = (function, mime_type)
+                return function
+
+            return register
+
+        def prompt(self):
+            def register(function):
+                self.prompts[function.__name__] = function
+                return function
+
+            return register
+
+    mcp_package = ModuleType("mcp")
+    mcp_server_package = ModuleType("mcp.server")
+    mcp_package.__path__ = []  # type: ignore[attr-defined]
+    mcp_server_package.__path__ = []  # type: ignore[attr-defined]
+    fastmcp_module = ModuleType("mcp.server.fastmcp")
+    types_module = ModuleType("mcp.types")
+    fastmcp_module.FastMCP = FakeFastMCP  # type: ignore[attr-defined]
+    types_module.ToolAnnotations = FakeToolAnnotations  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "mcp", mcp_package)
+    monkeypatch.setitem(sys.modules, "mcp.server", mcp_server_package)
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp_module)
+    monkeypatch.setitem(sys.modules, "mcp.types", types_module)
+    monkeypatch.setattr(server, "create_service", lambda config_path=None: _service())
+
+    app = server.create_mcp_app()
+
+    assert isinstance(app, FakeFastMCP)
+    assert set(app.tools) == {
+        "kb_search",
+        "kb_get_document",
+        "kb_graph_neighbors",
+        "kb_list_sources",
+        "kb_health",
+    }
+    for function, tool_annotations in app.tools.values():
+        assert callable(function)
+        assert tool_annotations.readOnlyHint is True
+        assert tool_annotations.destructiveHint is False
+        assert tool_annotations.idempotentHint is True
+        assert tool_annotations.openWorldHint is False
+    assert tuple(inspect.signature(app.tools["kb_search"][0]).parameters) == (
+        "query",
+        "mode",
+        "source_key",
+        "limit",
+        "community_limit",
+    )
+    assert (
+        not {
+            "kb_research_build",
+            "kb_research_validate",
+            "kb_research_handoff",
+            "kb_import_output",
+            "kb_write_document",
+            "kb_ingest",
+        }
+        & app.tools.keys()
+    )
+    assert set(app.resources) == {"kb://sources", "kb://documents/{document_key}"}
+    assert {mime_type for _, mime_type in app.resources.values()} == {"application/json", "text/markdown"}
+    assert set(app.prompts) == {"research_knowledge_base"}
 
 
 def test_mcp_server_module_imports_without_optional_dependency() -> None:

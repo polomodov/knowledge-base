@@ -5,6 +5,7 @@ import json
 import os
 import time
 from collections.abc import Iterator
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 from urllib.parse import quote
@@ -38,6 +39,12 @@ class SeededResearchCorpus:
     settings: Settings
     repository: KnowledgeRepository
     fixture: dict[str, object]
+
+
+@dataclass(frozen=True)
+class CollectionContentHash:
+    document_count: int
+    sha256: str
 
 
 @pytest.fixture
@@ -154,6 +161,480 @@ def test_research_build_pipeline_is_visibility_safe_reproducible_and_read_only(
     assert _database_snapshot(repository) == before
 
 
+def test_research_validate_and_curate_publish_an_immutable_child_without_database_mutations(
+    seeded_research_corpus: SeededResearchCorpus,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository = seeded_research_corpus.repository
+    output_root = tmp_path / "research"
+    database_before = _database_snapshot(repository)
+    parent = _run_cli(
+        capsys,
+        [
+            "research",
+            "build",
+            QUERY,
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+            "--documents",
+            "2",
+            "--fragments-per-document",
+            "1",
+        ],
+        expected_exit=0,
+    )
+    parent_path, parent_manifest, _ = _read_package(parent)
+    parent_files = _tree_snapshot(parent_path)
+    artifact_tree_before_validation = _tree_snapshot(output_root)
+
+    validation = _run_cli(
+        capsys,
+        ["research", "validate", str(parent_path), "--output-root", str(output_root)],
+        expected_exit=0,
+    )
+
+    assert validation["artifact_type"] == "validation_result"
+    assert validation["target_type"] == "dossier_revision"
+    assert validation["target_id"] == parent_manifest["revision_id"]
+    assert validation["target_digest"] == parent_manifest["content_digest"]
+    assert validation["status"] in {"valid", "valid_with_warnings"}
+    assert validation["dossier_current"] is validation["citations_resolved"] is True
+    assert {row["status"] for row in validation["citations"]} == {"valid"}  # type: ignore[union-attr]
+    assert _tree_snapshot(output_root) == artifact_tree_before_validation
+    assert _database_snapshot(repository) == database_before
+
+    selected = [
+        row
+        for row in parent_manifest["candidate_evidence"]
+        if row["selection_state"] == "selected"  # type: ignore[union-attr]
+    ]
+    candidates = [
+        row
+        for row in parent_manifest["candidate_evidence"]
+        if row["selection_state"] == "candidate"  # type: ignore[union-attr]
+    ]
+    assert len(selected) >= 2 and candidates
+    include_id = candidates[0]["citation"]["citation_id"]
+    exclude_id = selected[0]["citation"]["citation_id"]
+    pin_id = selected[1]["citation"]["citation_id"]
+    reason = "synthetic owner curation"
+
+    child = _run_cli(
+        capsys,
+        [
+            "research",
+            "curate",
+            str(parent_path),
+            "--include",
+            include_id,
+            "--exclude",
+            exclude_id,
+            "--pin",
+            pin_id,
+            "--reason",
+            reason,
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ],
+        expected_exit=0,
+    )
+    child_path, child_manifest, _ = _read_package(child)
+
+    assert child["status"] == "ok"
+    assert child["parent_revision_id"] == parent_manifest["revision_id"]
+    assert child["operations"] == 3
+    assert child_path.parent == parent_path.parent and child_path != parent_path
+    assert child_manifest["parent_revision_id"] == parent_manifest["revision_id"]
+    assert child_manifest["content_digest"] != parent_manifest["content_digest"]
+    assert child_manifest["curation_operations"] == [
+        {"operation": "include", "citation_id": include_id, "reason": reason, "ordinal": 0},
+        {"operation": "exclude", "citation_id": exclude_id, "reason": reason, "ordinal": 1},
+        {"operation": "pin", "citation_id": pin_id, "reason": reason, "ordinal": 2},
+    ]
+    parent_ids = [row["citation"]["citation_id"] for row in parent_manifest["candidate_evidence"]]  # type: ignore[union-attr]
+    child_ids = [row["citation"]["citation_id"] for row in child_manifest["candidate_evidence"]]  # type: ignore[union-attr]
+    child_states = {
+        row["citation"]["citation_id"]: row["selection_state"]
+        for row in child_manifest["candidate_evidence"]  # type: ignore[union-attr]
+    }
+    assert child_ids == parent_ids
+    assert child_states[include_id] == "selected"
+    assert child_states[exclude_id] == "excluded"
+    assert child_states[pin_id] == "pinned"
+    assert _tree_snapshot(parent_path) == parent_files
+    assert _database_snapshot(repository) == database_before
+
+    child_tree_before_validation = _tree_snapshot(output_root)
+    child_validation = _run_cli(
+        capsys,
+        ["research", "validate", str(child_path), "--output-root", str(output_root)],
+        expected_exit=0,
+    )
+    assert child_validation["target_id"] == child_manifest["revision_id"]
+    assert child_validation["status"] in {"valid", "valid_with_warnings"}
+    assert child_validation["dossier_current"] is child_validation["citations_resolved"] is True
+    assert _tree_snapshot(output_root) == child_tree_before_validation
+    assert _tree_snapshot(parent_path) == parent_files
+    assert _database_snapshot(repository) == database_before
+
+
+@pytest.mark.parametrize("citation_state", ["missing", "changed", "hidden"])
+def test_research_curate_rejects_a_non_current_parent_without_artifact_or_database_mutations(
+    citation_state: str,
+    seeded_research_corpus: SeededResearchCorpus,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    repository = seeded_research_corpus.repository
+    output_root = tmp_path / "research"
+    database_before_build = _database_snapshot(repository)
+    parent = _run_cli(
+        capsys,
+        [
+            "research",
+            "build",
+            QUERY,
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+            "--documents",
+            "4",
+            "--fragments-per-document",
+            "2",
+        ],
+        expected_exit=0,
+    )
+    parent_path, parent_manifest, _ = _read_package(parent)
+    parent_files = _tree_snapshot(parent_path)
+    assert _database_snapshot(repository) == database_before_build
+    selected = [
+        row
+        for row in parent_manifest["candidate_evidence"]
+        if row["selection_state"] == "selected"  # type: ignore[union-attr]
+    ]
+    assert selected
+    citation = selected[0]["citation"]
+    citation_id = citation["citation_id"]
+    _make_citation_non_current(
+        repository,
+        seeded_research_corpus.fixture,
+        citation,
+        citation_state,
+    )
+    database_before_commands = _database_snapshot(repository)
+    artifacts_before_commands = _tree_snapshot(output_root)
+
+    validation = _run_cli(
+        capsys,
+        ["research", "validate", str(parent_path), "--output-root", str(output_root)],
+        expected_exit=1,
+    )
+    validation_states = {row["citation_id"]: row["status"] for row in validation["citations"]}  # type: ignore[union-attr]
+    assert validation["status"] == "invalid"
+    assert validation["target_id"] == parent_manifest["revision_id"]
+    assert validation["dossier_current"] is validation["citations_resolved"] is False
+    assert validation_states[citation_id] == citation_state
+    assert _tree_snapshot(output_root) == artifacts_before_commands
+    assert _database_snapshot(repository) == database_before_commands
+
+    rejection = _run_cli(
+        capsys,
+        [
+            "research",
+            "curate",
+            str(parent_path),
+            "--exclude",
+            citation_id,
+            "--reason",
+            "must reject a stale parent",
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ],
+        expected_exit=1,
+    )
+    rejected_validation = rejection["validation"]
+    rejected_states = {
+        row["citation_id"]: row["status"]
+        for row in rejected_validation["citations"]  # type: ignore[union-attr]
+    }
+    assert rejection["status"] == "rejected"
+    assert rejection["reason"] == "parent_not_current"
+    assert rejected_validation["status"] == "invalid"
+    assert rejected_states[citation_id] == citation_state
+    assert _tree_snapshot(output_root) == artifacts_before_commands
+    assert _tree_snapshot(parent_path) == parent_files
+    assert _database_snapshot(repository) == database_before_commands
+
+
+@pytest.mark.parametrize(
+    ("output_kind", "max_words"),
+    [("draft", "800"), ("summary", "250")],
+)
+def test_research_writing_round_trip_validates_every_artifact_and_reuses_identical_import(
+    output_kind: str,
+    max_words: str,
+    seeded_research_corpus: SeededResearchCorpus,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    writing_output_package_builder,
+) -> None:
+    repository = seeded_research_corpus.repository
+    database_before = _database_snapshot(repository)
+    assert seeded_research_corpus.settings.arango_database.startswith("kb_research_")
+    assert set(database_before) == set(COLLECTIONS)
+    assert database_before == _database_snapshot(repository)
+    assert all(
+        snapshot.document_count >= 0 and len(snapshot.sha256) == 64 and snapshot.sha256 == snapshot.sha256.lower()
+        for snapshot in database_before.values()
+    )
+    output_root = tmp_path / "research"
+    dossier_path, dossier_manifest, handoff_path, handoff = _build_integration_handoff(
+        capsys,
+        output_root,
+        output_kind=output_kind,
+        max_words=max_words,
+    )
+    assert _database_snapshot(repository) == database_before
+
+    for artifact, extra_arguments, target_type in (
+        (dossier_path, [], "dossier_revision"),
+        (handoff_path, [], "writing_handoff"),
+    ):
+        validation = _run_cli(
+            capsys,
+            [
+                "research",
+                "validate",
+                str(artifact),
+                "--output-root",
+                str(output_root),
+                *extra_arguments,
+            ],
+            expected_exit=0,
+        )
+        assert validation["target_type"] == target_type
+        assert validation["status"] in {"valid", "valid_with_warnings"}
+
+    writing_output = writing_output_package_builder(handoff=handoff)
+    incoming_path = tmp_path / f"writing-output-{output_kind}.json"
+    incoming_path.write_bytes(canonical_json_bytes(writing_output))
+    incoming_validation = _run_cli(
+        capsys,
+        [
+            "research",
+            "validate",
+            str(incoming_path),
+            "--handoff",
+            str(handoff_path),
+            "--output-root",
+            str(output_root),
+        ],
+        expected_exit=0,
+    )
+    assert incoming_validation["target_type"] == "writing_output"
+    assert incoming_validation["status"] in {"valid", "valid_with_warnings"}
+
+    imported = _run_cli(
+        capsys,
+        [
+            "research",
+            "import-output",
+            str(incoming_path),
+            "--handoff",
+            str(handoff_path),
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ],
+        expected_exit=0,
+    )
+    imported_path = Path(str(imported["output"]))
+    assert imported_path.is_dir()
+    assert {entry.name for entry in imported_path.iterdir()} == {"manifest.json", "output.md", "validation.json"}
+    imported_manifest = json.loads((imported_path / "manifest.json").read_text(encoding="utf-8"))
+    imported_markdown = (imported_path / "output.md").read_text(encoding="utf-8")
+    assert imported["status"] in {"ok", "reused"}
+    assert imported["output_kind"] == imported_manifest["output_kind"] == output_kind
+    assert imported["writing_id"] == imported_manifest["writing_id"]
+    assert imported_manifest["incoming_package_digest"] == writing_output["package_digest"]
+    assert imported_manifest["handoff_id"] == handoff["handoff_id"]
+    assert imported_manifest["revision_id"] == dossier_manifest["revision_id"]
+    assert imported_manifest["human_reviewed"] is False
+    assert writing_output["content_markdown"] in imported_markdown
+
+    imported_validation = _run_cli(
+        capsys,
+        [
+            "research",
+            "validate",
+            str(imported_path),
+            "--output-root",
+            str(output_root),
+        ],
+        expected_exit=0,
+    )
+    assert imported_validation["target_type"] == "imported_writing"
+    assert imported_validation["status"] in {"valid", "valid_with_warnings"}
+
+    artifacts_before_repeat = _tree_snapshot(output_root)
+    repeated = _run_cli(
+        capsys,
+        [
+            "research",
+            "import-output",
+            str(incoming_path),
+            "--handoff",
+            str(handoff_path),
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ],
+        expected_exit=0,
+    )
+    assert repeated["writing_id"] == imported["writing_id"]
+    assert repeated["output"] == imported["output"]
+    assert _tree_snapshot(output_root) == artifacts_before_repeat
+    assert _database_snapshot(repository) == database_before
+
+
+@pytest.mark.parametrize("rejection", ["wrong_kind", "unknown_citation", "changed_evidence"])
+def test_research_writing_import_rejects_the_whole_package_without_artifact_or_database_mutation(
+    rejection: str,
+    seeded_research_corpus: SeededResearchCorpus,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    writing_output_package_builder,
+) -> None:
+    repository = seeded_research_corpus.repository
+    output_root = tmp_path / "research"
+    _, dossier_manifest, handoff_path, handoff = _build_integration_handoff(
+        capsys,
+        output_root,
+        output_kind="draft",
+        max_words="800",
+    )
+    writing_output = writing_output_package_builder(handoff=handoff)
+    if rejection == "wrong_kind":
+        writing_output = writing_output_package_builder(handoff=handoff, output_kind="summary")
+    elif rejection == "unknown_citation":
+        sections = deepcopy(writing_output["sections"])
+        sections[0]["citation_ids"] = ["cit-deadbeefdeadbeef"]
+        writing_output = writing_output_package_builder(
+            handoff=handoff,
+            content_markdown=writing_output["content_markdown"],
+            sections=sections,
+        )
+    else:
+        citation_id = dossier_manifest["selected_citation_ids"][0]
+        citation = next(
+            row["citation"] for row in dossier_manifest["candidate_evidence"] if row["citation"]["citation_id"] == citation_id
+        )
+        _make_citation_non_current(
+            repository,
+            seeded_research_corpus.fixture,
+            citation,
+            "changed",
+        )
+
+    incoming_path = tmp_path / f"rejected-writing-output-{rejection}.json"
+    incoming_path.write_bytes(canonical_json_bytes(writing_output))
+    database_before_commands = _database_snapshot(repository)
+    artifacts_before_commands = _tree_snapshot(output_root)
+
+    validation = _run_cli(
+        capsys,
+        [
+            "research",
+            "validate",
+            str(incoming_path),
+            "--handoff",
+            str(handoff_path),
+            "--output-root",
+            str(output_root),
+        ],
+        expected_exit=1,
+    )
+    assert validation["status"] == "invalid"
+    assert _tree_snapshot(output_root) == artifacts_before_commands
+    assert _database_snapshot(repository) == database_before_commands
+
+    rejected = _run_cli(
+        capsys,
+        [
+            "research",
+            "import-output",
+            str(incoming_path),
+            "--handoff",
+            str(handoff_path),
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ],
+        expected_exit=1,
+    )
+    assert rejected["status"] in {"invalid", "rejected"}
+    assert _tree_snapshot(output_root) == artifacts_before_commands
+    assert _database_snapshot(repository) == database_before_commands
+
+
+def _build_integration_handoff(
+    capsys: pytest.CaptureFixture[str],
+    output_root: Path,
+    *,
+    output_kind: str,
+    max_words: str,
+) -> tuple[Path, dict[str, object], Path, dict[str, object]]:
+    dossier = _run_cli(
+        capsys,
+        [
+            "research",
+            "build",
+            QUERY,
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+            "--documents",
+            "2",
+            "--fragments-per-document",
+            "1",
+        ],
+        expected_exit=0,
+    )
+    dossier_path, dossier_manifest, _ = _read_package(dossier)
+    handoff_result = _run_cli(
+        capsys,
+        [
+            "research",
+            "handoff",
+            str(dossier_path),
+            "--output-kind",
+            output_kind,
+            "--language",
+            "ru",
+            "--style",
+            "synthetic integration style",
+            "--max-words",
+            max_words,
+            "--acknowledge-external-disclosure",
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ],
+        expected_exit=0,
+    )
+    handoff_path = Path(str(handoff_result["output"]))
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    assert handoff_result["handoff_id"] == handoff["handoff_id"]
+    assert handoff["requested_output"]["kind"] == output_kind
+    assert handoff["egress_acknowledged"] is True
+    assert handoff["dossier_key"] == dossier_manifest["dossier_key"]
+    return dossier_path, dossier_manifest, handoff_path, handoff
+
+
 def _load_fixture() -> dict[str, object]:
     fixture = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     expected_fields = {
@@ -203,6 +684,40 @@ def _seed_fixture(repository: KnowledgeRepository, fixture: dict[str, object]) -
     for collection, rows in fixture["edges"].items():  # type: ignore[union-attr]
         for row in rows:
             repository.upsert_edge(collection, dict(row))
+
+
+def _make_citation_non_current(
+    repository: KnowledgeRepository,
+    fixture: dict[str, object],
+    citation: dict[str, object],
+    citation_state: str,
+) -> None:
+    if citation_state == "missing":
+        repository.client.aql(
+            "REMOVE @key IN @@collection",
+            {"@collection": "chunks", "key": citation["chunk_key"]},
+        )
+        return
+
+    if citation_state == "changed":
+        chunk = _fixture_row(fixture, "chunks", str(citation["chunk_key"]))
+        chunk["text"] = f"{chunk['text']} Changed after dossier publication."
+        repository.upsert("chunks", chunk)
+        return
+
+    assert citation_state == "hidden"
+    document = _fixture_row(fixture, "documents", str(citation["document_key"]))
+    document["status"] = "draft"
+    repository.upsert("documents", document)
+
+
+def _fixture_row(fixture: dict[str, object], collection: str, key: str) -> dict[str, object]:
+    rows = fixture[collection]
+    assert isinstance(rows, list)
+    for row in rows:
+        if isinstance(row, dict) and row.get("_key") == key:
+            return dict(row)
+    raise AssertionError(f"fixture row {collection}/{key} is missing")
 
 
 def _wait_for_text_index(repository: KnowledgeRepository) -> None:
@@ -265,16 +780,21 @@ def _assert_exact_provenance(manifest: dict[str, object], fixture: dict[str, obj
         assert citation["url"] == document["url"]
 
 
-def _database_snapshot(repository: KnowledgeRepository) -> dict[str, bytes]:
-    return {
-        collection: canonical_json_bytes(
-            repository.client.aql(
-                "FOR document IN @@collection SORT document._key ASC RETURN document",
-                {"@collection": collection},
-            )
+def _database_snapshot(repository: KnowledgeRepository) -> dict[str, CollectionContentHash]:
+    snapshot: dict[str, CollectionContentHash] = {}
+    for collection in COLLECTIONS:
+        documents = repository.client.aql(
+            # Arango's server-generated revision token differs between independent
+            # databases; it is not collection content and must not perturb the hash.
+            "FOR document IN @@collection SORT document._key ASC RETURN UNSET(document, '_rev')",
+            {"@collection": collection},
         )
-        for collection in COLLECTIONS
-    }
+        payload = canonical_json_bytes(documents)
+        snapshot[collection] = CollectionContentHash(
+            document_count=len(documents),
+            sha256=hashlib.sha256(payload).hexdigest(),
+        )
+    return snapshot
 
 
 def _tree_snapshot(root: Path) -> dict[str, bytes]:

@@ -82,20 +82,20 @@
 
 ### Tests first
 
-- [ ] T020 [P] [US2] Написать failing tests для document/chunk ownership, normalized offsets, excerpt/provenance hashes и citation states `valid|missing|changed|hidden` в `tests/unit/test_research_workflow.py`
-- [ ] T021 [US2] Написать failing tests для ordered include/exclude/pin, bounded parent candidate universe, unknown/no-op/conflicting rejection и запрета retrieval во время curation в `tests/unit/test_research_workflow.py`
-- [ ] T022 [P] [US2] Написать failing tests для artifact loading/integrity, deterministic validation report, child lineage/content digest и byte-identical parent files в `tests/unit/test_research_artifacts.py`
-- [ ] T023 [P] [US2] Написать failing CLI tests для `kb research validate` и `kb research curate`, repeated operation flags, current-parent gate, custom-root acknowledgement и rejection exits в `tests/unit/test_cli.py`
-- [ ] T024 [P] [US2] Расширить failing integration cases repeat-build determinism, successful child revision, missing/changed/hidden parent rejection и before/after content snapshots в `tests/integration/test_research_workflow_pipeline.py`
+- [X] T020 [P] [US2] Написать failing tests для document/chunk ownership, normalized offsets, excerpt/provenance hashes и citation states `valid|missing|changed|hidden` в `tests/unit/test_research_workflow.py`
+- [X] T021 [US2] Написать failing tests для ordered include/exclude/pin, bounded parent candidate universe, unknown/no-op/conflicting rejection и запрета retrieval во время curation в `tests/unit/test_research_workflow.py`
+- [X] T022 [P] [US2] Написать failing tests для artifact loading/integrity, deterministic validation report, child lineage/content digest и byte-identical parent files в `tests/unit/test_research_artifacts.py`
+- [X] T023 [P] [US2] Написать failing CLI tests для `kb research validate` и `kb research curate`, repeated operation flags, current-parent gate, custom-root acknowledgement и rejection exits в `tests/unit/test_cli.py`
+- [X] T024 [P] [US2] Расширить failing integration cases repeat-build determinism, successful child revision, missing/changed/hidden parent rejection и before/after content snapshots в `tests/integration/test_research_workflow_pipeline.py`
 
 ### Implementation
 
-- [ ] T025 [US2] Реализовать strict dossier directory loading, manifest/schema/version parsing и file digest/integrity checks до обращения к corpus в `src/knowledge_base/research_artifacts.py`
-- [ ] T026 [US2] Реализовать citation revalidation загруженного dossier против current documents/chunks/provenance со всеми четырьмя states в `src/knowledge_base/research_workflow.py`
-- [ ] T027 [US2] Реализовать read-only dossier validation service и deterministic aggregate ValidationResult без repair/rewrite target revision в `src/knowledge_base/research_workflow.py`
-- [ ] T028 [US2] Реализовать include/exclude/pin state transitions, ordered operation log, parent validation gate и child revision construction без retrieval в `src/knowledge_base/research_workflow.py`
-- [ ] T029 [US2] Реализовать child manifest/Markdown/validation rendering и immutable publication поверх уже проверенного parent в `src/knowledge_base/research_artifacts.py`
-- [ ] T030 [US2] Добавить dossier dispatch для `kb research validate` и handler `kb research curate` с contract exit/warning semantics в `src/knowledge_base/cli/main.py`
+- [X] T025 [US2] Реализовать strict dossier directory loading, manifest/schema/version parsing и file digest/integrity checks до обращения к corpus в `src/knowledge_base/research_artifacts.py`
+- [X] T026 [US2] Реализовать citation revalidation загруженного dossier против current documents/chunks/provenance со всеми четырьмя states в `src/knowledge_base/research_workflow.py`
+- [X] T027 [US2] Реализовать read-only dossier validation service и deterministic aggregate ValidationResult без repair/rewrite target revision в `src/knowledge_base/research_workflow.py`
+- [X] T028 [US2] Реализовать include/exclude/pin state transitions, ordered operation log, parent validation gate и child revision construction без retrieval в `src/knowledge_base/research_workflow.py`
+- [X] T029 [US2] Реализовать child manifest/Markdown/validation rendering и immutable publication поверх уже проверенного parent в `src/knowledge_base/research_artifacts.py`
+- [X] T030 [US2] Добавить dossier dispatch для `kb research validate` и handler `kb research curate` с contract exit/warning semantics в `src/knowledge_base/cli/main.py`
 
 **Checkpoint**: US2 воспроизводимо проверяет и курирует US1 artifacts, не изменяя parent или ArangoDB.
 
@@ -109,21 +109,21 @@
 
 ### Tests first
 
-- [ ] T031 [US3] Создать writing-output fixtures `tests/fixtures/research/valid-writing-output-draft.json`, `tests/fixtures/research/valid-writing-output-summary.json`, `tests/fixtures/research/invalid-writing-output.json` и добавить handoff/writing builders в `tests/conftest.py`
-- [ ] T032 [US3] Написать failing schema+runtime-parser tests для writing-output fixtures и strict size/version/unknown-field bounds в `tests/unit/test_writing_handoff.py`
-- [ ] T033 [US3] Написать failing schema+runtime tests для HandoffPackage и non-circular identity, idempotent reuse, evidence allowlist, every-handoff egress acknowledgement, second draft acknowledgement, standalone `0600`, symlink/custom-root rejection и atomic cleanup в `tests/unit/test_writing_handoff.py`
-- [ ] T034 [US3] Написать failing tests для `draft|summary` symmetry, cross-kind rejection, content/package digests, exhaustive section ranges, allowlisted citations, unsupported reasons, handoff/imported-artifact validation и запрета чтения package paths/URLs в `tests/unit/test_writing_handoff.py`
-- [ ] T035 [P] [US3] Написать failing schema+runtime tests для ImportedWritingManifest, inherited acknowledgements/warnings, `human_reviewed=false`, atomic/idempotent output publication и path permissions в `tests/unit/test_research_artifacts.py`
-- [ ] T036 [P] [US3] Написать failing CLI tests для `kb research handoff`, `kb research import-output` и `kb research validate --handoff`, обоих output kinds, acknowledgement truth table, stderr warnings и stable JSON exit codes в `tests/unit/test_cli.py`
-- [ ] T037 [P] [US3] Добавить failing integration round-trips для draft и summary, validators всех artifact types, identical re-import, wrong-kind/unknown-citation/changed-evidence rejection и DB content snapshots в `tests/integration/test_research_workflow_pipeline.py`
+- [X] T031 [US3] Создать writing-output fixtures `tests/fixtures/research/valid-writing-output-draft.json`, `tests/fixtures/research/valid-writing-output-summary.json`, `tests/fixtures/research/invalid-writing-output.json` и добавить handoff/writing builders в `tests/conftest.py`
+- [X] T032 [US3] Написать failing schema+runtime-parser tests для writing-output fixtures и strict size/version/unknown-field bounds в `tests/unit/test_writing_handoff.py`
+- [X] T033 [US3] Написать failing schema+runtime tests для HandoffPackage и non-circular identity, idempotent reuse, evidence allowlist, every-handoff egress acknowledgement, second draft acknowledgement, standalone `0600`, symlink/custom-root rejection и atomic cleanup в `tests/unit/test_writing_handoff.py`
+- [X] T034 [US3] Написать failing tests для `draft|summary` symmetry, cross-kind rejection, content/package digests, exhaustive section ranges, allowlisted citations, unsupported reasons, handoff/imported-artifact validation и запрета чтения package paths/URLs в `tests/unit/test_writing_handoff.py`
+- [X] T035 [P] [US3] Написать failing schema+runtime tests для ImportedWritingManifest, inherited acknowledgements/warnings, `human_reviewed=false`, atomic/idempotent output publication и path permissions в `tests/unit/test_research_artifacts.py`
+- [X] T036 [P] [US3] Написать failing CLI tests для `kb research handoff`, `kb research import-output` и `kb research validate --handoff`, обоих output kinds, acknowledgement truth table, stderr warnings и stable JSON exit codes в `tests/unit/test_cli.py`
+- [X] T037 [P] [US3] Добавить failing integration round-trips для draft и summary, validators всех artifact types, identical re-import, wrong-kind/unknown-citation/changed-evidence rejection и DB content snapshots в `tests/integration/test_research_workflow_pipeline.py`
 
 ### Implementation
 
-- [ ] T038 [P] [US3] Реализовать handoff projection, non-circular identity/package digests, citation allowlist, quoted-data instructions, egress/draft gates и secure atomic standalone-file reuse через `research_artifacts.py` в `src/knowledge_base/writing_handoff.py`
-- [ ] T039 [US3] Реализовать bounded manual parser и structural validator writing-output package для обоих kinds, digest/identity/visibility/coverage/citation/current-dossier checks в `src/knowledge_base/writing_handoff.py`
-- [ ] T040 [P] [US3] Реализовать imported-writing manifest/output/validation rendering, content-derived `writing_id` и atomic idempotent publication в `src/knowledge_base/research_artifacts.py`
-- [ ] T041 [US3] Реализовать import orchestration и service-level validators для handoff, incoming writing-output с explicit handoff и imported-writing artifacts, включая acknowledgement propagation и whole-package rejection, в `src/knowledge_base/writing_handoff.py`
-- [ ] T042 [US3] Добавить handlers `kb research handoff` и `kb research import-output` и полный validate dispatch с `--handoff`/`--output-root` resolution в `src/knowledge_base/cli/main.py`
+- [X] T038 [P] [US3] Реализовать handoff projection, non-circular identity/package digests, citation allowlist, quoted-data instructions, egress/draft gates и secure atomic standalone-file reuse через `research_artifacts.py` в `src/knowledge_base/writing_handoff.py`
+- [X] T039 [US3] Реализовать bounded manual parser и structural validator writing-output package для обоих kinds, digest/identity/visibility/coverage/citation/current-dossier checks в `src/knowledge_base/writing_handoff.py`
+- [X] T040 [P] [US3] Реализовать imported-writing manifest/output/validation rendering, content-derived `writing_id` и atomic idempotent publication в `src/knowledge_base/research_artifacts.py`
+- [X] T041 [US3] Реализовать import orchestration и service-level validators для handoff, incoming writing-output с explicit handoff и imported-writing artifacts, включая acknowledgement propagation и whole-package rejection, в `src/knowledge_base/writing_handoff.py`
+- [X] T042 [US3] Добавить handlers `kb research handoff` и `kb research import-output` и полный validate dispatch с `--handoff`/`--output-root` resolution в `src/knowledge_base/cli/main.py`
 
 **Checkpoint**: US3 независимо принимает и draft, и summary, сохраняя generated/source-of-truth boundary и read-only MCP.
 
@@ -133,13 +133,13 @@
 
 **Purpose**: доказать отсутствие regression/mutations, синхронизировать документацию и провести независимую приёмку всех четырёх gates.
 
-- [ ] T043 [P] Добавить regression tests, что V5 не меняет legacy search visibility/result envelopes и MCP read-only tools, в `tests/unit/test_retrieval.py` и `tests/unit/test_mcp_service.py`
-- [ ] T044 Усилить seeded isolated integration проверкой deterministic per-collection content hashes без подключения к owner corpus в `tests/integration/test_research_workflow_pipeline.py`
-- [ ] T045 Выполнить отдельный opt-in real-corpus build ≤30s / validation ≤5s measurement и записать corpus identity, timings и artifact IDs только в automated evidence поля `specs/007-writer-research-workflow/acceptance.md`
-- [ ] T046 [P] Добавить Markdown link checker `scripts/check-markdown-links.mjs`, команды `check:docs-links`/aggregate `check` в `package.json` и ADR/link gates в `.github/workflows/ci.yml`
-- [ ] T047 [P] Обновить реализованные `kb research` commands, generated-data boundary и фактический V5 status в `README.md`, `docs/architecture.md` и `docs/roadmap.md`
-- [ ] T048 [P] Перевести future-tense examples в исполнимый acceptance flow и сверить все команды/fixtures с runtime в `specs/007-writer-research-workflow/quickstart.md`
-- [ ] T049 Запустить unit/integration/coverage, ruff, format, mypy, contract, ADR, link и `git diff --check` gates и записать automated evidence, не меняя independent results, в `specs/007-writer-research-workflow/acceptance.md`
+- [X] T043 [P] Добавить regression tests, что V5 не меняет legacy search visibility/result envelopes и MCP read-only tools, в `tests/unit/test_retrieval.py` и `tests/unit/test_mcp_service.py`
+- [X] T044 Усилить seeded isolated integration проверкой deterministic per-collection content hashes без подключения к owner corpus в `tests/integration/test_research_workflow_pipeline.py`
+- [X] T045 Выполнить отдельный opt-in real-corpus build ≤30s / validation ≤5s measurement и записать corpus identity, timings и artifact IDs только в automated evidence поля `specs/007-writer-research-workflow/acceptance.md`
+- [X] T046 [P] Добавить Markdown link checker `scripts/check-markdown-links.mjs`, команды `check:docs-links`/aggregate `check` в `package.json` и ADR/link gates в `.github/workflows/ci.yml`
+- [X] T047 [P] Обновить реализованные `kb research` commands, generated-data boundary и фактический V5 status в `README.md`, `docs/architecture.md` и `docs/roadmap.md`
+- [X] T048 [P] Перевести future-tense examples в исполнимый acceptance flow и сверить все команды/fixtures с runtime в `specs/007-writer-research-workflow/quickstart.md`
+- [X] T049 Запустить unit/integration/coverage, ruff, format, mypy, contract, ADR, link и `git diff --check` gates и записать automated evidence, не меняя independent results, в `specs/007-writer-research-workflow/acceptance.md`
 - [ ] T050 Независимо выполнить dossier/citation/curation acceptance и записать reviewer, artifact IDs, evidence и result секции 1 в `specs/007-writer-research-workflow/acceptance.md`
 - [ ] T051 Независимо выполнить draft round-trip acceptance и записать reviewer, handoff/package/writing IDs, evidence и result секции 2 в `specs/007-writer-research-workflow/acceptance.md`
 - [ ] T052 Независимо выполнить summary round-trip acceptance, включая cross-kind negative case, и записать evidence/result секции 3 в `specs/007-writer-research-workflow/acceptance.md`

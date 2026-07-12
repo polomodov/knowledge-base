@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import html
 import json
@@ -20,6 +21,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _CITATION_ID_RE = re.compile(r"^cit-[0-9a-f]{16}$")
+_HANDOFF_ID_RE = re.compile(r"^handoff-[0-9a-f]{16}$")
+_WRITING_ID_RE = re.compile(r"^writing-[0-9a-f]{16}$")
 _DOSSIER_KEY_RE = re.compile(r"^research-[a-z0-9_-]+-[0-9a-f]{12}$")
 _REVISION_ID_RE = re.compile(r"(?a:^rev-\d{8}T\d{6}Z-[0-9a-f]{8}$)")
 _ENTROPY_RE = re.compile(r"^[0-9a-f]{8,}$")
@@ -30,8 +33,11 @@ _SCHEMA_VERSION = "1.0"
 _OUTSIDE_GENERATED_WARNING = "output_outside_generated_zone"
 _MANIFEST_FILENAME = "manifest.json"
 _DOSSIER_FILENAME = "dossier.md"
+_WRITING_OUTPUT_FILENAME = "output.md"
 _VALIDATION_FILENAME = "validation.json"
 _DOSSIER_PACKAGE_FILENAMES = frozenset({_MANIFEST_FILENAME, _DOSSIER_FILENAME, _VALIDATION_FILENAME})
+_IMPORTED_WRITING_FILENAMES = frozenset({_MANIFEST_FILENAME, _WRITING_OUTPUT_FILENAME, _VALIDATION_FILENAME})
+_MAX_DOSSIER_MEMBER_BYTES = 32 * 1024 * 1024
 _UTC_OFFSET = "+00:00"
 
 _REQUEST_FIELDS = (
@@ -169,6 +175,95 @@ _VALIDATION_FIELDS = frozenset(
         "validated_at",
     }
 )
+_FILE_DIGEST_FIELDS = frozenset({"path", "sha256", "bytes"})
+_VALIDATION_CITATION_FIELDS = ("citation_id", "status", "reason")
+_WRITING_OUTPUT_FIELDS = (
+    "schema_version",
+    "artifact_type",
+    "output_kind",
+    "handoff_id",
+    "handoff_digest",
+    "dossier_key",
+    "revision_id",
+    "visibility",
+    "includes_drafts",
+    "created_at",
+    "agent",
+    "title",
+    "content_markdown",
+    "content_sha256",
+    "sections",
+    "package_digest",
+)
+_WRITING_SECTION_FIELDS = (
+    "section_id",
+    "heading",
+    "char_start",
+    "char_end",
+    "citation_ids",
+    "unsupported_by_corpus",
+    "unsupported_reason",
+)
+_WRITING_AGENT_FIELDS = ("name", "model", "run_id")
+_WRITING_HANDOFF_FIELDS = (
+    "schema_version",
+    "artifact_type",
+    "handoff_id",
+    "identity_sha256",
+    "dossier_key",
+    "revision_id",
+    "revision_content_digest",
+    "created_at",
+    "visibility",
+    "includes_drafts",
+    "egress_acknowledged",
+    "draft_evidence_acknowledged",
+    "query",
+    "requested_output",
+    "evidence",
+    "citation_allowlist",
+    "instructions",
+    "warnings",
+    "package_digest",
+)
+_REQUESTED_WRITING_OUTPUT_FIELDS = ("kind", "language", "style", "max_words")
+_IMPORTED_WRITING_MANIFEST_FIELDS = frozenset(
+    {
+        "schema_version",
+        "artifact_type",
+        "writing_id",
+        "output_kind",
+        "incoming_package_digest",
+        "handoff_id",
+        "handoff_digest",
+        "dossier_key",
+        "revision_id",
+        "revision_content_digest",
+        "visibility",
+        "includes_drafts",
+        "egress_acknowledged",
+        "draft_evidence_acknowledged",
+        "source_created_at",
+        "imported_at",
+        "agent",
+        "title",
+        "content_sha256",
+        "validation",
+        "human_reviewed",
+        "warnings",
+        "files",
+    }
+)
+_IMPORTED_WRITING_SUMMARY_FIELDS = frozenset(
+    {
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+        "unsupported_sections",
+    }
+)
 
 PublishStatus = Literal["created", "reused"]
 
@@ -179,6 +274,21 @@ class DossierPackage:
     validation: dict[str, Any]
     markdown: str
     files: dict[str, bytes]
+
+
+@dataclass(frozen=True, slots=True)
+class ImportedWritingPackage:
+    manifest: dict[str, Any]
+    validation: dict[str, Any]
+    markdown: str
+    files: dict[str, bytes]
+
+
+@dataclass(frozen=True, slots=True)
+class ImportedWritingPublication:
+    status: PublishStatus
+    path: Path
+    package: ImportedWritingPackage
 
 
 class ArtifactContractError(ValueError):
@@ -434,6 +544,7 @@ def materialize_dossier_package(
     corpus_context: Any,
     candidate_evidence: Sequence[Any],
     derived_context: Any,
+    selected_citation_ids: Sequence[str] | None = None,
     warnings: Sequence[str] = (),
     status: Literal["ready", "degraded"] | None = None,
     parent_revision_id: str | None = None,
@@ -446,7 +557,7 @@ def materialize_dossier_package(
     request_projection = _project_request(request)
     context_projection = _project_corpus_context(corpus_context)
     candidates = [_project_candidate(value) for value in _bounded_sequence(candidate_evidence, "candidate evidence", 150)]
-    selected_ids = _selected_citation_ids(candidates)
+    selected_ids = _validated_selected_citation_ids(candidates, selected_citation_ids)
 
     derived_projection = _project_derived_context(derived_context)
     operations = [
@@ -514,6 +625,77 @@ def materialize_dossier_package(
     return package
 
 
+def materialize_curated_dossier_package(
+    parent: DossierPackage,
+    result: Any,
+    clock: Callable[[], str | datetime] | None = None,
+    entropy: Callable[[], str] | None = None,
+) -> DossierPackage:
+    """Materialize one immutable curation child over an already verified parent."""
+
+    _validate_dossier_package(parent)
+    parent_manifest = parent.manifest
+
+    parent_revision_id = _result_field(result, "parent_revision_id")
+    if parent_revision_id != parent_manifest["revision_id"]:
+        raise ArtifactContractError("curation result must target the supplied parent revision")
+
+    request = _project_request(_result_field(result, "request"))
+    corpus_context = _project_corpus_context(_result_field(result, "corpus_context"))
+    derived_context = _project_derived_context(_result_field(result, "derived_context"))
+    if request != parent_manifest["request"]:
+        raise ArtifactContractError("curation must preserve the parent research request")
+    if corpus_context != parent_manifest["corpus_context"]:
+        raise ArtifactContractError("curation must preserve the parent corpus context")
+    if derived_context != parent_manifest["derived_context"]:
+        raise ArtifactContractError("curation must preserve the parent derived context")
+
+    candidates = [
+        _project_candidate(value)
+        for value in _bounded_sequence(_result_field(result, "candidate_evidence"), "candidate evidence", 150)
+    ]
+    _validate_curated_candidate_lineage(parent_manifest["candidate_evidence"], candidates)
+    selected_ids = _validated_selected_citation_ids(
+        candidates,
+        _result_field(result, "selected_citation_ids"),
+    )
+
+    operations = [
+        _project_curation_operation(value)
+        for value in _bounded_sequence(
+            _result_field(result, "curation_operations"),
+            "curation operations",
+            300,
+        )
+    ]
+    if not operations:
+        raise ArtifactContractError("curation child requires at least one operation")
+    _validate_curated_operation_replay(parent_manifest["candidate_evidence"], candidates, operations)
+
+    status = _result_field(result, "status")
+    warnings = _bounded_strings(_result_field(result, "warnings"), "dossier warnings", 100, 2000)
+    includes_drafts = _result_field(result, "includes_drafts")
+    if status != parent_manifest["status"] or warnings != parent_manifest["warnings"]:
+        raise ArtifactContractError("curation must preserve parent status and warnings")
+    if includes_drafts is not parent_manifest["includes_drafts"]:
+        raise ArtifactContractError("curation must preserve the parent draft scope")
+    _validate_curated_parent_gate(parent_manifest, _result_field(result, "parent_validation"))
+
+    return materialize_dossier_package(
+        request=request,
+        corpus_context=corpus_context,
+        candidate_evidence=candidates,
+        selected_citation_ids=selected_ids,
+        derived_context=derived_context,
+        warnings=warnings,
+        status=status,
+        parent_revision_id=parent_revision_id,
+        curation_operations=operations,
+        clock=clock,
+        entropy=entropy,
+    )
+
+
 def publish_dossier_package(output_root: Path, package: DossierPackage) -> PublishStatus:
     """Atomically publish one immutable three-file dossier revision."""
 
@@ -524,15 +706,512 @@ def publish_dossier_package(output_root: Path, package: DossierPackage) -> Publi
     return publish_directory_atomic(target, package.files)
 
 
+def load_dossier_package(revision_dir: Path) -> DossierPackage:
+    """Load and fully verify one immutable dossier revision without corpus access."""
+
+    files = _read_dossier_directory(revision_dir)
+    try:
+        markdown = files[_DOSSIER_FILENAME].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ArtifactContractError("dossier package members must be valid UTF-8") from error
+
+    manifest = parse_strict_object(
+        files[_MANIFEST_FILENAME],
+        artifact_type="dossier_revision",
+        required_fields=_MANIFEST_FIELDS - {"schema_version", "artifact_type"},
+        max_bytes=_MAX_DOSSIER_MEMBER_BYTES,
+    )
+    validation = parse_strict_object(
+        files[_VALIDATION_FILENAME],
+        artifact_type="validation_result",
+        required_fields=_VALIDATION_FIELDS - {"schema_version", "artifact_type"},
+        max_bytes=_MAX_DOSSIER_MEMBER_BYTES,
+    )
+    try:
+        _validate_loaded_dossier_manifest(manifest)
+        _validate_loaded_initial_validation(validation)
+        package = DossierPackage(manifest=manifest, validation=validation, markdown=markdown, files=files)
+        _validate_dossier_package(package)
+    except ArtifactContractError:
+        raise
+    except (AttributeError, IndexError, KeyError, TypeError) as error:
+        raise ArtifactContractError("dossier package contains invalid field types") from error
+    return package
+
+
+def materialize_imported_writing_package(
+    writing_output: Any,
+    handoff: Any,
+    validation: Any,
+    *,
+    imported_at: str,
+) -> ImportedWritingPackage:
+    """Render one validated external writing result into a generated-only package."""
+
+    output = _project_writing_output(writing_output)
+    trusted_handoff = _project_import_handoff(handoff)
+    automatic_validation = _project_writing_validation(validation, output)
+    imported_timestamp = _timestamp(imported_at, "writing import timestamp")
+    _validate_import_identity(output, trusted_handoff)
+
+    identity_digest = canonical_sha256(
+        {
+            "handoff_id": trusted_handoff["handoff_id"],
+            "incoming_package_digest": output["package_digest"],
+        }
+    )
+    writing_id = f"writing-{identity_digest[:16]}"
+    unsupported_sections = sum(section["unsupported_by_corpus"] is True for section in output["sections"])
+    warnings = _deduplicated_strings([*trusted_handoff["warnings"], *automatic_validation["warnings"]])
+    if unsupported_sections and "unsupported_sections_present" not in warnings:
+        warnings.append("unsupported_sections_present")
+    if len(warnings) > 100:
+        raise ArtifactContractError("combined imported-writing warnings exceed 100 items")
+
+    manifest: dict[str, Any] = {
+        "schema_version": _SCHEMA_VERSION,
+        "artifact_type": "imported_writing",
+        "writing_id": writing_id,
+        "output_kind": output["output_kind"],
+        "incoming_package_digest": output["package_digest"],
+        "handoff_id": trusted_handoff["handoff_id"],
+        "handoff_digest": trusted_handoff["package_digest"],
+        "dossier_key": trusted_handoff["dossier_key"],
+        "revision_id": trusted_handoff["revision_id"],
+        "revision_content_digest": trusted_handoff["revision_content_digest"],
+        "visibility": trusted_handoff["visibility"],
+        "includes_drafts": trusted_handoff["includes_drafts"],
+        "egress_acknowledged": trusted_handoff["egress_acknowledged"],
+        "draft_evidence_acknowledged": trusted_handoff["draft_evidence_acknowledged"],
+        "source_created_at": output["created_at"],
+        "imported_at": imported_timestamp,
+        "agent": output["agent"],
+        "title": output["title"],
+        "content_sha256": output["content_sha256"],
+        "validation": {
+            "schema_valid": automatic_validation["schema_valid"],
+            "package_integrity": automatic_validation["package_integrity"],
+            "dossier_current": automatic_validation["dossier_current"],
+            "citations_resolved": automatic_validation["citations_resolved"],
+            "coverage_complete": automatic_validation["coverage_complete"],
+            "unsupported_sections": unsupported_sections,
+        },
+        "human_reviewed": False,
+        "warnings": warnings,
+        "files": {},
+    }
+    imported_validation = {
+        **automatic_validation,
+        "target_type": "imported_writing",
+        "target_id": writing_id,
+        "target_digest": output["package_digest"],
+        "status": "valid_with_warnings" if warnings else "valid",
+        "human_reviewed": False,
+        "warnings": warnings,
+        "validated_at": imported_timestamp,
+    }
+    markdown = _render_imported_writing_markdown(manifest, output["content_markdown"])
+    output_bytes = markdown.encode("utf-8")
+    validation_bytes = _json_file_bytes(imported_validation)
+    manifest["files"] = {
+        "output": _file_digest(_WRITING_OUTPUT_FILENAME, output_bytes),
+        "validation": _file_digest(_VALIDATION_FILENAME, validation_bytes),
+    }
+    files = {
+        _MANIFEST_FILENAME: _json_file_bytes(manifest),
+        _WRITING_OUTPUT_FILENAME: output_bytes,
+        _VALIDATION_FILENAME: validation_bytes,
+    }
+    package = ImportedWritingPackage(
+        manifest=manifest,
+        validation=imported_validation,
+        markdown=markdown,
+        files=files,
+    )
+    _validate_imported_writing_package(package)
+    return package
+
+
+def publish_imported_writing_package(
+    output_root: Path,
+    package: ImportedWritingPackage,
+) -> ImportedWritingPublication:
+    """Atomically publish or semantically reuse one immutable generated writing package."""
+
+    _validate_imported_writing_package(package)
+    target = _absolute_path(output_root) / package.manifest["dossier_key"] / "outputs" / package.manifest["writing_id"]
+    if os.path.lexists(target):
+        return _reuse_imported_writing_or_raise(target, package)
+    try:
+        status = publish_directory_atomic(target, package.files)
+    except ArtifactCollisionError:
+        if os.path.lexists(target):
+            return _reuse_imported_writing_or_raise(target, package)
+        raise
+    if status == "reused":
+        return _reuse_imported_writing_or_raise(target, package)
+    return ImportedWritingPublication(status="created", path=target, package=package)
+
+
+def load_imported_writing_package(package_dir: Path) -> ImportedWritingPackage:
+    """Load and fully verify an immutable imported-writing package without corpus access."""
+
+    files = _read_imported_writing_directory(package_dir)
+    try:
+        markdown = files[_WRITING_OUTPUT_FILENAME].decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ArtifactContractError("imported-writing package members must be valid UTF-8") from error
+    manifest = parse_strict_object(
+        files[_MANIFEST_FILENAME],
+        artifact_type="imported_writing",
+        required_fields=_IMPORTED_WRITING_MANIFEST_FIELDS - {"schema_version", "artifact_type"},
+        max_bytes=_MAX_DOSSIER_MEMBER_BYTES,
+    )
+    validation = parse_strict_object(
+        files[_VALIDATION_FILENAME],
+        artifact_type="validation_result",
+        required_fields=_VALIDATION_FIELDS - {"schema_version", "artifact_type"},
+        max_bytes=_MAX_DOSSIER_MEMBER_BYTES,
+    )
+    try:
+        package = ImportedWritingPackage(
+            manifest=manifest,
+            validation=validation,
+            markdown=markdown,
+            files=files,
+        )
+        _validate_imported_writing_package(package)
+    except ArtifactContractError:
+        raise
+    except (AttributeError, IndexError, KeyError, TypeError) as error:
+        raise ArtifactContractError("imported-writing package contains invalid field types") from error
+    return package
+
+
 def _selected_citation_ids(candidates: Sequence[Mapping[str, Any]]) -> list[str]:
     selected_ids = [
-        candidate["citation"]["citation_id"] for candidate in candidates if candidate["selection_state"] in {"selected", "pinned"}
+        candidate["citation"]["citation_id"]
+        for state in ("pinned", "selected")
+        for candidate in candidates
+        if candidate["selection_state"] == state
     ]
     if not selected_ids:
         raise ArtifactContractError("dossier requires at least one selected evidence citation")
     if len(selected_ids) > 100 or len(selected_ids) != len(set(selected_ids)):
         raise ArtifactContractError("selected evidence must contain at most 100 unique citations")
     return selected_ids
+
+
+def _validated_selected_citation_ids(
+    candidates: Sequence[Mapping[str, Any]],
+    selected_citation_ids: Sequence[str] | None,
+) -> list[str]:
+    evidence_ids = _selected_citation_ids(candidates)
+    if selected_citation_ids is None:
+        return evidence_ids
+
+    selected_ids = _bounded_strings(selected_citation_ids, "selected citation IDs", 100, 20)
+    if not selected_ids or len(selected_ids) != len(set(selected_ids)):
+        raise ArtifactContractError("selected evidence must contain 1..100 unique citations")
+    if any(not _CITATION_ID_RE.fullmatch(citation_id) for citation_id in selected_ids):
+        raise ArtifactContractError("invalid selected citation ID")
+    if selected_ids != evidence_ids:
+        raise ArtifactContractError("selected citations must present pinned then selected evidence in stable candidate order")
+    return selected_ids
+
+
+def _validate_curated_candidate_lineage(
+    parent_candidates: Sequence[Mapping[str, Any]],
+    child_candidates: Sequence[Mapping[str, Any]],
+) -> None:
+    if len(parent_candidates) != len(child_candidates):
+        raise ArtifactContractError("curation must preserve the exact parent candidate universe")
+    mutable_fields = {"selection_state", "selection_reason"}
+    for parent, child in zip(parent_candidates, child_candidates, strict=True):
+        parent_identity = {key: value for key, value in parent.items() if key not in mutable_fields}
+        child_identity = {key: value for key, value in child.items() if key not in mutable_fields}
+        if parent_identity != child_identity:
+            raise ArtifactContractError("curation must preserve parent candidate order and evidence")
+
+
+def _validate_curated_operation_replay(
+    parent_candidates: Sequence[Mapping[str, Any]],
+    child_candidates: Sequence[Mapping[str, Any]],
+    operations: Sequence[Mapping[str, Any]],
+) -> None:
+    if [operation["ordinal"] for operation in operations] != list(range(len(operations))):
+        raise ArtifactContractError("curation operation ordinals must be contiguous and ordered from zero")
+
+    candidate_index: dict[str, int] = {}
+    expected_state_and_reason: list[tuple[str, str]] = []
+    for index, candidate in enumerate(parent_candidates):
+        citation_id = candidate["citation"]["citation_id"]
+        if citation_id in candidate_index:
+            raise ArtifactContractError("curation parent candidate IDs must be unique")
+        candidate_index[citation_id] = index
+        expected_state_and_reason.append((candidate["selection_state"], candidate["selection_reason"]))
+
+    seen_targets: set[str] = set()
+    transitions = {
+        "include": ({"candidate", "excluded"}, "selected"),
+        "exclude": ({"selected", "pinned"}, "excluded"),
+        "pin": ({"selected"}, "pinned"),
+    }
+    for operation in operations:
+        citation_id = operation["citation_id"]
+        if citation_id in seen_targets:
+            raise ArtifactContractError("curation operation targets must be unique")
+        seen_targets.add(citation_id)
+        target_index = candidate_index.get(citation_id)
+        if target_index is None:
+            raise ArtifactContractError("curation operation target must exist in the parent candidate universe")
+
+        operation_name = operation["operation"]
+        allowed_states, next_state = transitions[operation_name]
+        current_state, _ = expected_state_and_reason[target_index]
+        if current_state not in allowed_states:
+            raise ArtifactContractError(f"curation {operation_name} operation is invalid from {current_state} state")
+        expected_state_and_reason[target_index] = (next_state, f"owner-{operation_name}")
+
+    for child, expected in zip(child_candidates, expected_state_and_reason, strict=True):
+        actual = (child["selection_state"], child["selection_reason"])
+        if actual != expected:
+            raise ArtifactContractError("curation child state/reason does not match the ordered operation replay")
+
+
+def _validate_curated_parent_gate(parent_manifest: Mapping[str, Any], validation: Any) -> None:
+    required_true = (
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+    )
+    if (
+        _result_field(validation, "target_type") != "dossier_revision"
+        or _result_field(validation, "target_id") != parent_manifest["revision_id"]
+        or _result_field(validation, "target_digest") != parent_manifest["content_digest"]
+        or _result_field(validation, "status") not in {"valid", "valid_with_warnings"}
+        or any(_result_field(validation, field) is not True for field in required_true)
+    ):
+        raise ArtifactContractError("curation requires a current, resolved parent validation")
+
+
+def _result_field(value: Any, field: str) -> Any:
+    if isinstance(value, Mapping):
+        if field not in value:
+            raise ArtifactContractError(f"curation result is missing {field}")
+        return value[field]
+    try:
+        return getattr(value, field)
+    except AttributeError as error:
+        raise ArtifactContractError(f"curation result is missing {field}") from error
+
+
+def _project_writing_output(value: Any) -> dict[str, Any]:
+    raw = _project_fields(value, _WRITING_OUTPUT_FIELDS, "writing output")
+    if raw["schema_version"] != _SCHEMA_VERSION or raw["artifact_type"] != "writing_output":
+        raise ArtifactContractError("unsupported writing-output envelope")
+    output_kind = _enum_value(raw["output_kind"])
+    if output_kind not in {"draft", "summary"}:
+        raise ArtifactContractError("unsupported writing output kind")
+    handoff_id = _bounded_string(raw["handoff_id"], "writing output handoff_id", 1, 24)
+    if not _HANDOFF_ID_RE.fullmatch(handoff_id):
+        raise ArtifactContractError("invalid writing output handoff_id")
+    handoff_digest = _required_digest(raw["handoff_digest"], "writing output handoff digest")
+    dossier_key = _bounded_string(raw["dossier_key"], "writing output dossier_key", 1, 100)
+    revision_id = _bounded_string(raw["revision_id"], "writing output revision_id", 1, 32)
+    if not _DOSSIER_KEY_RE.fullmatch(dossier_key) or not _REVISION_ID_RE.fullmatch(revision_id):
+        raise ArtifactContractError("invalid writing output dossier identity")
+    includes_drafts = raw["includes_drafts"]
+    if not isinstance(includes_drafts, bool):
+        raise ArtifactContractError("writing output includes_drafts must be a boolean")
+    visibility = _enum_value(raw["visibility"])
+    expected_visibility = "published_and_drafts" if includes_drafts else "published_only"
+    if visibility != expected_visibility:
+        raise ArtifactContractError("writing output visibility does not match its draft scope")
+    agent = _project_writing_agent(raw["agent"])
+    title = _bounded_string(raw["title"], "writing output title", 1, 500)
+    content = _bounded_string(raw["content_markdown"], "writing output content", 1, 1_048_576)
+    content_digest = _required_digest(raw["content_sha256"], "writing output content digest")
+    if content_digest != hashlib.sha256(content.encode("utf-8")).hexdigest():
+        raise ArtifactContractError("writing output content digest mismatch")
+    sections = [
+        _project_writing_section(section, content_length=len(content))
+        for section in _bounded_sequence(raw["sections"], "writing output sections", 200)
+    ]
+    if not sections:
+        raise ArtifactContractError("writing output requires at least one section")
+    package_digest = _required_digest(raw["package_digest"], "writing output package digest")
+    output = {
+        "schema_version": _SCHEMA_VERSION,
+        "artifact_type": "writing_output",
+        "output_kind": output_kind,
+        "handoff_id": handoff_id,
+        "handoff_digest": handoff_digest,
+        "dossier_key": dossier_key,
+        "revision_id": revision_id,
+        "visibility": visibility,
+        "includes_drafts": includes_drafts,
+        "created_at": _timestamp(raw["created_at"], "writing output source timestamp"),
+        "agent": agent,
+        "title": title,
+        "content_markdown": content,
+        "content_sha256": content_digest,
+        "sections": sections,
+        "package_digest": package_digest,
+    }
+    digest_projection = dict(output)
+    digest_projection.pop("package_digest")
+    if canonical_sha256(digest_projection) != package_digest:
+        raise ArtifactContractError("writing output package digest mismatch")
+    return output
+
+
+def _project_writing_agent(value: Any) -> dict[str, str | None]:
+    raw = _project_fields(value, _WRITING_AGENT_FIELDS, "writing agent metadata")
+    agent: dict[str, str | None] = {}
+    for field in _WRITING_AGENT_FIELDS:
+        item = raw[field]
+        if item is not None and (not isinstance(item, str) or len(item) > 500):
+            raise ArtifactContractError(f"writing agent {field} must contain at most 500 characters or null")
+        agent[field] = item
+    return agent
+
+
+def _project_writing_section(value: Any, *, content_length: int) -> dict[str, Any]:
+    raw = _project_fields(value, _WRITING_SECTION_FIELDS, "writing section")
+    section_id = _bounded_string(raw["section_id"], "writing section_id", 9, 108)
+    if re.fullmatch(r"section-[A-Za-z0-9_-]{1,100}", section_id) is None:
+        raise ArtifactContractError("invalid writing section_id")
+    heading = raw["heading"]
+    if heading is not None and (not isinstance(heading, str) or len(heading) > 500):
+        raise ArtifactContractError("writing section heading must contain at most 500 characters or null")
+    start = _bounded_integer(raw["char_start"], "writing section char_start", 0)
+    end = _bounded_integer(raw["char_end"], "writing section char_end", 1)
+    if start >= end or end > content_length:
+        raise ArtifactContractError("writing section range is outside content")
+    citation_ids = _bounded_strings(raw["citation_ids"], "writing section citations", 50, 20)
+    if len(citation_ids) != len(set(citation_ids)) or any(
+        not _CITATION_ID_RE.fullmatch(citation_id) for citation_id in citation_ids
+    ):
+        raise ArtifactContractError("writing section citations must be unique valid citation IDs")
+    unsupported = raw["unsupported_by_corpus"]
+    if not isinstance(unsupported, bool):
+        raise ArtifactContractError("writing section unsupported flag must be a boolean")
+    reason = raw["unsupported_reason"]
+    if unsupported:
+        reason = _bounded_string(reason, "writing section unsupported reason", 1, 2000)
+    elif not citation_ids or reason is not None:
+        raise ArtifactContractError("supported writing sections require citations and no unsupported reason")
+    return {
+        "section_id": section_id,
+        "heading": heading,
+        "char_start": start,
+        "char_end": end,
+        "citation_ids": citation_ids,
+        "unsupported_by_corpus": unsupported,
+        "unsupported_reason": reason,
+    }
+
+
+def _project_import_handoff(value: Any) -> dict[str, Any]:
+    raw = _project_fields(value, _WRITING_HANDOFF_FIELDS, "writing handoff")
+    if raw["schema_version"] != _SCHEMA_VERSION or raw["artifact_type"] != "writing_handoff":
+        raise ArtifactContractError("unsupported writing handoff envelope")
+    handoff_id = _bounded_string(raw["handoff_id"], "writing handoff_id", 1, 24)
+    if not _HANDOFF_ID_RE.fullmatch(handoff_id):
+        raise ArtifactContractError("invalid writing handoff_id")
+    _required_digest(raw["identity_sha256"], "writing handoff identity digest")
+    package_digest = _required_digest(raw["package_digest"], "writing handoff package digest")
+    revision_digest = _required_digest(raw["revision_content_digest"], "writing handoff revision digest")
+    dossier_key = _bounded_string(raw["dossier_key"], "writing handoff dossier_key", 1, 100)
+    revision_id = _bounded_string(raw["revision_id"], "writing handoff revision_id", 1, 32)
+    if not _DOSSIER_KEY_RE.fullmatch(dossier_key) or not _REVISION_ID_RE.fullmatch(revision_id):
+        raise ArtifactContractError("invalid writing handoff dossier identity")
+    includes_drafts = raw["includes_drafts"]
+    if not isinstance(includes_drafts, bool):
+        raise ArtifactContractError("writing handoff includes_drafts must be a boolean")
+    visibility = _enum_value(raw["visibility"])
+    expected_visibility = "published_and_drafts" if includes_drafts else "published_only"
+    if visibility != expected_visibility:
+        raise ArtifactContractError("writing handoff visibility does not match its draft scope")
+    if raw["egress_acknowledged"] is not True:
+        raise ArtifactContractError("writing handoff requires external-disclosure acknowledgement")
+    expected_draft_ack = includes_drafts
+    if raw["draft_evidence_acknowledged"] is not expected_draft_ack:
+        raise ArtifactContractError("writing handoff draft acknowledgement does not match its scope")
+    requested = _project_fields(raw["requested_output"], _REQUESTED_WRITING_OUTPUT_FIELDS, "requested writing output")
+    requested_kind = _enum_value(requested["kind"])
+    if requested_kind not in {"draft", "summary"}:
+        raise ArtifactContractError("unsupported requested writing output kind")
+    warnings = _bounded_strings(raw["warnings"], "writing handoff warnings", 100, 2000)
+    return {
+        "handoff_id": handoff_id,
+        "package_digest": package_digest,
+        "dossier_key": dossier_key,
+        "revision_id": revision_id,
+        "revision_content_digest": revision_digest,
+        "visibility": visibility,
+        "includes_drafts": includes_drafts,
+        "egress_acknowledged": True,
+        "draft_evidence_acknowledged": expected_draft_ack,
+        "requested_output_kind": requested_kind,
+        "warnings": warnings,
+    }
+
+
+def _project_writing_validation(value: Any, output: Mapping[str, Any]) -> dict[str, Any]:
+    raw = _project_fields(value, tuple(_VALIDATION_FIELDS), "writing validation")
+    validation = {field: _copy_json(_enum_value(raw[field])) for field in _VALIDATION_FIELDS}
+    if validation["schema_version"] != _SCHEMA_VERSION or validation["artifact_type"] != "validation_result":
+        raise ArtifactContractError("unsupported writing validation envelope")
+    if (
+        validation["target_type"] != "writing_output"
+        or validation["target_id"] != output["package_digest"]
+        or validation["target_digest"] != output["package_digest"]
+    ):
+        raise ArtifactContractError("writing validation targets another output package")
+    if validation["status"] not in {"valid", "valid_with_warnings"}:
+        raise ArtifactContractError("writing output must pass automatic validation before materialization")
+    claims = ("schema_valid", "package_integrity", "dossier_current", "citations_resolved", "coverage_complete")
+    if any(validation[claim] is not True for claim in claims) or validation["human_reviewed"] is not False:
+        raise ArtifactContractError("writing validation automatic claims are inconsistent")
+    citations = _bounded_sequence(validation["citations"], "writing validation citations", 250)
+    projected_citations: list[dict[str, Any]] = []
+    for item in citations:
+        citation = _project_fields(item, _VALIDATION_CITATION_FIELDS, "writing validation citation")
+        if not isinstance(citation["citation_id"], str) or not _CITATION_ID_RE.fullmatch(citation["citation_id"]):
+            raise ArtifactContractError("invalid writing validation citation ID")
+        if citation["status"] != "valid" or citation["reason"] is not None:
+            raise ArtifactContractError("accepted writing validation citations must be current")
+        projected_citations.append(dict(citation))
+    validation["citations"] = projected_citations
+    validation["warnings"] = _bounded_strings(validation["warnings"], "writing validation warnings", 100, 2000)
+    validation["errors"] = _bounded_strings(validation["errors"], "writing validation errors", 100, 2000)
+    if validation["errors"]:
+        raise ArtifactContractError("accepted writing validation cannot contain errors")
+    validation["validated_at"] = _timestamp(validation["validated_at"], "writing validation timestamp")
+    return validation
+
+
+def _validate_import_identity(output: Mapping[str, Any], handoff: Mapping[str, Any]) -> None:
+    if (
+        output["handoff_id"] != handoff["handoff_id"]
+        or output["handoff_digest"] != handoff["package_digest"]
+        or output["dossier_key"] != handoff["dossier_key"]
+        or output["revision_id"] != handoff["revision_id"]
+        or output["visibility"] != handoff["visibility"]
+        or output["includes_drafts"] is not handoff["includes_drafts"]
+        or output["output_kind"] != handoff["requested_output_kind"]
+    ):
+        raise ArtifactContractError("writing output does not match the validated handoff")
+
+
+def _required_digest(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not _DIGEST_RE.fullmatch(value):
+        raise ArtifactContractError(f"{label} must be a lowercase SHA-256 digest")
+    return value
 
 
 def _project_request(value: Any) -> dict[str, Any]:
@@ -777,6 +1456,187 @@ def _render_dossier_markdown(manifest: Mapping[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _render_imported_writing_markdown(manifest: Mapping[str, Any], content: str) -> str:
+    return _imported_writing_markdown_prefix(manifest) + content
+
+
+def _imported_writing_markdown_prefix(manifest: Mapping[str, Any]) -> str:
+    return (
+        "<!-- GENERATED OUTPUT: not a source of truth -->\n"
+        "> **Generated output — not a source of truth.**\n"
+        f"> Kind: `{manifest['output_kind']}`; handoff: `{manifest['handoff_id']}`; "
+        f"dossier revision: `{manifest['revision_id']}`.\n\n"
+    )
+
+
+def _validate_imported_writing_package(package: ImportedWritingPackage) -> None:
+    if not isinstance(package, ImportedWritingPackage):
+        raise TypeError("package must be an ImportedWritingPackage")
+    if set(package.files) != _IMPORTED_WRITING_FILENAMES:
+        raise ArtifactContractError("imported-writing package must contain exactly three files")
+    if set(package.manifest) != _IMPORTED_WRITING_MANIFEST_FIELDS or set(package.validation) != _VALIDATION_FIELDS:
+        raise ArtifactContractError("imported-writing package fields do not match the contract allowlist")
+    try:
+        serialized_manifest = json.loads(package.files[_MANIFEST_FILENAME])
+        serialized_validation = json.loads(package.files[_VALIDATION_FILENAME])
+        serialized_markdown = package.files[_WRITING_OUTPUT_FILENAME].decode("utf-8")
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ArtifactContractError("imported-writing files must be valid UTF-8 JSON/Markdown") from error
+    if serialized_manifest != package.manifest or serialized_validation != package.validation:
+        raise ArtifactContractError("imported-writing object and serialized JSON disagree")
+    if serialized_markdown != package.markdown:
+        raise ArtifactContractError("imported-writing object and serialized Markdown disagree")
+
+    _validate_loaded_imported_writing_manifest(package.manifest)
+    _validate_loaded_imported_writing_validation(package.manifest, package.validation)
+    prefix = _imported_writing_markdown_prefix(package.manifest)
+    if not package.markdown.startswith(prefix):
+        raise ArtifactContractError("imported-writing Markdown is missing its generated-output boundary")
+    source_content = package.markdown[len(prefix) :]
+    if not 1 <= len(source_content) <= 1_048_576:
+        raise ArtifactContractError("imported-writing source content is outside its supported bounds")
+    if hashlib.sha256(source_content.encode("utf-8")).hexdigest() != package.manifest["content_sha256"]:
+        raise ArtifactContractError("imported-writing source content digest mismatch")
+    for label, name in (("output", _WRITING_OUTPUT_FILENAME), ("validation", _VALIDATION_FILENAME)):
+        if package.manifest["files"].get(label) != _file_digest(name, package.files[name]):
+            raise ArtifactContractError(f"imported-writing package {name} digest mismatch")
+
+
+def _validate_loaded_imported_writing_manifest(manifest: Mapping[str, Any]) -> None:
+    if manifest["schema_version"] != _SCHEMA_VERSION or manifest["artifact_type"] != "imported_writing":
+        raise ArtifactContractError("unsupported imported-writing manifest envelope")
+    writing_id = _bounded_string(manifest["writing_id"], "writing_id", 1, 24)
+    handoff_id = _bounded_string(manifest["handoff_id"], "imported-writing handoff_id", 1, 24)
+    if not _WRITING_ID_RE.fullmatch(writing_id) or not _HANDOFF_ID_RE.fullmatch(handoff_id):
+        raise ArtifactContractError("invalid imported-writing identity")
+    incoming_digest = _required_digest(manifest["incoming_package_digest"], "incoming package digest")
+    expected_identity = canonical_sha256({"handoff_id": handoff_id, "incoming_package_digest": incoming_digest})
+    if writing_id != f"writing-{expected_identity[:16]}":
+        raise ArtifactContractError("writing_id does not match its semantic identity")
+    _required_digest(manifest["handoff_digest"], "imported-writing handoff digest")
+    _required_digest(manifest["revision_content_digest"], "imported-writing revision digest")
+    _required_digest(manifest["content_sha256"], "imported-writing content digest")
+    dossier_key = _bounded_string(manifest["dossier_key"], "imported-writing dossier_key", 1, 100)
+    revision_id = _bounded_string(manifest["revision_id"], "imported-writing revision_id", 1, 32)
+    if not _DOSSIER_KEY_RE.fullmatch(dossier_key) or not _REVISION_ID_RE.fullmatch(revision_id):
+        raise ArtifactContractError("invalid imported-writing dossier identity")
+    if manifest["output_kind"] not in {"draft", "summary"}:
+        raise ArtifactContractError("unsupported imported-writing output kind")
+    includes_drafts = manifest["includes_drafts"]
+    if not isinstance(includes_drafts, bool):
+        raise ArtifactContractError("imported-writing includes_drafts must be a boolean")
+    expected_visibility = "published_and_drafts" if includes_drafts else "published_only"
+    if manifest["visibility"] != expected_visibility:
+        raise ArtifactContractError("imported-writing visibility does not match its draft scope")
+    if manifest["egress_acknowledged"] is not True:
+        raise ArtifactContractError("imported-writing egress acknowledgement must be inherited")
+    if manifest["draft_evidence_acknowledged"] is not includes_drafts:
+        raise ArtifactContractError("imported-writing draft acknowledgement does not match its scope")
+    _timestamp(manifest["source_created_at"], "imported-writing source timestamp")
+    _timestamp(manifest["imported_at"], "imported-writing import timestamp")
+    projected_agent = _project_writing_agent(manifest["agent"])
+    if projected_agent != manifest["agent"]:
+        raise ArtifactContractError("imported-writing agent metadata does not match its strict projection")
+    _bounded_string(manifest["title"], "imported-writing title", 1, 500)
+    if manifest["human_reviewed"] is not False:
+        raise ArtifactContractError("automatic import cannot claim human review")
+    warnings = _bounded_strings(manifest["warnings"], "imported-writing warnings", 100, 2000)
+    if warnings != manifest["warnings"] or warnings != _deduplicated_strings(warnings):
+        raise ArtifactContractError("imported-writing warnings must be a stable deduplicated array")
+    summary = _allowlisted_mapping(
+        manifest["validation"],
+        _IMPORTED_WRITING_SUMMARY_FIELDS,
+        "imported-writing validation summary",
+        require_all=True,
+    )
+    for claim in ("schema_valid", "package_integrity", "dossier_current", "citations_resolved", "coverage_complete"):
+        if summary[claim] is not True:
+            raise ArtifactContractError("imported-writing manifest requires successful automatic claims")
+    _bounded_integer(summary["unsupported_sections"], "unsupported section count", 0, 200)
+    files = _allowlisted_mapping(
+        manifest["files"],
+        frozenset({"output", "validation"}),
+        "imported-writing files",
+        require_all=True,
+    )
+    for label, expected_path in (("output", _WRITING_OUTPUT_FILENAME), ("validation", _VALIDATION_FILENAME)):
+        digest = _allowlisted_mapping(
+            files[label],
+            _FILE_DIGEST_FIELDS,
+            f"imported-writing {label} file digest",
+            require_all=True,
+        )
+        if digest["path"] != expected_path:
+            raise ArtifactContractError(f"imported-writing {label} file path is inconsistent")
+        _required_digest(digest["sha256"], f"imported-writing {label} file digest")
+        _bounded_integer(digest["bytes"], f"imported-writing {label} file bytes", 0, _MAX_DOSSIER_MEMBER_BYTES)
+
+
+def _validate_loaded_imported_writing_validation(
+    manifest: Mapping[str, Any],
+    validation: Mapping[str, Any],
+) -> None:
+    if validation["schema_version"] != _SCHEMA_VERSION or validation["artifact_type"] != "validation_result":
+        raise ArtifactContractError("unsupported imported-writing validation envelope")
+    if (
+        validation["target_type"] != "imported_writing"
+        or validation["target_id"] != manifest["writing_id"]
+        or validation["target_digest"] != manifest["incoming_package_digest"]
+    ):
+        raise ArtifactContractError("imported-writing validation targets another artifact")
+    expected_status = "valid_with_warnings" if manifest["warnings"] else "valid"
+    if validation["status"] != expected_status:
+        raise ArtifactContractError("imported-writing validation status does not match its warnings")
+    claims = ("schema_valid", "package_integrity", "dossier_current", "citations_resolved", "coverage_complete")
+    if any(validation[claim] is not True for claim in claims) or validation["human_reviewed"] is not False:
+        raise ArtifactContractError("imported-writing automatic validation claims are inconsistent")
+    citations = _bounded_sequence(validation["citations"], "imported-writing validation citations", 250)
+    for item in citations:
+        citation = _project_fields(item, _VALIDATION_CITATION_FIELDS, "imported-writing validation citation")
+        if not isinstance(citation["citation_id"], str) or not _CITATION_ID_RE.fullmatch(citation["citation_id"]):
+            raise ArtifactContractError("invalid imported-writing validation citation ID")
+        if citation["status"] != "valid" or citation["reason"] is not None:
+            raise ArtifactContractError("imported-writing citations must remain current")
+    warnings = _bounded_strings(validation["warnings"], "imported-writing validation warnings", 100, 2000)
+    errors = _bounded_strings(validation["errors"], "imported-writing validation errors", 100, 2000)
+    if warnings != manifest["warnings"] or errors:
+        raise ArtifactContractError("imported-writing validation diagnostics are inconsistent")
+    if validation["validated_at"] != manifest["imported_at"]:
+        raise ArtifactContractError("imported-writing validation timestamp does not match import time")
+    _timestamp(validation["validated_at"], "imported-writing validation timestamp")
+    summary = manifest["validation"]
+    if any(summary[claim] is not validation[claim] for claim in claims):
+        raise ArtifactContractError("imported-writing validation summary does not match validation.json")
+    if summary["unsupported_sections"] > 0 and "unsupported_sections_present" not in manifest["warnings"]:
+        raise ArtifactContractError("imported-writing unsupported sections require a stable warning")
+
+
+def _imported_writing_semantic_projection(package: ImportedWritingPackage) -> dict[str, Any]:
+    manifest = _copy_json(package.manifest)
+    validation = _copy_json(package.validation)
+    assert isinstance(manifest, dict) and isinstance(validation, dict)
+    manifest.pop("imported_at")
+    manifest.pop("files")
+    validation.pop("validated_at")
+    return {"manifest": manifest, "validation": validation, "markdown": package.markdown}
+
+
+def _reuse_imported_writing_or_raise(
+    target: Path,
+    requested: ImportedWritingPackage,
+) -> ImportedWritingPublication:
+    try:
+        stored = load_imported_writing_package(target)
+    except UnsafeArtifactPathError:
+        raise
+    except ArtifactContractError as error:
+        raise ArtifactCollisionError(f"immutable imported-writing collision: {target}") from error
+    if _imported_writing_semantic_projection(stored) != _imported_writing_semantic_projection(requested):
+        raise ArtifactCollisionError(f"immutable imported-writing collision: {target}")
+    publish_directory_atomic(target, stored.files)
+    return ImportedWritingPublication(status="reused", path=target, package=stored)
+
+
 def _initial_dossier_validation(manifest: Mapping[str, Any], *, validated_at: str) -> dict[str, Any]:
     warnings = list(manifest["warnings"])
     return {
@@ -840,6 +1700,117 @@ def _validate_initial_dossier_validation(
     _timestamp(validation.get("validated_at"), "initial validation timestamp")
 
 
+def _validate_loaded_dossier_manifest(manifest: Mapping[str, Any]) -> None:
+    request = _project_request(manifest["request"])
+    if request != manifest["request"]:
+        raise ArtifactContractError("dossier request does not match its strict projection")
+
+    context = _project_corpus_context(manifest["corpus_context"])
+    if context != manifest["corpus_context"]:
+        raise ArtifactContractError("dossier corpus context does not match its strict projection")
+
+    raw_candidates = _bounded_sequence(manifest["candidate_evidence"], "candidate evidence", 150)
+    candidates = [_project_candidate(value) for value in raw_candidates]
+    if candidates != raw_candidates:
+        raise ArtifactContractError("dossier candidate evidence does not match its strict projection")
+
+    raw_operations = _bounded_sequence(manifest["curation_operations"], "curation operations", 300)
+    operations = [_project_curation_operation(value) for value in raw_operations]
+    if operations != raw_operations:
+        raise ArtifactContractError("dossier curation operations do not match their strict projection")
+
+    derived_context = _project_derived_context(manifest["derived_context"])
+    if derived_context != manifest["derived_context"]:
+        raise ArtifactContractError("dossier derived context does not match its strict projection")
+
+    selected_ids = _bounded_strings(manifest["selected_citation_ids"], "selected citation IDs", 100, 20)
+    _validated_selected_citation_ids(candidates, selected_ids)
+
+    warnings = _bounded_strings(manifest["warnings"], "dossier warnings", 100, 2000)
+    if warnings != manifest["warnings"]:
+        raise ArtifactContractError("dossier warnings do not match their strict projection")
+    if not isinstance(manifest["includes_drafts"], bool):
+        raise ArtifactContractError("dossier includes_drafts must be a boolean")
+
+    parent_revision_id = manifest["parent_revision_id"]
+    if parent_revision_id is not None and (
+        not isinstance(parent_revision_id, str) or not _REVISION_ID_RE.fullmatch(parent_revision_id)
+    ):
+        raise ArtifactContractError("invalid parent dossier revision identifier")
+    if not isinstance(manifest["content_digest"], str) or not _DIGEST_RE.fullmatch(manifest["content_digest"]):
+        raise ArtifactContractError("invalid dossier content digest")
+    if manifest["dossier_key"] != _dossier_key(request):
+        raise ArtifactContractError("dossier key does not match the research request")
+
+    _validate_loaded_file_digests(manifest["files"])
+
+
+def _validate_loaded_file_digests(value: Any) -> None:
+    files = _allowlisted_mapping(
+        value,
+        frozenset({"dossier", "validation"}),
+        "dossier files",
+        require_all=True,
+    )
+    for label, expected_path in (("dossier", _DOSSIER_FILENAME), ("validation", _VALIDATION_FILENAME)):
+        digest = _allowlisted_mapping(
+            files[label],
+            _FILE_DIGEST_FIELDS,
+            f"dossier {label} file digest",
+            require_all=True,
+        )
+        if digest["path"] != expected_path:
+            raise ArtifactContractError(f"dossier {label} file path is inconsistent")
+        if not isinstance(digest["sha256"], str) or not _DIGEST_RE.fullmatch(digest["sha256"]):
+            raise ArtifactContractError(f"dossier {label} file digest is invalid")
+        _bounded_integer(digest["bytes"], f"dossier {label} file bytes", 0, _MAX_DOSSIER_MEMBER_BYTES)
+
+
+def _validate_loaded_initial_validation(validation: Mapping[str, Any]) -> None:
+    if validation["target_type"] != "dossier_revision":
+        raise ArtifactContractError("initial validation must target a dossier revision")
+    _bounded_string(validation["target_id"], "validation target_id", 1, 500)
+    if not isinstance(validation["target_digest"], str) or not _DIGEST_RE.fullmatch(validation["target_digest"]):
+        raise ArtifactContractError("validation target digest is invalid")
+    if not isinstance(validation["status"], str) or validation["status"] not in {
+        "valid",
+        "valid_with_warnings",
+        "invalid",
+    }:
+        raise ArtifactContractError("validation status is unsupported")
+
+    boolean_fields = (
+        "schema_valid",
+        "package_integrity",
+        "dossier_current",
+        "citations_resolved",
+        "coverage_complete",
+        "human_reviewed",
+    )
+    if any(not isinstance(validation[field], bool) for field in boolean_fields):
+        raise ArtifactContractError("validation claims must be booleans")
+
+    citations = _bounded_sequence(validation["citations"], "validation citations", 250)
+    for value in citations:
+        citation = _project_fields(value, _VALIDATION_CITATION_FIELDS, "validation citation")
+        if not isinstance(citation["citation_id"], str) or not _CITATION_ID_RE.fullmatch(citation["citation_id"]):
+            raise ArtifactContractError("validation citation ID is invalid")
+        if not isinstance(citation["status"], str) or citation["status"] not in {
+            "valid",
+            "missing",
+            "changed",
+            "hidden",
+        }:
+            raise ArtifactContractError("validation citation status is unsupported")
+        reason = citation["reason"]
+        if reason is not None and (not isinstance(reason, str) or len(reason) > 2000):
+            raise ArtifactContractError("validation citation reason must contain at most 2000 characters")
+
+    _bounded_strings(validation["warnings"], "validation warnings", 100, 2000)
+    _bounded_strings(validation["errors"], "validation errors", 100, 2000)
+    _timestamp(validation["validated_at"], "validation timestamp")
+
+
 def _validate_dossier_package(package: DossierPackage) -> None:
     _validate_dossier_package_structure(package)
     try:
@@ -855,13 +1826,10 @@ def _validate_dossier_package(package: DossierPackage) -> None:
     expected_digest = canonical_sha256(_dossier_content_projection(package.manifest))
     if package.manifest.get("content_digest") != expected_digest:
         raise ArtifactContractError("dossier package content digest mismatch")
-    selected_ids = [
-        candidate["citation"]["citation_id"]
-        for candidate in package.manifest["candidate_evidence"]
-        if candidate["selection_state"] in {"selected", "pinned"}
-    ]
-    if package.manifest.get("selected_citation_ids") != selected_ids:
-        raise ArtifactContractError("dossier selected evidence set/order mismatch")
+    _validated_selected_citation_ids(
+        package.manifest["candidate_evidence"],
+        package.manifest.get("selected_citation_ids"),
+    )
     if package.markdown != _render_dossier_markdown(package.manifest):
         raise ArtifactContractError("dossier Markdown does not match selected evidence")
     for label, name in (("dossier", _DOSSIER_FILENAME), ("validation", _VALIDATION_FILENAME)):
@@ -1085,6 +2053,125 @@ def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, An
 
 def _absolute_path(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path.expanduser())))
+
+
+def _read_imported_writing_directory(package_dir: Path) -> dict[str, bytes]:
+    package_path = _absolute_path(package_dir)
+    assert_no_symlink_components(package_path)
+    try:
+        mode = os.lstat(package_path).st_mode
+    except FileNotFoundError as error:
+        raise ArtifactContractError(f"imported-writing directory does not exist: {package_path}") from error
+    if stat.S_ISLNK(mode):
+        raise UnsafeArtifactPathError(f"symlink imported-writing directory is forbidden: {package_path}")
+    if not stat.S_ISDIR(mode):
+        raise ArtifactContractError(f"imported-writing path is not a real directory: {package_path}")
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(package_path, flags)
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.EMLINK}:
+            raise UnsafeArtifactPathError(f"symlink imported-writing directory is forbidden: {package_path}") from error
+        raise ArtifactContractError(f"cannot open imported-writing directory: {package_path}") from error
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ArtifactContractError(f"imported-writing path is not a real directory: {package_path}")
+        names = set(os.listdir(descriptor))
+        if names != _IMPORTED_WRITING_FILENAMES:
+            raise ArtifactContractError("imported-writing directory must contain exactly three known files")
+        files = {name: _read_dossier_member(descriptor, package_path, name) for name in sorted(names)}
+        if set(os.listdir(descriptor)) != _IMPORTED_WRITING_FILENAMES:
+            raise ArtifactContractError("imported-writing directory changed while being read")
+        return files
+    finally:
+        os.close(descriptor)
+
+
+def _read_dossier_directory(revision_dir: Path) -> dict[str, bytes]:
+    revision = _absolute_path(revision_dir)
+    assert_no_symlink_components(revision)
+    try:
+        mode = os.lstat(revision).st_mode
+    except FileNotFoundError as error:
+        raise ArtifactContractError(f"dossier revision directory does not exist: {revision}") from error
+    if stat.S_ISLNK(mode):
+        raise UnsafeArtifactPathError(f"symlink dossier revision is forbidden: {revision}")
+    if not stat.S_ISDIR(mode):
+        raise ArtifactContractError(f"dossier revision path is not a real directory: {revision}")
+
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(revision, flags)
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.EMLINK}:
+            raise UnsafeArtifactPathError(f"symlink dossier revision is forbidden: {revision}") from error
+        raise ArtifactContractError(f"cannot open dossier revision directory: {revision}") from error
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise ArtifactContractError(f"dossier revision path is not a real directory: {revision}")
+        names = set(os.listdir(descriptor))
+        if names != _DOSSIER_PACKAGE_FILENAMES:
+            raise ArtifactContractError("dossier revision directory must contain exactly three known files")
+        files = {name: _read_dossier_member(descriptor, revision, name) for name in sorted(names)}
+        if set(os.listdir(descriptor)) != _DOSSIER_PACKAGE_FILENAMES:
+            raise ArtifactContractError("dossier revision directory changed while being read")
+        return files
+    finally:
+        os.close(descriptor)
+
+
+def _read_dossier_member(directory_descriptor: int, revision: Path, name: str) -> bytes:
+    try:
+        path_stat = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+    except FileNotFoundError as error:
+        raise ArtifactContractError(f"dossier package member is missing: {name}") from error
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise UnsafeArtifactPathError(f"symlink dossier package member is forbidden: {revision / name}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ArtifactContractError(f"dossier package member is not a regular file: {name}")
+    _validate_dossier_member_size(name, path_stat.st_size)
+
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=directory_descriptor)
+    except OSError as error:
+        if error.errno in {errno.ELOOP, errno.EMLINK}:
+            raise UnsafeArtifactPathError(f"symlink dossier package member is forbidden: {revision / name}") from error
+        raise ArtifactContractError(f"cannot open dossier package member: {name}") from error
+    try:
+        opened_stat = os.fstat(descriptor)
+        if stat.S_ISLNK(opened_stat.st_mode):
+            raise UnsafeArtifactPathError(f"symlink dossier package member is forbidden: {revision / name}")
+        if not stat.S_ISREG(opened_stat.st_mode):
+            raise ArtifactContractError(f"dossier package member is not a regular file: {name}")
+        if (opened_stat.st_dev, opened_stat.st_ino) != (path_stat.st_dev, path_stat.st_ino):
+            raise UnsafeArtifactPathError(f"dossier package member changed during secure open: {revision / name}")
+        _validate_dossier_member_size(name, opened_stat.st_size)
+        payload = _read_bounded_descriptor(descriptor, name)
+        final_stat = os.fstat(descriptor)
+        if final_stat.st_size != len(payload) or final_stat.st_mtime_ns != opened_stat.st_mtime_ns:
+            raise ArtifactContractError(f"dossier package member changed while being read: {name}")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+def _validate_dossier_member_size(name: str, size: int) -> None:
+    if size > _MAX_DOSSIER_MEMBER_BYTES:
+        raise ArtifactContractError(f"dossier package member {name} exceeds {_MAX_DOSSIER_MEMBER_BYTES} byte limit")
+
+
+def _read_bounded_descriptor(descriptor: int, name: str) -> bytes:
+    payload = bytearray()
+    while True:
+        remaining = _MAX_DOSSIER_MEMBER_BYTES + 1 - len(payload)
+        if remaining <= 0:
+            raise ArtifactContractError(f"dossier package member {name} exceeds {_MAX_DOSSIER_MEMBER_BYTES} byte limit")
+        chunk = os.read(descriptor, min(1024 * 1024, remaining))
+        if not chunk:
+            return bytes(payload)
+        payload.extend(chunk)
 
 
 def _ensure_owner_directory(path: Path) -> None:

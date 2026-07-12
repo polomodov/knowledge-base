@@ -1,151 +1,350 @@
 # Quickstart: Writer/Research Workflow
 
-Этот документ описывает будущий acceptance flow. Команды станут исполнимыми после implementation phase. Независимый итоговый gate и места для записи фактических результатов находятся в [acceptance.md](acceptance.md).
+Writer/research workflow реализован командами `kb research build|validate|curate|handoff|import-output`. Этот quickstart проводит текущий structural acceptance flow; независимый reviewer записывает фактические результаты и идентификаторы в [acceptance.md](acceptance.md).
+
+Команды выполняются из корня репозитория последовательно в одной shell session: следующие блоки переиспользуют variables и функции из предыдущих. Для custom config флаг ставится перед подкомандой, например `uv run kb --config pipeline.local.toml research build ...`. Один и тот же config используется для ingest, indexes и всего acceptance flow.
 
 ## 1. Подготовить read side
 
-Используйте локальный config, соответствующий embedding space корпуса:
+Запустите локальный runtime и проверьте schema/index state:
 
 ```bash
+uv run kb platform up
+uv run kb platform bootstrap
 uv run kb platform health
 uv run kb index rebuild --target embeddings
 uv run kb index rebuild --target related
 uv run kb index rebuild --target communities
 ```
 
-Research workflow сам не выполняет rebuild и не изменяет DB.
+Для ручного published-only flow в DB нужен хотя бы один релевантный документ со `status=published`. Команда `kb ingest fixture` использует `tests/fixtures/safe_knowledge_fixture.json`; её служебные документы имеют `status=fixture` и не заменяют published corpus acceptance.
 
-## 2. Построить published-only dossier
+V5 test corpus `tests/fixtures/research/safe-research-corpus.json` загружается только isolated integration test и не предназначен для owner database:
 
 ```bash
-uv run kb research build "как связаны системное мышление и письмо" \
-  --documents 12 \
-  --fragments-per-document 2
+KB_RUN_INTEGRATION=1 uv run --extra dev pytest -q tests/integration/test_research_workflow_pipeline.py
 ```
 
-Ожидается:
+Research-команды читают ArangoDB, но не выполняют rebuild и не изменяют коллекции.
 
-- stdout содержит `status=ok|degraded`, `dossier_key`, `revision_id` и output path;
-- revision directory содержит `manifest.json`, `dossier.md`, `validation.json`;
-- каждый excerpt имеет citation ID, chunk/document/source provenance и точный hash;
-- draft documents отсутствуют;
-- повторный build создаёт другой revision ID, но тот же `content_digest` при неизменных inputs.
+## 2. Построить и проверить published-only dossier
 
-Проверить revision:
+Следующий блок сохраняет JSON stdout и извлекает фактический artifact path без зависимости от `jq`:
 
 ```bash
-uv run kb research validate data/generated/research/RESEARCH_KEY/revisions/REVISION_ID
+set -e
+
+OUTPUT_ROOT="$PWD/data/generated/research"
+TOPIC="как связаны системное мышление и письмо"
+
+json_field() {
+  local field="$1"
+  uv run python -c 'import json, sys; print(json.load(sys.stdin)[sys.argv[1]])' "$field"
+}
+
+BUILD_JSON="$(
+  uv run kb research build "$TOPIC" \
+    --output-root "$OUTPUT_ROOT" \
+    --documents 12 \
+    --fragments-per-document 2
+)"
+printf '%s\n' "$BUILD_JSON"
+
+DOSSIER_PATH="$(printf '%s' "$BUILD_JSON" | json_field output)"
+uv run kb research validate "$DOSSIER_PATH" --output-root "$OUTPUT_ROOT"
 ```
 
-Default root — `data/generated/research/`. Для любой пишущей команды explicit root вне `data/generated/` требует отдельного acknowledgement:
+Success или optional-context degradation использует exit 0 и `status=ok|degraded`. Directory из поля `output` содержит ровно `manifest.json`, `dossier.md`, `validation.json`. Published-only является default: `manifest.request.visibility=published_only`, `includes_drafts=false`, а candidate evidence содержит только published documents.
+
+Повторный build при неизменных inputs создаёт другой `revision_id`, сохраняя тот же `dossier_key` и `content_digest`. Доступные filters соответствуют runtime help: `--source`, `--published-from YYYY-MM-DD`, `--published-to YYYY-MM-DD`, `--documents 1..50`, `--fragments-per-document 1..5` и explicit `--include-drafts`.
+
+Default root — `data/generated/research/`. Пишущая команда с root вне `data/generated/` требует отдельного подтверждения:
 
 ```bash
-uv run kb research build "как связаны системное мышление и письмо" \
+uv run kb research build "$TOPIC" \
   --output-root /absolute/custom/research-output \
   --acknowledge-unsafe-output
 ```
 
-Такой запуск обязан вернуть заметный unsafe-location warning. Acknowledgement не ослабляет path safety: symlink в root или любом создаваемом компоненте отклоняется; default directories/files создаются с owner-only permissions (`0700`/`0600` на поддерживаемой POSIX-платформе).
+CLI возвращает `output_outside_generated_zone` в warnings и пишет предупреждение в stderr. Подтверждение не ослабляет path safety: symlink в root или существующем компоненте отклоняется; package directories/files получают `0700`/`0600` на поддерживаемой POSIX-платформе.
 
-## 3. Курировать evidence
+## 3. Создать child revision через curation
 
-Скопируйте citation IDs из candidate pool manifest и создайте child revision:
+Initial revision содержит selected evidence. Извлеките реальный citation ID и закрепите его; `--include`, `--exclude` и `--pin` можно повторять, а CLI сохраняет их argv order:
 
 ```bash
-uv run kb research curate data/generated/research/RESEARCH_KEY/revisions/REVISION_ID \
-  --exclude cit-noisy000000001 \
-  --include cit-useful00000001 \
-  --pin cit-key000000000001 \
-  --reason "убрать повтор и закрепить ключевой тезис"
+PIN_CITATION="$(
+  MANIFEST_PATH="$DOSSIER_PATH/manifest.json" uv run python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+manifest = json.loads(Path(os.environ["MANIFEST_PATH"]).read_text(encoding="utf-8"))
+print(manifest["selected_citation_ids"][0])
+PY
+)"
+
+CURATE_JSON="$(
+  uv run kb research curate "$DOSSIER_PATH" \
+    --pin "$PIN_CITATION" \
+    --reason "закрепить ключевой тезис для acceptance" \
+    --output-root "$OUTPUT_ROOT"
+)"
+printf '%s\n' "$CURATE_JSON"
+
+CHILD_PATH="$(printf '%s' "$CURATE_JSON" | json_field output)"
+uv run kb research validate "$CHILD_PATH" --output-root "$OUTPUT_ROOT"
 ```
 
-Проверки:
+Child manifest содержит `parent_revision_id` и ordered operation log. Parent bytes не переписываются. Empty, unknown, duplicate, conflicting и no-op operations завершаются exit 1 без child revision.
 
-- parent directory и hashes не изменились;
-- child указывает `parent_revision_id` и три ordered operations;
-- unknown/no-op/conflicting citation IDs приводят к exit 1 без child revision.
+## 4. Выполнить structural round-trip для draft и summary
 
-## 4. Сформировать handoff для draft или summary
+Каждый handoff требует `--acknowledge-external-disclosure`: published status не является согласием передать exact excerpts внешнему writing-agent. Следующий smoke flow создаёт оба handoff, формирует локальный synthetic writing-output по фактическому handoff identity, проверяет, импортирует и повторно импортирует package.
 
-Перед каждым handoff пользователь просматривает selected evidence. Даже `status=published` не является автоматическим разрешением на раскрытие exact excerpts внешнему writing-agent, поэтому `--acknowledge-external-disclosure` обязателен для обоих output kinds.
-
-Draft handoff:
+Synthetic generator проверяет файловый contract, citation coverage и idempotency; он не заменяет внешний writing-agent и human review.
 
 ```bash
-uv run kb research handoff data/generated/research/RESEARCH_KEY/revisions/CHILD_REVISION_ID \
-  --output-kind draft \
-  --language ru \
-  --max-words 1500 \
-  --acknowledge-external-disclosure
+ACCEPTANCE_TMP="$(mktemp -d "$OUTPUT_ROOT/.acceptance-tmp.XXXXXX")"
+trap 'rm -rf "$ACCEPTANCE_TMP"' EXIT
+
+make_writing_output() {
+  local handoff_path="$1"
+  local output_path="$2"
+  HANDOFF_PATH="$handoff_path" OUTPUT_PATH="$output_path" uv run python - <<'PY'
+import hashlib
+import json
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+
+def canonical_sha256(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+handoff = json.loads(Path(os.environ["HANDOFF_PATH"]).read_text(encoding="utf-8"))
+kind = handoff["requested_output"]["kind"]
+citation_id = handoff["citation_allowlist"][0]
+heading = "Acceptance draft" if kind == "draft" else "Acceptance summary"
+content = f"## {heading}\n\nSynthetic structural result grounded in {citation_id}."
+package = {
+    "schema_version": "1.0",
+    "artifact_type": "writing_output",
+    "output_kind": kind,
+    "handoff_id": handoff["handoff_id"],
+    "handoff_digest": handoff["package_digest"],
+    "dossier_key": handoff["dossier_key"],
+    "revision_id": handoff["revision_id"],
+    "visibility": handoff["visibility"],
+    "includes_drafts": handoff["includes_drafts"],
+    "created_at": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    "agent": {
+        "name": "local-acceptance-fixture",
+        "model": None,
+        "run_id": f"acceptance-{kind}",
+    },
+    "title": heading,
+    "content_markdown": content,
+    "content_sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+    "sections": [
+        {
+            "section_id": "section-acceptance-1",
+            "heading": heading,
+            "char_start": 0,
+            "char_end": len(content),
+            "citation_ids": [citation_id],
+            "unsupported_by_corpus": False,
+            "unsupported_reason": None,
+        }
+    ],
+}
+package["package_digest"] = canonical_sha256(package)
+Path(os.environ["OUTPUT_PATH"]).write_text(
+    json.dumps(package, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+}
+
+for KIND in draft summary; do
+  if [ "$KIND" = draft ]; then
+    MAX_WORDS=1500
+  else
+    MAX_WORDS=350
+  fi
+
+  HANDOFF_JSON="$(
+    uv run kb research handoff "$CHILD_PATH" \
+      --output-root "$OUTPUT_ROOT" \
+      --output-kind "$KIND" \
+      --language ru \
+      --max-words "$MAX_WORDS" \
+      --acknowledge-external-disclosure
+  )"
+  printf '%s\n' "$HANDOFF_JSON"
+  HANDOFF_PATH="$(printf '%s' "$HANDOFF_JSON" | json_field output)"
+  uv run kb research validate "$HANDOFF_PATH" --output-root "$OUTPUT_ROOT"
+
+  WRITING_OUTPUT_PATH="$ACCEPTANCE_TMP/writing-output-$KIND.json"
+  make_writing_output "$HANDOFF_PATH" "$WRITING_OUTPUT_PATH"
+  uv run kb research validate "$WRITING_OUTPUT_PATH" \
+    --handoff "$HANDOFF_PATH" \
+    --output-root "$OUTPUT_ROOT"
+
+  IMPORT_JSON="$(
+    uv run kb research import-output "$WRITING_OUTPUT_PATH" \
+      --handoff "$HANDOFF_PATH" \
+      --output-root "$OUTPUT_ROOT"
+  )"
+  printf '%s\n' "$IMPORT_JSON"
+  IMPORTED_PATH="$(printf '%s' "$IMPORT_JSON" | json_field output)"
+  WRITING_ID="$(printf '%s' "$IMPORT_JSON" | json_field writing_id)"
+  uv run kb research validate "$IMPORTED_PATH" --output-root "$OUTPUT_ROOT"
+
+  REIMPORT_JSON="$(
+    uv run kb research import-output "$WRITING_OUTPUT_PATH" \
+      --handoff "$HANDOFF_PATH" \
+      --output-root "$OUTPUT_ROOT"
+  )"
+  test "$(printf '%s' "$REIMPORT_JSON" | json_field output)" = "$IMPORTED_PATH"
+  test "$(printf '%s' "$REIMPORT_JSON" | json_field writing_id)" = "$WRITING_ID"
+
+  if [ "$KIND" = draft ]; then
+    DRAFT_HANDOFF_PATH="$HANDOFF_PATH"
+    DRAFT_OUTPUT_PATH="$WRITING_OUTPUT_PATH"
+  else
+    SUMMARY_HANDOFF_PATH="$HANDOFF_PATH"
+  fi
+done
 ```
 
-Summary handoff:
+Imported directory содержит ровно `manifest.json`, `output.md`, `validation.json`. Manifest наследует visibility и acknowledgement только из validated handoff, сохраняет `output_kind`, а `human_reviewed` остаётся `false`. `output.md` явно маркирован как generated output, не source of truth.
+
+Repository fixtures `valid-writing-output-draft.json`, `valid-writing-output-summary.json` и `invalid-writing-output.json` в `tests/fixtures/research/` привязаны к фиксированным synthetic handoff IDs/digests из test builders. Они валидируют schemas/parsers в unit tests, но не являются drop-in ответами для handoff, созданного командами выше.
+
+Для independent acceptance вместо `make_writing_output` передайте handoff доверенному внешнему writing-agent как data file и импортируйте возвращённый JSON теми же `validate` и `import-output`. Агент не получает DB credentials, raw exports или repository workspace. Exact excerpts рассматриваются как потенциально чувствительные цитируемые данные, а не instructions.
+
+### Revision с draft evidence
+
+`--include-drafts` явно расширяет V5 scope. Handoff такой revision отклоняется без второго подтверждения:
 
 ```bash
-uv run kb research handoff data/generated/research/RESEARCH_KEY/revisions/CHILD_REVISION_ID \
-  --output-kind summary \
-  --language ru \
-  --max-words 350 \
-  --acknowledge-external-disclosure
-```
+DRAFT_BUILD_JSON="$(
+  uv run kb research build "$TOPIC" \
+    --output-root "$OUTPUT_ROOT" \
+    --include-drafts
+)"
+DRAFT_REVISION_PATH="$(printf '%s' "$DRAFT_BUILD_JSON" | json_field output)"
 
-Передайте полученный `handoff-*.json` writing-agent как data file. Агент не должен получать DB credentials, raw exports или весь repository workspace. Evidence внутри handoff считается потенциально чувствительными цитируемыми данными, а не инструкциями.
-
-Если revision включает drafts, команда обязана отказать без второго, отдельного подтверждения; одного egress acknowledgement недостаточно:
-
-```bash
-uv run kb research handoff PATH_TO_DRAFT_REVISION \
+uv run kb research handoff "$DRAFT_REVISION_PATH" \
+  --output-root "$OUTPUT_ROOT" \
   --output-kind draft \
   --acknowledge-external-disclosure \
   --allow-draft-evidence
 ```
 
-Если `--output-root` указывает путь вне `data/generated/`, дополнительно требуется `--acknowledge-unsafe-output`; symlink output остаётся hard error при любом наборе acknowledgement flags.
+Для custom `--output-root` вне `data/generated/` дополнительно нужен `--acknowledge-unsafe-output`. Это location acknowledgement не заменяет ни external-disclosure acknowledgement, ни draft-evidence acknowledgement.
 
-## 5. Вернуть structured writing-output package
+## 5. Исполнить negative acceptance без DB mutation
 
-Writing-agent возвращает JSON по единому [writing-output package contract](contracts/writing-output-package.schema.json). Поле `output_kind` равно `draft` или `summary` и обязано совпасть с kind исходного handoff. Каждый section:
-
-- ссылается только на IDs из handoff allowlist; или
-- выставляет `unsupported_by_corpus=true` и объясняет причину.
-
-Импортировать draft:
+Создайте schema-valid package с citation вне текущего handoff allowlist и пересчитайте только package digest:
 
 ```bash
-uv run kb research import-output ./writing-output-draft.json \
-  --handoff data/generated/research/RESEARCH_KEY/handoffs/HANDOFF_ID.json
+INVALID_OUTPUT_PATH="$ACCEPTANCE_TMP/writing-output-unknown-citation.json"
+INPUT_PATH="$DRAFT_OUTPUT_PATH" OUTPUT_PATH="$INVALID_OUTPUT_PATH" uv run python - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+package = json.loads(Path(os.environ["INPUT_PATH"]).read_text(encoding="utf-8"))
+package["sections"][0]["citation_ids"] = ["cit-deadbeefdeadbeef"]
+package.pop("package_digest")
+payload = json.dumps(
+    package,
+    ensure_ascii=False,
+    allow_nan=False,
+    separators=(",", ":"),
+    sort_keys=True,
+).encode("utf-8")
+package["package_digest"] = hashlib.sha256(payload).hexdigest()
+Path(os.environ["OUTPUT_PATH"]).write_text(
+    json.dumps(package, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+
+if uv run kb research import-output "$INVALID_OUTPUT_PATH" \
+  --handoff "$DRAFT_HANDOFF_PATH" \
+  --output-root "$OUTPUT_ROOT"; then
+  echo "ERROR: unknown citation was accepted" >&2
+  exit 1
+else
+  echo "OK: unknown citation rejected without artifact"
+fi
 ```
 
-Импортировать summary тем же contract и той же командой:
+Cross-kind package сохраняет identity draft handoff, но ложно объявляет `output_kind=summary`. Такой package завершается exit 1:
 
 ```bash
-uv run kb research import-output ./writing-output-summary.json \
-  --handoff data/generated/research/RESEARCH_KEY/handoffs/HANDOFF_ID.json
+CROSS_KIND_OUTPUT_PATH="$ACCEPTANCE_TMP/writing-output-cross-kind.json"
+INPUT_PATH="$DRAFT_OUTPUT_PATH" OUTPUT_PATH="$CROSS_KIND_OUTPUT_PATH" uv run python - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+package = json.loads(Path(os.environ["INPUT_PATH"]).read_text(encoding="utf-8"))
+package["output_kind"] = "summary"
+package.pop("package_digest")
+payload = json.dumps(
+    package,
+    ensure_ascii=False,
+    allow_nan=False,
+    separators=(",", ":"),
+    sort_keys=True,
+).encode("utf-8")
+package["package_digest"] = hashlib.sha256(payload).hexdigest()
+Path(os.environ["OUTPUT_PATH"]).write_text(
+    json.dumps(package, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+    encoding="utf-8",
+)
+PY
+
+if uv run kb research import-output "$CROSS_KIND_OUTPUT_PATH" \
+  --handoff "$DRAFT_HANDOFF_PATH" \
+  --output-root "$OUTPUT_ROOT"; then
+  echo "ERROR: cross-kind output was accepted" >&2
+  exit 1
+else
+  echo "OK: cross-kind output rejected without artifact"
+fi
 ```
 
-Ожидается immutable directory `outputs/WRITING_ID/` с `manifest.json`, `output.md`, `validation.json`; manifest сохраняет `output_kind`. `human_reviewed` остаётся false: structural citation coverage не является factual verification. Для custom `--output-root` вне generated-зоны снова требуется `--acknowledge-unsafe-output`.
-
-## 6. Negative acceptance
-
-Каждый сценарий должен завершиться exit 1 без valid artifact:
+Wrong-handoff package также завершается exit 1. Например, draft output нельзя импортировать с summary handoff:
 
 ```bash
-# package с неизвестной citation
-uv run kb research import-output tests/fixtures/research/invalid-writing-output.json --handoff HANDOFF.json
-
-# handoff от другой revision
-uv run kb research import-output writing-output-package.json --handoff WRONG_HANDOFF.json
-
-# output_kind не совпадает с requested output handoff
-uv run kb research import-output writing-output-summary.json --handoff DRAFT_HANDOFF.json
-
-# изменённый chunk после build
-uv run kb research validate PATH_TO_OLD_REVISION
+if uv run kb research import-output "$DRAFT_OUTPUT_PATH" \
+  --handoff "$SUMMARY_HANDOFF_PATH" \
+  --output-root "$OUTPUT_ROOT"; then
+  echo "ERROR: mismatched handoff was accepted" >&2
+  exit 1
+else
+  echo "OK: mismatched handoff rejected without artifact"
+fi
 ```
 
-Также проверяются oversized JSON, unknown fields, invalid Unicode/control characters, wrong content digest, interrupted directory publish, handoff без `--acknowledge-external-disclosure`, handoff с drafts без `--allow-draft-evidence`, custom output root без `--acknowledge-unsafe-output` и любой symlink output path. Каждый сценарий завершается exit 1 без valid artifact; acknowledgement не превращает symlink path в допустимый.
+Changed/missing/hidden evidence, oversized JSON, unknown fields, invalid Unicode, wrong content/package digests, interrupted publication, missing acknowledgements и symlink paths покрыты unit/integration gates. `kb research validate PATH_TO_OLD_REVISION` возвращает exit 1 после фактического изменения связанного corpus evidence; validator не изменяет и не ремонтирует corpus.
 
-## 7. Quality gates
+## 6. Запустить automated gates
 
 ```bash
 uv run --extra dev pytest tests/unit
@@ -153,10 +352,10 @@ KB_RUN_INTEGRATION=1 uv run --extra dev pytest tests/integration
 uv run --extra dev ruff check src tests
 uv run --extra dev ruff format --check src tests
 uv run --extra dev mypy
-npm run check:adr
+npm run check
 git diff --check
 ```
 
-Real-corpus acceptance дополнительно замеряет build ≤30 seconds, content-digest determinism, package sizes и отсутствие raw payload, local paths, structured credentials и cookies. Exact excerpts проверяются владельцем как potentially sensitive text; автоматическая secret-free гарантия не заявляется.
+`npm run check` выполняет ADR и Markdown-link gates (`check:adr`, `check:docs-links`). Real-corpus acceptance отдельно замеряет build ≤30 seconds, content-digest determinism, package sizes и отсутствие raw payload, local paths, structured credentials и cookies. Автоматическая secret-free гарантия для unstructured exact excerpts не заявляется; их просматривает владелец до handoff.
 
-После automated gates отдельный reviewer выполняет и заполняет [independent acceptance gate](acceptance.md) для dossier/citation/curation, draft round-trip, summary round-trip и privacy/path safety. До заполнения всех четырёх секций Feature 007 не считается принятой.
+После automated gates независимый reviewer выполняет dossier/citation/curation, draft round-trip, summary round-trip и privacy/path-safety sections и заполняет [acceptance.md](acceptance.md). Automated run не выставляет `human_reviewed=true` и не заполняет independent results.

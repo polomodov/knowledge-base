@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,74 @@ _MAX_LEAD_LIMIT = 150
 _INDEX_TARGETS = ("embeddings", "related", "communities")
 _OPTIONAL_CONTEXT_WARNING = "optional corpus/index freshness context is unavailable"
 _PROVENANCE_OWNERSHIP_ERROR = "provenance ownership mismatch in hydrated research chunk"
+_CURRENT_CITATION_QUERY_ERROR = "current citation hydration query failed"
+_CURRENT_CITATION_ENVELOPE_ERROR = "current citation hydration returned an invalid result envelope"
+_CITATION_ID_RE = re.compile(r"cit-[0-9a-f]{16}")
+_CITATION_REF_FIELDS = frozenset(
+    {
+        "citation_id",
+        "source_key",
+        "document_key",
+        "chunk_key",
+        "raw_snapshot_key",
+        "import_run_key",
+    }
+)
+_CURRENT_CITATION_FIELDS = frozenset(
+    {
+        "citation_id",
+        "document",
+        "chunk",
+        "document_edge",
+        "raw_edge",
+        "raw_snapshot",
+        "source_edge",
+    }
+)
+_CURRENT_CITATION_ENTITY_FIELDS: dict[str, frozenset[str]] = {
+    "document": frozenset(
+        {
+            "_id",
+            "_key",
+            "source_key",
+            "canonical_id",
+            "title",
+            "text",
+            "language",
+            "published_at",
+            "url",
+            "status",
+        }
+    ),
+    "chunk": frozenset(
+        {
+            "_id",
+            "_key",
+            "document_key",
+            "ordinal",
+            "text",
+            "token_count",
+            "char_start",
+            "char_end",
+        }
+    ),
+    "document_edge": frozenset({"_id", "_key", "_from", "_to", "ordinal"}),
+    "raw_edge": frozenset(
+        {
+            "_id",
+            "_key",
+            "_from",
+            "_to",
+            "document_key",
+            "char_start",
+            "char_end",
+            "import_run_key",
+        }
+    ),
+    "raw_snapshot": frozenset({"_id", "_key", "source_key", "captured_at"}),
+    "source_edge": frozenset({"_id", "_key", "_from", "_to", "import_run_key", "provenance"}),
+}
+_SOURCE_PROVENANCE_FIELDS = frozenset({"raw_snapshot_key", "url", "captured_at"})
 
 
 class ResearchRetrievalError(RuntimeError):
@@ -217,6 +286,88 @@ def hydrate_chunk_candidates(
         {**_scope_bind_vars(request), "chunk_keys": keys},
     )
     return _validated_hydrated_rows(rows)
+
+
+def hydrate_current_citations(
+    repository: KnowledgeRepository,
+    citation_refs: Sequence[Mapping[str, Any]],
+) -> list[JsonObject]:
+    """Hydrate a bounded citation set without applying its former visibility scope."""
+    refs = _validated_citation_refs(citation_refs)
+    try:
+        rows = repository.client.aql(
+            """
+            /* research:hydrate_current_citations */
+            FOR ref IN @citation_refs
+              LET document = DOCUMENT("documents", ref.document_key)
+              LET chunk = DOCUMENT("chunks", ref.chunk_key)
+              LET document_edge = FIRST(
+                FOR edge IN chunk_of_document
+                  FILTER edge._from == CONCAT("chunks/", ref.chunk_key)
+                  FILTER edge._to == CONCAT("documents/", ref.document_key)
+                  SORT edge._key ASC
+                  LIMIT 1
+                  RETURN edge
+              )
+              LET source_edge = FIRST(
+                FOR edge IN document_from_source
+                  FILTER edge._from == CONCAT("documents/", ref.document_key)
+                  FILTER edge._to == CONCAT("sources/", ref.source_key)
+                  FILTER edge.import_run_key == ref.import_run_key
+                  FILTER edge.provenance.raw_snapshot_key == ref.raw_snapshot_key
+                  SORT edge._key ASC
+                  LIMIT 1
+                  RETURN edge
+              )
+              LET raw_edge = FIRST(
+                FOR edge IN chunk_derived_from_raw
+                  FILTER ref.raw_snapshot_key != null
+                  FILTER edge._from == CONCAT("chunks/", ref.chunk_key)
+                  FILTER edge._to == CONCAT("raw_snapshots/", ref.raw_snapshot_key)
+                  FILTER edge.document_key == ref.document_key
+                  FILTER edge.import_run_key == ref.import_run_key
+                  SORT edge._key ASC
+                  LIMIT 1
+                  RETURN edge
+              )
+              LET raw_snapshot = raw_edge == null ? null : DOCUMENT(
+                "raw_snapshots", ref.raw_snapshot_key
+              )
+              RETURN {
+                citation_id: ref.citation_id,
+                document: document == null ? null : KEEP(
+                  document, "_id", "_key", "source_key", "canonical_id", "title", "text",
+                  "language", "published_at", "url", "status"
+                ),
+                chunk: chunk == null ? null : KEEP(
+                  chunk, "_id", "_key", "document_key", "ordinal", "text", "token_count",
+                  "char_start", "char_end"
+                ),
+                document_edge: document_edge == null ? null : KEEP(
+                  document_edge, "_id", "_key", "_from", "_to", "ordinal"
+                ),
+                raw_edge: raw_edge == null ? null : KEEP(
+                  raw_edge, "_id", "_key", "_from", "_to", "document_key",
+                  "char_start", "char_end", "import_run_key"
+                ),
+                raw_snapshot: raw_snapshot == null ? null : KEEP(
+                  raw_snapshot, "_id", "_key", "source_key", "captured_at"
+                ),
+                source_edge: source_edge == null ? null : {
+                  _id: source_edge._id,
+                  _key: source_edge._key,
+                  _from: source_edge._from,
+                  _to: source_edge._to,
+                  import_run_key: source_edge.import_run_key,
+                  provenance: KEEP(source_edge.provenance, "raw_snapshot_key", "url", "captured_at")
+                }
+              }
+            """,
+            {"citation_refs": refs},
+        )
+    except ArangoError:
+        raise ResearchRetrievalError(_CURRENT_CITATION_QUERY_ERROR) from None
+    return _validated_current_citation_rows(rows, refs)
 
 
 def topic_leads(
@@ -557,6 +708,83 @@ def _candidate_chunk_keys(rows: Sequence[Any]) -> list[str]:
             seen.add(key)
             keys.append(key)
     return keys
+
+
+def _validated_citation_refs(citation_refs: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
+    if isinstance(citation_refs, str | bytes) or not 1 <= len(citation_refs) <= 100:
+        raise ValueError("citation_refs must contain 1..100 items")
+
+    refs: list[JsonObject] = []
+    citation_ids: set[str] = set()
+    for ref in citation_refs:
+        if not isinstance(ref, Mapping) or set(ref) != _CITATION_REF_FIELDS:
+            raise ValueError("citation refs must use the exact allowlisted fields")
+        citation_id = ref["citation_id"]
+        if not isinstance(citation_id, str) or _CITATION_ID_RE.fullmatch(citation_id) is None:
+            raise ValueError("citation refs contain an invalid citation_id")
+        if citation_id in citation_ids:
+            raise ValueError("citation refs must contain unique citation IDs")
+        citation_ids.add(citation_id)
+
+        normalized: JsonObject = {"citation_id": citation_id}
+        for field in ("source_key", "document_key", "chunk_key"):
+            normalized[field] = _citation_ref_key(ref[field], field=field, optional=False)
+        for field in ("raw_snapshot_key", "import_run_key"):
+            normalized[field] = _citation_ref_key(ref[field], field=field, optional=True)
+        refs.append(normalized)
+    return refs
+
+
+def _citation_ref_key(value: Any, *, field: str, optional: bool) -> str | None:
+    if value is None and optional:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 256 or "/" in value:
+        suffix = " or null" if optional else ""
+        raise ValueError(f"citation ref {field} must be a collection-local key{suffix}")
+    return value
+
+
+def _validated_current_citation_rows(rows: Any, refs: Sequence[Mapping[str, Any]]) -> list[JsonObject]:
+    if not isinstance(rows, Sequence) or isinstance(rows, str | bytes) or len(rows) != len(refs):
+        raise ResearchRetrievalError(_CURRENT_CITATION_ENVELOPE_ERROR)
+
+    expected_ids = [str(ref["citation_id"]) for ref in refs]
+    expected_id_set = set(expected_ids)
+    by_id: dict[str, JsonObject] = {}
+    for row in rows:
+        sanitized = _sanitize_current_citation_row(row)
+        citation_id = str(sanitized["citation_id"])
+        if citation_id not in expected_id_set or citation_id in by_id:
+            raise ResearchRetrievalError(_CURRENT_CITATION_ENVELOPE_ERROR)
+        by_id[citation_id] = sanitized
+    if set(by_id) != expected_id_set:
+        raise ResearchRetrievalError(_CURRENT_CITATION_ENVELOPE_ERROR)
+    return [by_id[citation_id] for citation_id in expected_ids]
+
+
+def _sanitize_current_citation_row(row: Any) -> JsonObject:
+    if not isinstance(row, Mapping) or set(row) != _CURRENT_CITATION_FIELDS:
+        raise ResearchRetrievalError(_CURRENT_CITATION_ENVELOPE_ERROR)
+    citation_id = row.get("citation_id")
+    if not isinstance(citation_id, str) or _CITATION_ID_RE.fullmatch(citation_id) is None:
+        raise ResearchRetrievalError(_CURRENT_CITATION_ENVELOPE_ERROR)
+
+    sanitized: JsonObject = {"citation_id": citation_id}
+    for field, allowed_fields in _CURRENT_CITATION_ENTITY_FIELDS.items():
+        value = row.get(field)
+        if value is None:
+            sanitized[field] = None
+            continue
+        if not isinstance(value, Mapping) or not set(value).issubset(allowed_fields):
+            raise ResearchRetrievalError(_CURRENT_CITATION_ENVELOPE_ERROR)
+        entity = dict(value)
+        if field == "source_edge" and "provenance" in entity:
+            provenance = entity["provenance"]
+            if not isinstance(provenance, Mapping) or not set(provenance).issubset(_SOURCE_PROVENANCE_FIELDS):
+                raise ResearchRetrievalError(_CURRENT_CITATION_ENVELOPE_ERROR)
+            entity["provenance"] = dict(provenance)
+        sanitized[field] = entity
+    return sanitized
 
 
 def _unique_keys(values: Sequence[str], *, kind: str) -> list[str]:

@@ -8,8 +8,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "check": "npm run check:adr",
+    "check": "npm run check:adr && npm run check:docs-links",
     "check:adr": "node scripts/check-adr.mjs",
+    "check:docs-links": "node scripts/check-markdown-links.mjs",
     "adr:new": "node scripts/create-adr.mjs",
     "generate:adr-index": "node scripts/generate-adr-index.mjs"
   }
