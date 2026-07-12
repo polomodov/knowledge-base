@@ -43,13 +43,15 @@ ADR contract:
 
 ## Ожидаемые зоны данных
 
-Когда в проекте появятся реальные данные, придерживайтесь такого разделения:
+Придерживайтесь такого разделения on-disk артефактов:
 
 ```text
-data/raw/         # исходные экспорты и снимки источников
-data/processed/   # нормализованные документы и метаданные
-data/generated/   # summaries, drafts, reports, LLM outputs
+data/raw/         # исходные экспорты и снимки источников (gitignored)
+data/processed/   # зарезервировано; в v1 не материализуется
+data/generated/   # exports, viz, research dossiers/handoffs/outputs (gitignored)
 ```
+
+**Processed SSOT — ArangoDB**, а не `data/processed/`: нормализованные documents/chunks и derived indexes живут в базе. Каталог `data/processed/` зарезервирован на будущее и не является вторым источником истины. Research/writing artifacts пишет file CLI в `data/generated/research/`; MCP остаётся read-only (search/document/graph/health) и не публикует dossier packages — см. [ADR 0011](docs/adr/0011-clarify-mcp-vs-research-cli-boundary-and-processed-ssot-in-arangodb.md).
 
 Если данные нельзя безопасно хранить в git, добавьте только структуру, примеры или инструкции, а сами данные держите вне репозитория.
 
