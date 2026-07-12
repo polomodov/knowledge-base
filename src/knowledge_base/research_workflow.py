@@ -3,18 +3,32 @@ from __future__ import annotations
 import hashlib
 import math
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from knowledge_base.arango import ArangoError
 from knowledge_base.research_artifacts import (
     ShortIdRegistry,
     canonical_json_bytes,
     canonical_sha256,
     safe_http_url,
 )
+from knowledge_base.research_retrieval import (
+    ResearchRetrievalError,
+    clean_community_leads,
+    lexical_chunk_candidates,
+    load_corpus_context,
+    related_leads,
+    semantic_chunk_candidates,
+    topic_leads,
+)
+
+if TYPE_CHECKING:
+    from knowledge_base.embeddings import EmbeddingProvider
+    from knowledge_base.repository import KnowledgeRepository
 
 JsonObject = dict[str, Any]
 
@@ -23,6 +37,7 @@ _CITATION_ID_RE = re.compile(r"^cit-[0-9a-f]{16}$")
 _DOSSIER_KEY_RE = re.compile(r"^research-[a-z0-9_-]+-[0-9a-f]{12}$")
 _REVISION_ID_RE = re.compile(r"^rev-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
 _DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_UTC_TIMESTAMP_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?Z$")
 
 
 class ResearchVisibility(StrEnum):
@@ -218,6 +233,73 @@ class EvidenceCandidate:
         return self.selection_state in {"selected", "pinned"}
 
 
+@dataclass(frozen=True, slots=True)
+class DossierBuildResult:
+    status: str
+    request: ResearchRequest | Mapping[str, Any]
+    candidate_evidence: Sequence[EvidenceCandidate | Mapping[str, Any]]
+    selected_citation_ids: Sequence[str]
+    corpus_context: Mapping[str, Any]
+    derived_context: Mapping[str, Sequence[Mapping[str, Any]]]
+    includes_drafts: bool
+    warnings: Sequence[str]
+
+    def __post_init__(self) -> None:
+        if self.status not in {"ready", "degraded", "no_evidence"}:
+            raise ValueError("unsupported dossier build status")
+        request = self.request if isinstance(self.request, ResearchRequest) else ResearchRequest(**dict(self.request))
+        object.__setattr__(self, "request", request)
+
+        candidates = tuple(
+            candidate if isinstance(candidate, EvidenceCandidate) else EvidenceCandidate(**dict(candidate))
+            for candidate in self.candidate_evidence
+        )
+        candidate_limit = request.candidate_limit
+        assert candidate_limit is not None
+        if len(candidates) > candidate_limit:
+            raise ValueError("dossier build exceeds request candidate limit")
+        object.__setattr__(self, "candidate_evidence", candidates)
+
+        expected_selected = tuple(
+            candidate.citation.citation_id
+            for candidate in candidates
+            if candidate.is_evidence and isinstance(candidate.citation, Citation)
+        )
+        selected_ids = tuple(self.selected_citation_ids)
+        if selected_ids != expected_selected:
+            raise ValueError("selected_citation_ids must match selected candidate order")
+        object.__setattr__(self, "selected_citation_ids", selected_ids)
+
+        _validate_corpus_context(self.corpus_context)
+        object.__setattr__(self, "corpus_context", dict(self.corpus_context))
+        _validate_derived_context(self.derived_context)
+        object.__setattr__(
+            self,
+            "derived_context",
+            {
+                "topics": tuple(dict(row) for row in self.derived_context["topics"]),
+                "leads": tuple(dict(row) for row in self.derived_context["leads"]),
+            },
+        )
+        if not isinstance(self.includes_drafts, bool) or self.includes_drafts is not request.includes_drafts:
+            raise ValueError("includes_drafts must mirror request visibility")
+        _validate_string_sequence("dossier build warnings", self.warnings, maximum_items=100, maximum_length=2000)
+        warnings = tuple(self.warnings)
+        if len(warnings) != len(set(warnings)):
+            raise ValueError("dossier build warnings must be unique")
+        object.__setattr__(self, "warnings", warnings)
+
+        if self.status == "no_evidence":
+            if candidates or selected_ids or any(self.derived_context.values()):
+                raise ValueError("no_evidence build cannot contain candidates or derived context")
+        elif not selected_ids:
+            raise ValueError("publishable dossier build requires selected evidence")
+
+    @property
+    def publishable(self) -> bool:
+        return self.status in {"ready", "degraded"}
+
+
 @dataclass(slots=True)
 class _CandidateAccumulator:
     citation: Citation
@@ -368,6 +450,242 @@ def fuse_and_select_candidates(
     )
 
 
+class DossierBuildError(RuntimeError):
+    """A required dossier read or evidence projection failed safely."""
+
+
+_DRAFT_SCOPE_WARNING = "draft_visibility_enabled"
+_CONTEXT_WARNING = "optional corpus/index freshness context is unavailable"
+_TOPIC_WARNING = "optional topic context is unavailable"
+_RELATED_WARNING = "optional related context is unavailable"
+_COMMUNITY_WARNING = "optional community context is unavailable"
+
+
+def build_dossier(
+    repository: KnowledgeRepository,
+    request: ResearchRequest | Mapping[str, Any],
+    *,
+    provider: EmbeddingProvider,
+    built_at: str,
+    git_revision: str | None = None,
+) -> DossierBuildResult:
+    """Build one deterministic, read-only dossier candidate result in memory."""
+
+    effective_request = request if isinstance(request, ResearchRequest) else ResearchRequest(**dict(request))
+    try:
+        lexical_rows = lexical_chunk_candidates(repository, effective_request)
+        semantic_rows = semantic_chunk_candidates(repository, effective_request, provider=provider)
+    except (ArangoError, ResearchRetrievalError) as error:
+        raise DossierBuildError("required dossier evidence retrieval failed") from error
+
+    try:
+        lexical_signals = [_retrieval_signal(row, "lexical") for row in lexical_rows]
+        semantic_signals = [_retrieval_signal(row, "vector") for row in semantic_rows]
+        grounded = [_grounded_projection(row) for row in (*lexical_rows, *semantic_rows)]
+        _assert_consistent_grounded_identities(grounded)
+        candidates = fuse_and_select_candidates(
+            request=effective_request,
+            lexical=lexical_signals,
+            semantic=semantic_signals,
+            grounded=grounded,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise DossierBuildError("retrieved dossier evidence failed allowlisted citation projection") from error
+
+    corpus_context = _load_build_corpus_context(
+        repository,
+        effective_request,
+        provider=provider,
+        built_at=built_at,
+        git_revision=git_revision,
+    )
+    context_warnings = tuple(corpus_context["warnings"])
+    informational_warnings = (_DRAFT_SCOPE_WARNING,) if effective_request.includes_drafts else ()
+    selected = tuple(candidate for candidate in candidates if candidate.is_evidence)
+    selected_citations = tuple(_candidate_citation(candidate) for candidate in selected)
+    selected_ids = tuple(citation.citation_id for citation in selected_citations)
+    if not selected:
+        return DossierBuildResult(
+            status="no_evidence",
+            request=effective_request,
+            candidate_evidence=(),
+            selected_citation_ids=(),
+            corpus_context=corpus_context,
+            derived_context={"topics": (), "leads": ()},
+            includes_drafts=effective_request.includes_drafts,
+            warnings=_stable_unique((*informational_warnings, *context_warnings)),
+        )
+
+    document_keys = _stable_unique(citation.document_key for citation in selected_citations)
+    chunk_keys = _stable_unique(citation.chunk_key for citation in selected_citations)
+    candidate_limit = effective_request.candidate_limit
+    assert candidate_limit is not None
+    topic_rows, topic_warning = _optional_leads(
+        lambda: topic_leads(
+            repository,
+            document_keys,
+            effective_request,
+            limit=min(100, candidate_limit),
+        ),
+        warning=_TOPIC_WARNING,
+    )
+    related_rows, related_warning = _optional_leads(
+        lambda: related_leads(
+            repository,
+            chunk_keys,
+            effective_request,
+            limit=min(50, candidate_limit),
+        ),
+        warning=_RELATED_WARNING,
+    )
+    community_rows, community_warning = _optional_leads(
+        lambda: clean_community_leads(
+            repository,
+            document_keys,
+            effective_request,
+            limit=min(50, candidate_limit),
+        ),
+        warning=_COMMUNITY_WARNING,
+    )
+    optional_warnings = tuple(warning for warning in (topic_warning, related_warning, community_warning) if warning is not None)
+    degradation_warnings = _stable_unique((*context_warnings, *optional_warnings))
+    warnings = _stable_unique((*informational_warnings, *degradation_warnings))
+    leads = (
+        *({**row, "kind": "related_chunk"} for row in related_rows),
+        *({**row, "kind": "clean_community"} for row in community_rows),
+    )
+    return DossierBuildResult(
+        status="degraded" if degradation_warnings else "ready",
+        request=effective_request,
+        candidate_evidence=candidates,
+        selected_citation_ids=selected_ids,
+        corpus_context=corpus_context,
+        derived_context={"topics": topic_rows, "leads": leads},
+        includes_drafts=effective_request.includes_drafts,
+        warnings=warnings,
+    )
+
+
+def _candidate_citation(candidate: EvidenceCandidate) -> Citation:
+    if not isinstance(candidate.citation, Citation):  # pragma: no cover - normalized by EvidenceCandidate
+        raise DossierBuildError("candidate citation was not normalized")
+    return candidate.citation
+
+
+def _retrieval_signal(row: Mapping[str, Any], component: str) -> JsonObject:
+    chunk = _required_mapping(row, "chunk")
+    document = _required_mapping(row, "document")
+    components = _required_mapping(row, "score_components")
+    return {
+        "document_key": document.get("_key"),
+        "chunk_key": chunk.get("_key"),
+        "score": components.get(component),
+    }
+
+
+def _grounded_projection(row: Mapping[str, Any]) -> JsonObject:
+    chunk = _required_mapping(row, "chunk")
+    document = _required_mapping(row, "document")
+    raw_edge = _required_mapping(row, "raw_edge")
+    raw_snapshot = _required_mapping(row, "raw_snapshot")
+    source_edge = _required_mapping(row, "source_edge")
+    provenance = source_edge.get("provenance")
+    provenance = provenance if isinstance(provenance, Mapping) else {}
+    title = document.get("title")
+    document_url = document.get("url")
+    raw_import = raw_edge.get("import_run_key")
+    raw_capture = raw_snapshot.get("captured_at")
+    return {
+        "source_key": document.get("source_key"),
+        "canonical_id": document.get("canonical_id"),
+        "document_key": document.get("_key"),
+        "chunk_key": chunk.get("_key"),
+        "chunk_ordinal": chunk.get("ordinal"),
+        "char_start": chunk.get("char_start"),
+        "char_end": chunk.get("char_end"),
+        "offset_basis": "normalized_whitespace_v1",
+        "excerpt": chunk.get("text"),
+        "title": title if isinstance(title, str) else "",
+        "published_at": document.get("published_at"),
+        "document_status": document.get("status"),
+        "url": document_url if safe_http_url(document_url) is not None else provenance.get("url"),
+        "raw_snapshot_key": raw_snapshot.get("_key"),
+        "import_run_key": raw_import if isinstance(raw_import, str) and raw_import else source_edge.get("import_run_key"),
+        "captured_at": raw_capture if isinstance(raw_capture, str) and raw_capture else provenance.get("captured_at"),
+        "graph_lead_score": None,
+    }
+
+
+def _required_mapping(row: Mapping[str, Any], field: str) -> Mapping[str, Any]:
+    value = row.get(field)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"retrieved evidence is missing {field}")
+    return value
+
+
+def _assert_consistent_grounded_identities(grounded: Sequence[Mapping[str, Any]]) -> None:
+    identity_by_chunk: dict[tuple[str, str], str] = {}
+    for row in grounded:
+        document_key = row.get("document_key")
+        chunk_key = row.get("chunk_key")
+        if not isinstance(document_key, str) or not isinstance(chunk_key, str):
+            raise ValueError("grounded evidence requires document and chunk keys")
+        identity = canonical_sha256(_citation_identity_projection(row))
+        key = (document_key, chunk_key)
+        previous = identity_by_chunk.setdefault(key, identity)
+        if previous != identity:
+            raise DossierBuildError("conflicting citation identity for one retrieved chunk")
+
+
+def _load_build_corpus_context(
+    repository: KnowledgeRepository,
+    request: ResearchRequest,
+    *,
+    provider: EmbeddingProvider,
+    built_at: str,
+    git_revision: str | None,
+) -> JsonObject:
+    try:
+        context = load_corpus_context(
+            repository,
+            request,
+            provider=provider,
+            built_at=built_at,
+            git_revision=git_revision,
+        )
+    except ArangoError:
+        settings = repository.client.settings
+        context = {
+            "database": settings.arango_database,
+            "built_at": built_at,
+            "embedding_model": provider.model,
+            "embedding_dimension": provider.dimension,
+            "retrieval_min_similarity": settings.retrieval_min_similarity,
+            "latest_import_run_key": None,
+            "latest_index_runs": {},
+            "git_revision": git_revision,
+            "warnings": [_CONTEXT_WARNING],
+        }
+    _validate_corpus_context(context)
+    return dict(context)
+
+
+def _optional_leads(
+    read: Callable[[], Sequence[JsonObject]],
+    *,
+    warning: str,
+) -> tuple[tuple[JsonObject, ...], str | None]:
+    try:
+        rows = read()
+    except ArangoError:
+        return (), warning
+    return tuple(dict(row) for row in rows), None
+
+
+def _stable_unique(values: Iterable[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(values))
+
+
 def _collect_signal_scores(
     name: str,
     signals: Iterable[Mapping[str, Any]],
@@ -412,18 +730,7 @@ def _project_citation(
     excerpt = grounded["excerpt"]
     if not isinstance(excerpt, str):
         raise ValueError("grounded citation excerpt must be a string")
-    excerpt_sha256 = hashlib.sha256(excerpt.encode("utf-8")).hexdigest()
-    identity_projection = {
-        "projection_version": "citation-v1",
-        "source_key": grounded["source_key"],
-        "canonical_id": grounded["canonical_id"],
-        "document_key": grounded["document_key"],
-        "chunk_key": grounded["chunk_key"],
-        "char_start": grounded["char_start"],
-        "char_end": grounded["char_end"],
-        "offset_basis": grounded["offset_basis"],
-        "excerpt_sha256": excerpt_sha256,
-    }
+    identity_projection = _citation_identity_projection(grounded)
     identity_sha256 = canonical_sha256(identity_projection)
     payload: JsonObject = {
         "citation_id": citation_ids.register(identity_sha256),
@@ -440,6 +747,23 @@ def _project_citation(
         "captured_at": grounded.get("captured_at"),
     }
     return Citation(**payload), canonical_json_bytes(payload)
+
+
+def _citation_identity_projection(grounded: Mapping[str, Any]) -> JsonObject:
+    excerpt = grounded.get("excerpt")
+    if not isinstance(excerpt, str):
+        raise ValueError("grounded citation excerpt must be a string")
+    return {
+        "projection_version": "citation-v1",
+        "source_key": grounded["source_key"],
+        "canonical_id": grounded["canonical_id"],
+        "document_key": grounded["document_key"],
+        "chunk_key": grounded["chunk_key"],
+        "char_start": grounded["char_start"],
+        "char_end": grounded["char_end"],
+        "offset_basis": grounded["offset_basis"],
+        "excerpt_sha256": hashlib.sha256(excerpt.encode("utf-8")).hexdigest(),
+    }
 
 
 def _retrieval_weight(request: ResearchRequest, name: str) -> float:
@@ -657,7 +981,7 @@ def _parse_calendar_date(name: str, value: Any) -> date | None:
 def _validate_timestamp(name: str, value: Any, *, optional: bool = True) -> None:
     if value is None and optional:
         return
-    if not isinstance(value, str) or not value.endswith("Z"):
+    if not isinstance(value, str) or not _UTC_TIMESTAMP_RE.fullmatch(value):
         raise ValueError(f"{name} must be an RFC 3339 UTC timestamp")
     try:
         parsed = datetime.fromisoformat(value[:-1] + "+00:00")
