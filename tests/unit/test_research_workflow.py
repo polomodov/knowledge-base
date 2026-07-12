@@ -958,3 +958,323 @@ def test_validate_dossier_revision_aggregates_valid_and_invalid_results(
     assert invalid.citations[0]["status"] == "missing"
     assert invalid.errors
     assert invalid.validated_at == "2026-07-12T14:00:01Z"
+
+
+class _CurationCurrentCitationClient:
+    """Serve only the bounded current-citation hydration query used by curation."""
+
+    def __init__(self, rows: Sequence[JsonObject]) -> None:
+        self._rows = {str(row["citation_id"]): deepcopy(row) for row in rows}
+        self.calls: list[tuple[str, JsonObject]] = []
+
+    def aql(
+        self,
+        query: str,
+        bind_vars: JsonObject | None = None,
+        *,
+        batch_size: int | None = None,
+    ) -> list[JsonObject]:
+        assert batch_size is None
+        assert "/* research:hydrate_current_citations */" in query
+        assert re.search(r"\b(?:INSERT|UPDATE|REMOVE|REPLACE|UPSERT)\b", query, re.IGNORECASE) is None
+        assert bind_vars is not None and set(bind_vars) == {"citation_refs"}
+        refs = bind_vars["citation_refs"]
+        assert isinstance(refs, list) and 1 <= len(refs) <= 100
+        assert all(isinstance(ref, dict) for ref in refs)
+        self.calls.append((query, deepcopy(bind_vars)))
+        return [deepcopy(self._rows[str(ref["citation_id"])]) for ref in refs]
+
+    @property
+    def queried_citation_ids(self) -> tuple[str, ...]:
+        return tuple(
+            str(ref["citation_id"]) for _, bind_vars in self.calls for ref in cast(list[JsonObject], bind_vars["citation_refs"])
+        )
+
+
+def _curation_repository(
+    citations: Sequence[Citation],
+    *,
+    rows: Sequence[JsonObject] | None = None,
+) -> tuple[KnowledgeRepository, _CurationCurrentCitationClient]:
+    client = _CurationCurrentCitationClient(rows or [_current_citation_row(citation) for citation in citations])
+    return cast(KnowledgeRepository, SimpleNamespace(client=client)), client
+
+
+def _curate_dossier_revision(
+    repository: KnowledgeRepository,
+    parent: DossierRevision,
+    operations: Sequence[CurationOperation],
+    *,
+    validated_at: str = "2026-07-12T15:00:00Z",
+) -> Any:
+    implementation = cast(Callable[..., Any], vars(workflow)["curate_dossier_revision"])
+    return implementation(repository, parent, operations, validated_at=validated_at)
+
+
+def _dossier_curation_error() -> type[RuntimeError]:
+    return cast(type[RuntimeError], vars(workflow)["DossierCurationError"])
+
+
+def _curation_citations(
+    citation_builder: Callable[..., JsonObject],
+) -> tuple[Citation, Citation, Citation, Citation]:
+    citations = tuple(
+        _validation_citation(citation_builder, document=document) for document in ("alpha", "beta", "gamma", "delta")
+    )
+    return citations[0], citations[1], citations[2], citations[3]
+
+
+def _curation_operation(
+    operation: str,
+    citation: Citation,
+    ordinal: int,
+    *,
+    reason: str | None = None,
+) -> CurationOperation:
+    return CurationOperation(
+        operation=operation,
+        citation_id=citation.citation_id,
+        reason=reason,
+        ordinal=ordinal,
+    )
+
+
+def _forbid_curation_retrieval(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        pytest.fail("curation must not run lexical, semantic, graph, or context retrieval")
+
+    for name in (
+        "lexical_chunk_candidates",
+        "semantic_chunk_candidates",
+        "load_corpus_context",
+        "topic_leads",
+        "related_leads",
+        "clean_community_leads",
+    ):
+        monkeypatch.setattr(workflow, name, forbidden)
+
+
+def test_curate_dossier_applies_ordered_transitions_over_exact_parent_universe_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    alpha, beta, gamma, delta = _curation_citations(citation_builder)
+    parent = _validation_revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        (alpha, beta, gamma, delta),
+        states=("selected", "selected", "candidate", "excluded"),
+    )
+    parent_snapshot = deepcopy(parent)
+    operations = (
+        _curation_operation("include", gamma, 0, reason="add a complementary source"),
+        _curation_operation("exclude", alpha, 1, reason="remove a redundant source"),
+        _curation_operation("pin", beta, 2, reason="lead with the strongest source"),
+    )
+    repository, client = _curation_repository((alpha, beta, gamma, delta))
+    _forbid_curation_retrieval(monkeypatch)
+
+    result = _curate_dossier_revision(repository, parent, operations)
+
+    result_type = cast(type[Any], vars(workflow)["DossierCurationResult"])
+    assert isinstance(result, result_type)
+    assert result.parent_revision_id == parent.revision_id
+    assert result.request == parent.request
+    assert result.corpus_context == parent.corpus_context
+    assert result.derived_context == parent.derived_context
+    assert (result.status, result.includes_drafts, result.warnings) == (
+        parent.status,
+        parent.includes_drafts,
+        parent.warnings,
+    )
+    assert result.curation_operations == operations
+    assert isinstance(result.candidate_evidence, tuple)
+    assert [row.citation.citation_id for row in result.candidate_evidence] == [
+        row.citation.citation_id for row in parent.candidate_evidence
+    ]
+    assert [row.selection_state for row in result.candidate_evidence] == ["excluded", "pinned", "selected", "excluded"]
+    assert [row.selection_reason for row in result.candidate_evidence] == [
+        "owner-exclude",
+        "owner-pin",
+        "owner-include",
+        "validation-excluded",
+    ]
+    assert result.selected_citation_ids == (beta.citation_id, gamma.citation_id)
+    assert isinstance(result.parent_validation, ValidationResult)
+    assert result.parent_validation.status == "valid"
+    assert result.parent_validation.target_id == parent.revision_id
+    assert result.parent_validation.validated_at == "2026-07-12T15:00:00Z"
+    assert tuple(dict.fromkeys(client.queried_citation_ids)) == (
+        alpha.citation_id,
+        beta.citation_id,
+        gamma.citation_id,
+    )
+    assert delta.citation_id not in client.queried_citation_ids
+    assert parent == parent_snapshot
+    with pytest.raises(AttributeError):
+        result.status = "degraded"
+
+
+def test_curate_dossier_presents_pins_first_with_stable_parent_order(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    alpha, beta, gamma, delta = _curation_citations(citation_builder)
+    parent = _validation_revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        (alpha, beta, gamma, delta),
+    )
+    operations = (
+        _curation_operation("pin", gamma, 0),
+        _curation_operation("pin", alpha, 1),
+    )
+    repository, _ = _curation_repository((alpha, beta, gamma, delta))
+
+    result = _curate_dossier_revision(repository, parent, operations)
+
+    assert result.selected_citation_ids == (
+        alpha.citation_id,
+        gamma.citation_id,
+        beta.citation_id,
+        delta.citation_id,
+    )
+    assert [row.citation.citation_id for row in result.candidate_evidence] == [
+        alpha.citation_id,
+        beta.citation_id,
+        gamma.citation_id,
+        delta.citation_id,
+    ]
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unknown",
+        "include_selected_noop",
+        "exclude_candidate_noop",
+        "pin_pinned_noop",
+        "duplicate",
+        "conflicting",
+        "empty_operations",
+        "empty_selected_set",
+        "ordinal_must_start_at_zero",
+        "ordinal_gap",
+        "ordinal_out_of_order",
+    ],
+)
+def test_curate_dossier_rejects_unknown_noop_duplicate_conflicting_empty_and_bad_ordinals(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+    case: str,
+) -> None:
+    alpha, beta, gamma, delta = _curation_citations(citation_builder)
+    states: tuple[str, ...] = ("selected", "pinned", "candidate", "excluded")
+    citations: tuple[Citation, ...] = (alpha, beta, gamma, delta)
+    if case == "empty_selected_set":
+        citations = (alpha,)
+        states = ("selected",)
+    parent = _validation_revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        citations,
+        states=states,
+    )
+    operations_by_case: dict[str, tuple[CurationOperation, ...]] = {
+        "unknown": (CurationOperation("include", "cit-ffffffffffffffff", None, 0),),
+        "include_selected_noop": (_curation_operation("include", alpha, 0),),
+        "exclude_candidate_noop": (_curation_operation("exclude", gamma, 0),),
+        "pin_pinned_noop": (_curation_operation("pin", beta, 0),),
+        "duplicate": (
+            _curation_operation("exclude", alpha, 0),
+            _curation_operation("exclude", alpha, 1),
+        ),
+        "conflicting": (
+            _curation_operation("include", gamma, 0),
+            _curation_operation("exclude", gamma, 1),
+        ),
+        "empty_operations": (),
+        "empty_selected_set": (_curation_operation("exclude", alpha, 0),),
+        "ordinal_must_start_at_zero": (_curation_operation("include", gamma, 1),),
+        "ordinal_gap": (
+            _curation_operation("include", gamma, 0),
+            _curation_operation("pin", alpha, 2),
+        ),
+        "ordinal_out_of_order": (
+            _curation_operation("pin", alpha, 1),
+            _curation_operation("include", gamma, 0),
+        ),
+    }
+    repository, _ = _curation_repository(citations)
+    parent_snapshot = deepcopy(parent)
+
+    with pytest.raises(_dossier_curation_error()):
+        _curate_dossier_revision(repository, parent, operations_by_case[case])
+
+    assert parent == parent_snapshot
+
+
+def test_curate_dossier_rejects_stale_parent_selected_evidence_before_include_validation(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    alpha, _, gamma, _ = _curation_citations(citation_builder)
+    parent = _validation_revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        (alpha, gamma),
+        states=("selected", "candidate"),
+    )
+    stale_alpha = _current_citation_row(alpha)
+    stale_alpha["chunk"]["text"] = "changed current excerpt"  # type: ignore[index]
+    repository, client = _curation_repository(
+        (alpha, gamma),
+        rows=(stale_alpha, _current_citation_row(gamma)),
+    )
+    parent_snapshot = deepcopy(parent)
+
+    with pytest.raises(_dossier_curation_error(), match=r"parent|current"):
+        _curate_dossier_revision(
+            repository,
+            parent,
+            (_curation_operation("include", gamma, 0),),
+        )
+
+    assert client.queried_citation_ids == (alpha.citation_id,)
+    assert parent == parent_snapshot
+
+
+def test_curate_dossier_revalidates_include_target_and_rejects_hidden_candidate(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    alpha, _, gamma, _ = _curation_citations(citation_builder)
+    parent = _validation_revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        (alpha, gamma),
+        states=("selected", "candidate"),
+    )
+    hidden_gamma = _current_citation_row(gamma)
+    hidden_gamma["document"]["status"] = "draft"  # type: ignore[index]
+    repository, client = _curation_repository(
+        (alpha, gamma),
+        rows=(_current_citation_row(alpha), hidden_gamma),
+    )
+    parent_snapshot = deepcopy(parent)
+
+    with pytest.raises(_dossier_curation_error(), match=r"include|current|hidden"):
+        _curate_dossier_revision(
+            repository,
+            parent,
+            (_curation_operation("include", gamma, 0),),
+        )
+
+    assert tuple(dict.fromkeys(client.queried_citation_ids)) == (alpha.citation_id, gamma.citation_id)
+    assert parent == parent_snapshot

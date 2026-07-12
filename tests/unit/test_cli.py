@@ -1,5 +1,6 @@
 import json
 import re
+from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any
 
@@ -7,10 +8,17 @@ import pytest
 
 import knowledge_base.cli.main as cli
 from knowledge_base.research_artifacts import (
+    ArtifactContractError,
     OutputRootAcknowledgementRequired,
     UnsafeArtifactPathError,
 )
-from knowledge_base.research_workflow import DossierBuildError, DossierBuildResult, ResearchRequest
+from knowledge_base.research_workflow import (
+    CurationOperation,
+    DossierBuildError,
+    DossierBuildResult,
+    ResearchRequest,
+    ValidationResult,
+)
 
 
 def _emitted(capsys) -> dict:
@@ -526,3 +534,525 @@ def test_research_build_preserves_custom_location_warning_on_downstream_error(
     else:
         assert "output_outside_generated_zone" not in calls["materialize"]["warnings"]
         assert "publish_failed" in calls
+
+
+def _dossier_validation_result(
+    *,
+    status: str = "valid",
+    citation_status: str = "valid",
+    warnings: tuple[str, ...] = (),
+) -> ValidationResult:
+    resolved = citation_status == "valid"
+    errors = () if status != "invalid" else (f"citation cit-0123456789abcdef is {citation_status}",)
+    return ValidationResult(
+        schema_version="1.0",
+        artifact_type="validation_result",
+        target_type="dossier_revision",
+        target_id="rev-20260712T120000Z-01234567",
+        target_digest="a" * 64,
+        status=status,
+        schema_valid=True,
+        package_integrity=True,
+        dossier_current=resolved,
+        citations_resolved=resolved,
+        coverage_complete=True,
+        human_reviewed=False,
+        citations=(
+            {
+                "citation_id": "cit-0123456789abcdef",
+                "status": citation_status,
+                "reason": None if resolved else "synthetic current-corpus mismatch",
+            },
+        ),
+        warnings=warnings,
+        errors=errors,
+        validated_at="2026-07-12T12:05:00Z",
+    )
+
+
+def _json_dataclass(value) -> dict[str, Any]:
+    return json.loads(json.dumps(asdict(value), ensure_ascii=False))
+
+
+def _curation_parent_manifest(citation_builder, evidence_candidate_builder, dossier_manifest_builder):
+    def candidate(label: str, *, state: str, rank: int) -> dict[str, Any]:
+        excerpt = f"Synthetic {label} evidence for ordered CLI curation."
+        citation = citation_builder(
+            canonical_id=f"synthetic-{label}",
+            document_key=f"doc-synthetic-{label}-0123456789ab",
+            chunk_key=f"chunk-synthetic-{label}-0-0123456789ab",
+            excerpt=excerpt,
+            char_end=len(excerpt),
+            url=f"https://example.test/synthetic-{label}",
+        )
+        return evidence_candidate_builder(
+            citation=citation,
+            document_rank=rank,
+            fragment_rank=1,
+            selection_state=state,
+            selection_reason="automatic-round-1" if state == "selected" else "bounded-candidate-pool",
+        )
+
+    candidates = [
+        candidate("exclude", state="selected", rank=1),
+        candidate("include-first", state="candidate", rank=2),
+        candidate("pin", state="selected", rank=3),
+        candidate("include-second", state="candidate", rank=4),
+    ]
+    manifest = dossier_manifest_builder(candidate_evidence=candidates)
+    citation_ids = {
+        row["citation"]["canonical_id"].removeprefix("synthetic-"): row["citation"]["citation_id"] for row in candidates
+    }
+    return manifest, citation_ids
+
+
+def _curation_error(
+    code: str,
+    *,
+    parent_validation: ValidationResult | None = None,
+) -> Exception:
+    error_type = vars(cli).get("DossierCurationError")
+    if error_type is None:
+        raise AssertionError("research CLI must expose DossierCurationError")
+    return error_type(
+        "private curation diagnostic must not cross the CLI boundary",
+        code=code,
+        parent_validation=parent_validation,
+    )
+
+
+def _install_research_revision_seams(
+    monkeypatch,
+    tmp_path,
+    parent_manifest: dict[str, Any],
+    validation: ValidationResult,
+    *,
+    output_warning: str | None = None,
+    output_policy_error: Exception | None = None,
+    load_error: Exception | None = None,
+    curation_error_code: str | None = None,
+) -> tuple[dict[str, Any], Any]:
+    calls: dict[str, Any] = {"order": []}
+    assert parent_manifest["revision_id"] == validation.target_id
+    parent_manifest["content_digest"] = validation.target_digest
+    settings = SimpleNamespace(repo_root=tmp_path / "repository")
+    repository = object()
+    parent_package = SimpleNamespace(manifest=parent_manifest, validation={}, markdown="", files={})
+    curation_result = SimpleNamespace(
+        dossier_key=parent_manifest["dossier_key"],
+        parent_revision_id=parent_manifest["revision_id"],
+        curation_operations=(),
+        parent_validation=validation,
+    )
+    child_manifest = {
+        "dossier_key": parent_manifest["dossier_key"],
+        "revision_id": "rev-20260712T121000Z-89abcdef",
+        "parent_revision_id": parent_manifest["revision_id"],
+        "content_digest": "b" * 64,
+        "selected_citation_ids": list(parent_manifest["selected_citation_ids"]),
+        "candidate_evidence": list(parent_manifest["candidate_evidence"]),
+        "curation_operations": [],
+        "includes_drafts": parent_manifest["includes_drafts"],
+        "warnings": [],
+    }
+    child_package = SimpleNamespace(manifest=child_manifest, validation={}, markdown="", files={})
+
+    def settings_call(args):
+        calls["order"].append("settings")
+        calls["settings"] = args
+        return settings
+
+    def client_call(actual_settings):
+        calls["order"].append("client")
+        calls["client_settings"] = actual_settings
+        return object()
+
+    def repository_call(client):
+        calls["order"].append("repository")
+        calls["repository_client"] = client
+        return repository
+
+    def output_root_call(output_root, *, generated_root, acknowledge_unsafe):
+        calls["order"].append("validate_output_root")
+        calls["validate_output_root"] = {
+            "output_root": output_root,
+            "generated_root": generated_root,
+            "acknowledge_unsafe": acknowledge_unsafe,
+        }
+        if output_policy_error is not None:
+            raise output_policy_error
+        return output_warning
+
+    def load_call(revision_path):
+        calls["order"].append("load")
+        calls["load"] = revision_path
+        if load_error is not None:
+            raise load_error
+        return parent_package
+
+    def validate_call(actual_repository, revision, *, validated_at):
+        calls["order"].append("validate")
+        calls["validate"] = {
+            "repository": actual_repository,
+            "revision": revision,
+            "validated_at": validated_at,
+        }
+        return validation
+
+    def curate_call(actual_repository, parent_revision, operations, *, validated_at):
+        calls["order"].append("curate")
+        calls["curate"] = {
+            "repository": actual_repository,
+            "parent_revision": parent_revision,
+            "operations": operations,
+            "validated_at": validated_at,
+        }
+        if curation_error_code is not None:
+            raise _curation_error(
+                curation_error_code,
+                parent_validation=validation if curation_error_code == "parent_not_current" else None,
+            )
+        curation_result.curation_operations = operations
+        return curation_result
+
+    def materialize_call(parent_package, result):
+        calls["order"].append("materialize")
+        calls["materialize"] = {
+            "parent_package": parent_package,
+            "result": result,
+        }
+        child_manifest["curation_operations"] = [asdict(operation) for operation in result.curation_operations]
+        return child_package
+
+    def publish_call(output_root, package):
+        calls["order"].append("publish")
+        calls["publish"] = (output_root, package)
+        return "created"
+
+    def forbidden_retrieval(*args, **kwargs):
+        pytest.fail("validation and curation must not start dossier retrieval")
+
+    monkeypatch.setattr(cli, "_settings", settings_call)
+    monkeypatch.setattr(cli, "ArangoClient", client_call)
+    monkeypatch.setattr(cli, "KnowledgeRepository", repository_call)
+    monkeypatch.setattr(cli, "validate_output_root", output_root_call)
+    monkeypatch.setattr(cli, "load_dossier_package", load_call, raising=False)
+    monkeypatch.setattr(cli, "validate_dossier_revision", validate_call, raising=False)
+    monkeypatch.setattr(cli, "curate_dossier_revision", curate_call, raising=False)
+    monkeypatch.setattr(cli, "materialize_curated_dossier_package", materialize_call, raising=False)
+    monkeypatch.setattr(cli, "publish_dossier_package", publish_call)
+    monkeypatch.setattr(cli, "build_dossier", forbidden_retrieval)
+    monkeypatch.setattr(cli, "build_embedding_provider", forbidden_retrieval)
+    return calls, settings
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["research", "validate"],
+        ["research", "curate"],
+    ],
+)
+def test_research_validate_and_curate_parser_errors_use_json_exit_contract(capsys, arguments) -> None:
+    code = cli.main(arguments)
+    payload, stderr = _read_cli_output(capsys)
+
+    assert code == 1 and payload["status"] == "error"
+    assert "usage:" not in stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("validation", "expected_exit"),
+    [
+        (_dossier_validation_result(), 0),
+        (_dossier_validation_result(status="valid_with_warnings", warnings=("synthetic_validation_warning",)), 0),
+        (_dossier_validation_result(status="invalid", citation_status="changed"), 1),
+    ],
+    ids=["valid", "valid-with-warnings", "invalid"],
+)
+def test_research_validate_emits_stable_result_and_contract_exit(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    dossier_manifest_builder,
+    validation,
+    expected_exit,
+) -> None:
+    parent_manifest = dossier_manifest_builder()
+    calls, _ = _install_research_revision_seams(monkeypatch, tmp_path, parent_manifest, validation)
+    revision = tmp_path / "immutable-parent"
+
+    code = cli.main(["research", "validate", str(revision), "--output-root", str(tmp_path / "research-root")])
+    captured = capsys.readouterr()
+    expected = _json_dataclass(validation)
+
+    assert code == expected_exit
+    assert captured.out == json.dumps(expected, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    for warning in validation.warnings:
+        assert warning in captured.err
+    if not validation.warnings:
+        assert captured.err == ""
+    assert calls["load"] == revision
+    assert calls["validate"]["repository"] is not None
+    assert calls["validate"]["revision"].revision_id == parent_manifest["revision_id"]
+    assert calls["order"].index("load") < calls["order"].index("repository") < calls["order"].index("validate")
+    assert "validate_output_root" not in calls
+    assert not {"curate", "materialize", "publish"} & calls.keys()
+
+
+def test_research_validate_rejects_bad_package_before_corpus_access(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    dossier_manifest_builder,
+) -> None:
+    validation = _dossier_validation_result()
+    calls, _ = _install_research_revision_seams(
+        monkeypatch,
+        tmp_path,
+        dossier_manifest_builder(),
+        validation,
+        load_error=ArtifactContractError("synthetic package integrity failure"),
+    )
+
+    code = cli.main(["research", "validate", str(tmp_path / "broken-revision")])
+    payload, _ = _read_cli_output(capsys)
+
+    assert code == 1 and payload["status"] == "error" and payload["error_type"] == "ArtifactContractError"
+    assert calls["order"] == ["load"]
+    assert not {"client", "repository", "validate", "curate", "materialize", "publish"} & calls.keys()
+
+
+def test_research_curate_preserves_mixed_repeated_operation_order_and_publishes_stable_json(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    citation_builder,
+    evidence_candidate_builder,
+    dossier_manifest_builder,
+) -> None:
+    parent_manifest, citation_ids = _curation_parent_manifest(
+        citation_builder,
+        evidence_candidate_builder,
+        dossier_manifest_builder,
+    )
+    validation = _dossier_validation_result()
+    calls, _ = _install_research_revision_seams(
+        monkeypatch,
+        tmp_path,
+        parent_manifest,
+        validation,
+        output_warning="output_outside_generated_zone",
+    )
+    revision = tmp_path / "immutable-parent"
+    output_root = tmp_path / "acknowledged-external-research"
+    reason = "owner ordered evidence review"
+
+    code = cli.main(
+        [
+            "research",
+            "curate",
+            str(revision),
+            "--exclude",
+            citation_ids["exclude"],
+            "--include",
+            citation_ids["include-first"],
+            "--pin",
+            citation_ids["pin"],
+            "--include",
+            citation_ids["include-second"],
+            "--reason",
+            reason,
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    curation_result = calls["materialize"]["result"]
+    expected = {
+        "status": "ok",
+        "dossier_key": parent_manifest["dossier_key"],
+        "revision_id": "rev-20260712T121000Z-89abcdef",
+        "parent_revision_id": parent_manifest["revision_id"],
+        "content_digest": "b" * 64,
+        "output": str(output_root / parent_manifest["dossier_key"] / "revisions" / "rev-20260712T121000Z-89abcdef"),
+        "operations": 4,
+        "includes_drafts": False,
+        "warnings": ["output_outside_generated_zone"],
+    }
+
+    assert captured.out == json.dumps(expected, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert "output_outside_generated_zone" in captured.err
+    assert calls["validate_output_root"] == {
+        "output_root": output_root,
+        "generated_root": calls["client_settings"].repo_root / "data" / "generated",
+        "acknowledge_unsafe": True,
+    }
+    operations = calls["curate"]["operations"]
+    assert all(isinstance(operation, CurationOperation) for operation in operations)
+    assert [(operation.operation, operation.citation_id, operation.reason, operation.ordinal) for operation in operations] == [
+        ("exclude", citation_ids["exclude"], reason, 0),
+        ("include", citation_ids["include-first"], reason, 1),
+        ("pin", citation_ids["pin"], reason, 2),
+        ("include", citation_ids["include-second"], reason, 3),
+    ]
+    assert calls["curate"]["repository"] is not None
+    assert calls["curate"]["validated_at"].endswith("Z")
+    assert curation_result.parent_validation is validation
+    assert curation_result.curation_operations is operations
+    assert "validate" not in calls
+    assert calls["publish"][0] == output_root
+    assert calls["order"] == [
+        "settings",
+        "validate_output_root",
+        "load",
+        "client",
+        "repository",
+        "curate",
+        "materialize",
+        "publish",
+    ]
+
+
+def test_research_curate_rejects_empty_operation_list_before_io(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    dossier_manifest_builder,
+) -> None:
+    calls, _ = _install_research_revision_seams(
+        monkeypatch,
+        tmp_path,
+        dossier_manifest_builder(),
+        _dossier_validation_result(),
+    )
+
+    code = cli.main(["research", "curate", str(tmp_path / "immutable-parent")])
+    payload, _ = _read_cli_output(capsys)
+
+    assert code == 1 and payload["status"] == "error"
+    assert calls["order"] == []
+
+
+@pytest.mark.parametrize(
+    "policy_error",
+    [
+        OutputRootAcknowledgementRequired("custom output requires acknowledgement"),
+        UnsafeArtifactPathError("symlink output is forbidden"),
+    ],
+)
+def test_research_curate_output_policy_failure_precedes_loading_and_corpus_access(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    dossier_manifest_builder,
+    policy_error,
+) -> None:
+    calls, _ = _install_research_revision_seams(
+        monkeypatch,
+        tmp_path,
+        dossier_manifest_builder(),
+        _dossier_validation_result(),
+        output_policy_error=policy_error,
+    )
+
+    code = cli.main(
+        [
+            "research",
+            "curate",
+            str(tmp_path / "immutable-parent"),
+            "--include",
+            "cit-0123456789abcdef",
+            "--output-root",
+            str(tmp_path / "external-research"),
+        ]
+    )
+    payload, _ = _read_cli_output(capsys)
+
+    assert code == 1 and payload["status"] == "error" and payload["error_type"] == type(policy_error).__name__
+    assert calls["order"] == ["settings", "validate_output_root"]
+    assert not {"load", "client", "repository", "validate", "curate", "materialize", "publish"} & calls.keys()
+
+
+def test_research_curate_parent_current_gate_returns_safe_rejection_and_does_not_publish(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    dossier_manifest_builder,
+) -> None:
+    validation = _dossier_validation_result(status="invalid", citation_status="hidden")
+    parent_manifest = dossier_manifest_builder()
+    calls, _ = _install_research_revision_seams(
+        monkeypatch,
+        tmp_path,
+        parent_manifest,
+        validation,
+        output_warning="output_outside_generated_zone",
+        curation_error_code="parent_not_current",
+    )
+    output_root = tmp_path / "acknowledged-external-research"
+
+    code = cli.main(
+        [
+            "research",
+            "curate",
+            str(tmp_path / "immutable-parent"),
+            "--exclude",
+            parent_manifest["selected_citation_ids"][0],
+            "--output-root",
+            str(output_root),
+            "--acknowledge-unsafe-output",
+        ]
+    )
+    captured = capsys.readouterr()
+    expected = {
+        "status": "rejected",
+        "reason": "parent_not_current",
+        "validation": _json_dataclass(validation),
+        "warnings": ["output_outside_generated_zone"],
+    }
+
+    assert code == 1
+    assert captured.out == json.dumps(expected, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert "output_outside_generated_zone" in captured.err
+    assert calls["curate"]["repository"] is not None
+    assert "validate" not in calls
+    assert not {"materialize", "publish"} & calls.keys()
+    assert "private curation diagnostic" not in captured.out
+
+
+def test_research_curate_service_rejection_exposes_only_safe_code(
+    capsys,
+    monkeypatch,
+    tmp_path,
+    dossier_manifest_builder,
+) -> None:
+    parent_manifest = dossier_manifest_builder()
+    calls, _ = _install_research_revision_seams(
+        monkeypatch,
+        tmp_path,
+        parent_manifest,
+        _dossier_validation_result(),
+        curation_error_code="unknown_citation",
+    )
+
+    code = cli.main(
+        [
+            "research",
+            "curate",
+            str(tmp_path / "immutable-parent"),
+            "--include",
+            "cit-ffffffffffffffff",
+        ]
+    )
+    captured = capsys.readouterr()
+    expected = {"status": "rejected", "reason": "unknown_citation", "warnings": []}
+
+    assert code == 1
+    assert captured.out == json.dumps(expected, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    assert captured.err == ""
+    assert "private curation diagnostic" not in captured.out
+    assert "validate" not in calls
+    assert not {"materialize", "publish"} & calls.keys()
