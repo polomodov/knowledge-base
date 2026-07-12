@@ -18,9 +18,9 @@
 
 **Purpose**: подготовить воспроизводимую test-only JSON Schema validation и безопасные fixtures без новой runtime dependency.
 
-- [ ] T001 Добавить прямую dev-only зависимость `jsonschema>=4.26` в `pyproject.toml` и обновить `uv.lock`, сохранив base package без новых runtime dependencies
-- [ ] T002 [P] Создать общий synthetic published/draft/tainted corpus без реальных excerpts в `tests/fixtures/research/safe-research-corpus.json`
-- [ ] T003 [P] Добавить reusable builders только для ResearchRequest, Citation и dossier packages в `tests/conftest.py`, не включая credentials или private paths
+- [X] T001 Добавить прямую dev-only зависимость `jsonschema>=4.26` в `pyproject.toml` и обновить `uv.lock`, сохранив base package без новых runtime dependencies
+- [X] T002 [P] Создать общий synthetic published/draft/tainted corpus без реальных excerpts в `tests/fixtures/research/safe-research-corpus.json`
+- [X] T003 [P] Добавить reusable builders только для ResearchRequest, Citation и dossier packages в `tests/conftest.py`, не включая credentials или private paths
 
 **Checkpoint**: dev environment валидирует JSON Schema 2020-12, а shared fixtures доступны unit и integration tests.
 

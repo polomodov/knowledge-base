@@ -413,6 +413,7 @@ source = { editable = "." }
 
 [package.optional-dependencies]
 dev = [
+    { name = "jsonschema" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -427,6 +428,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.26" },
     { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.27,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
