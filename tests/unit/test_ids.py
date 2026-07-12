@@ -1,4 +1,4 @@
-from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
+from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key, work_key
 from knowledge_base.sources import book_cube
 
 
@@ -48,3 +48,15 @@ def test_topic_key_is_shared_across_adapters() -> None:
 def test_topic_key_empty_label_falls_back() -> None:
     assert topic_key("#") == "topic"
     assert topic_key("   ") == "topic"
+
+
+def test_work_key_ascii_is_readable_slug() -> None:
+    assert work_key("Thinking in Systems") == "thinking-in-systems"
+    assert work_key("Knowledge Graphs for Notes") == "knowledge-graphs-for-notes"
+
+
+def test_work_key_non_ascii_is_stable() -> None:
+    key = work_key("Системное мышление")
+    assert key.startswith("work-")
+    assert work_key("Системное мышление") == key
+    assert work_key("Другая книга") != key

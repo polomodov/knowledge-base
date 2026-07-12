@@ -1,7 +1,7 @@
 """Shared ingest write-layer used by every source adapter.
 
 Adapters fetch and normalize into NormalizedSourceItem, then hand off to these functions
-which own all KnowledgeRepository writes (documents, chunks, topics, authors, and the edges
+which own all KnowledgeRepository writes (documents, chunks, topics, authors, works, and the edges
 between them). Adapter-specific bits — document/chunk metadata, the topic/author `method`
 label and evidence format, and the provenance dict — are passed in as parameters.
 """
@@ -185,6 +185,50 @@ def upsert_author(
             },
         )["created"],
     )
+
+
+def upsert_works(
+    repository: KnowledgeRepository,
+    item: NormalizedSourceItem,
+    doc_key: str,
+    source_key: str,
+    import_run_key: str,
+    now: str,
+    counts: dict[str, int],
+    *,
+    method: str,
+    provenance: dict[str, Any],
+) -> None:
+    for work in item.works:
+        counts["works"] += int(
+            repository.upsert(
+                "works",
+                {
+                    "_key": work.key,
+                    "title": work.title,
+                    "work_type": work.work_type,
+                    "authors": list(work.authors),
+                    "published_at": work.published_at,
+                    "metadata": {**work.metadata, "source": method, "source_key": source_key},
+                },
+            )["created"],
+        )
+        counts["edges"] += int(
+            repository.upsert_edge(
+                "document_references_work",
+                {
+                    "_key": stable_key(doc_key, work.key, prefix="edge"),
+                    "_from": f"documents/{doc_key}",
+                    "_to": f"works/{work.key}",
+                    "confidence": work.confidence,
+                    "method": method,
+                    "evidence": work.evidence or work.title,
+                    "import_run_key": import_run_key,
+                    "provenance": provenance,
+                    "created_at": now,
+                },
+            )["created"],
+        )
 
 
 def upsert_chunks(
