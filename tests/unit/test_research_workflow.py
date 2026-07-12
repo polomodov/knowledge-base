@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Sequence
+from copy import deepcopy
+from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -659,3 +662,299 @@ def test_validation_result_rejects_unknown_citation_state_and_automatic_human_re
         ValidationResult(**reviewed)
     with pytest.raises(ValueError):
         ValidationResult(**malformed_time)
+
+
+class _ReadOnlyCitationValidationClient:
+    def __init__(self, rows: Sequence[JsonObject], citations: Sequence[Citation]) -> None:
+        self._rows = deepcopy(list(rows))
+        self._citations = tuple(citations)
+        self.calls: list[tuple[str, JsonObject]] = []
+
+    def aql(
+        self,
+        query: str,
+        bind_vars: JsonObject | None = None,
+        *,
+        batch_size: int | None = None,
+    ) -> list[JsonObject]:
+        assert batch_size is None
+        assert re.search(r"\b(?:INSERT|UPDATE|REMOVE|REPLACE|UPSERT)\b", query, re.IGNORECASE) is None
+        assert bind_vars is not None
+        bounded_inputs = [value for value in bind_vars.values() if isinstance(value, list)]
+        assert bounded_inputs and all(len(value) <= 150 for value in bounded_inputs)
+        serialized_bind_vars = repr(bind_vars)
+        for citation in self._citations:
+            assert citation.citation_id in serialized_bind_vars
+            assert citation.document_key in serialized_bind_vars
+            assert citation.chunk_key in serialized_bind_vars
+        self.calls.append((query, deepcopy(bind_vars)))
+        return deepcopy(self._rows)
+
+
+def _validation_citation(
+    citation_builder: Callable[..., JsonObject],
+    *,
+    document: str,
+) -> Citation:
+    excerpt = f"Grounded validation excerpt for {document}."
+    normalized_prefix = f"Lead {document}: "
+    char_start = len(normalized_prefix)
+    return Citation(
+        **citation_builder(
+            canonical_id=f"canonical-{document}",
+            document_key=f"doc-{document}",
+            chunk_key=f"chunk-{document}-0",
+            chunk_ordinal=0,
+            char_start=char_start,
+            char_end=char_start + len(excerpt),
+            excerpt=excerpt,
+            title=f"Validation {document}",
+            published_at="2026-01-15T10:00:00Z",
+            document_status="published",
+            url=f"https://example.test/{document}",
+            raw_snapshot_key=f"raw-{document}",
+            import_run_key=f"import-{document}",
+            captured_at="2026-01-15T10:05:00Z",
+        ),
+    )
+
+
+def _current_citation_row(citation: Citation) -> JsonObject:
+    raw_document_text = f"  Lead   {citation.document_key.removeprefix('doc-')}:\n\t{citation.excerpt}   trailing\tcontext  "
+    return {
+        "citation_id": citation.citation_id,
+        "document": {
+            "_id": f"documents/{citation.document_key}",
+            "_key": citation.document_key,
+            "source_key": citation.source_key,
+            "canonical_id": citation.canonical_id,
+            "title": citation.title,
+            "text": raw_document_text,
+            "published_at": citation.published_at,
+            "url": citation.url,
+            "status": citation.document_status,
+        },
+        "chunk": {
+            "_id": f"chunks/{citation.chunk_key}",
+            "_key": citation.chunk_key,
+            "document_key": citation.document_key,
+            "ordinal": citation.chunk_ordinal,
+            "text": citation.excerpt,
+            "char_start": citation.char_start,
+            "char_end": citation.char_end,
+        },
+        "document_edge": {
+            "_id": f"chunk_of_document/{citation.chunk_key}",
+            "_key": citation.chunk_key,
+            "_from": f"chunks/{citation.chunk_key}",
+            "_to": f"documents/{citation.document_key}",
+            "ordinal": citation.chunk_ordinal,
+        },
+        "raw_edge": {
+            "_id": f"chunk_derived_from_raw/{citation.chunk_key}",
+            "_from": f"chunks/{citation.chunk_key}",
+            "_to": f"raw_snapshots/{citation.raw_snapshot_key}",
+            "document_key": citation.document_key,
+            "char_start": citation.char_start,
+            "char_end": citation.char_end,
+            "import_run_key": citation.import_run_key,
+        },
+        "raw_snapshot": {
+            "_id": f"raw_snapshots/{citation.raw_snapshot_key}",
+            "_key": citation.raw_snapshot_key,
+            "source_key": citation.source_key,
+            "captured_at": citation.captured_at,
+        },
+        "source_edge": {
+            "_id": f"document_from_source/{citation.document_key}",
+            "_from": f"documents/{citation.document_key}",
+            "_to": f"sources/{citation.source_key}",
+            "import_run_key": citation.import_run_key,
+            "provenance": {
+                "raw_snapshot_key": citation.raw_snapshot_key,
+                "url": citation.url,
+                "captured_at": citation.captured_at,
+            },
+        },
+    }
+
+
+def _validation_revision(
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+    citations: Sequence[Citation],
+    *,
+    states: Sequence[str] | None = None,
+    warnings: Sequence[str] = (),
+) -> DossierRevision:
+    candidate_states = tuple(states or ("selected",) * len(citations))
+    assert len(candidate_states) == len(citations)
+    candidates = [
+        evidence_candidate_builder(
+            citation=asdict(citation),
+            document_rank=index,
+            fragment_rank=1,
+            selection_state=state,
+            selection_reason=f"validation-{state}",
+        )
+        for index, (citation, state) in enumerate(zip(citations, candidate_states, strict=True), start=1)
+    ]
+    return DossierRevision(
+        **dossier_manifest_builder(
+            candidate_evidence=candidates,
+            status="degraded" if warnings else "ready",
+            warnings=list(warnings),
+        ),
+    )
+
+
+def _validation_repository(
+    rows: Sequence[JsonObject],
+    citations: Sequence[Citation],
+) -> tuple[KnowledgeRepository, _ReadOnlyCitationValidationClient]:
+    client = _ReadOnlyCitationValidationClient(rows, citations)
+    repository = cast(KnowledgeRepository, SimpleNamespace(client=client))
+    return repository, client
+
+
+def test_revalidate_dossier_citations_accepts_exact_normalized_evidence_with_provenance(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    citation = _validation_citation(citation_builder, document="valid")
+    revision = _validation_revision(dossier_manifest_builder, evidence_candidate_builder, [citation])
+    repository, client = _validation_repository([_current_citation_row(citation)], [citation])
+
+    states = workflow.revalidate_dossier_citations(repository, revision)
+
+    assert states == ({"citation_id": citation.citation_id, "status": "valid", "reason": None},)
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ["chunk_ownership", "document_edge", "normalized_offsets", "excerpt_identity", "provenance"],
+)
+def test_revalidate_dossier_citations_marks_any_grounding_mismatch_changed(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+    mismatch: str,
+) -> None:
+    citation = _validation_citation(citation_builder, document=mismatch)
+    row = _current_citation_row(citation)
+    if mismatch == "chunk_ownership":
+        row["chunk"]["document_key"] = "doc-other"  # type: ignore[index]
+    elif mismatch == "document_edge":
+        row["document_edge"]["_to"] = "documents/doc-other"  # type: ignore[index]
+    elif mismatch == "normalized_offsets":
+        row["document"]["text"] = f"shifted {row['document']['text']}"  # type: ignore[index]
+    elif mismatch == "excerpt_identity":
+        row["document"]["canonical_id"] = "canonical-changed"  # type: ignore[index]
+        row["chunk"]["text"] = "X" + citation.excerpt[1:]  # type: ignore[index]
+    else:
+        row["raw_edge"]["import_run_key"] = "import-changed"  # type: ignore[index]
+        row["source_edge"]["provenance"]["raw_snapshot_key"] = "raw-changed"  # type: ignore[index]
+
+    revision = _validation_revision(dossier_manifest_builder, evidence_candidate_builder, [citation])
+    repository, _ = _validation_repository([row], [citation])
+
+    states = workflow.revalidate_dossier_citations(repository, revision)
+
+    assert states[0]["citation_id"] == citation.citation_id
+    assert states[0]["status"] == "changed"
+    assert isinstance(states[0]["reason"], str) and states[0]["reason"]
+
+
+def test_revalidate_dossier_citations_returns_selected_order_with_state_precedence(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    citations = [_validation_citation(citation_builder, document=state) for state in ("valid", "missing", "changed", "hidden")]
+    revision = _validation_revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        citations,
+        states=("selected", "pinned", "selected", "pinned"),
+    )
+    valid_row, missing_row, changed_row, hidden_row = [_current_citation_row(citation) for citation in citations]
+    missing_row["document"] = None
+    missing_row["chunk"] = None
+    changed_row["chunk"]["document_key"] = "doc-other"  # type: ignore[index]
+    hidden_row["document"]["status"] = "draft"  # type: ignore[index]
+    hidden_row["chunk"]["document_key"] = "doc-other"  # type: ignore[index]
+    rows = [hidden_row, changed_row, missing_row, valid_row]
+    repository, _ = _validation_repository(rows, citations)
+
+    states = workflow.revalidate_dossier_citations(repository, revision)
+
+    assert [(row["citation_id"], row["status"]) for row in states] == [
+        (citations[0].citation_id, "valid"),
+        (citations[1].citation_id, "missing"),
+        (citations[2].citation_id, "changed"),
+        (citations[3].citation_id, "hidden"),
+    ]
+    assert states[0]["reason"] is None
+    assert all(isinstance(row["reason"], str) and row["reason"] for row in states[1:])
+
+
+def test_revalidate_dossier_citations_does_not_make_stale_unselected_candidates_block_validation(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    selected = _validation_citation(citation_builder, document="selected")
+    unselected = _validation_citation(citation_builder, document="unselected")
+    revision = _validation_revision(
+        dossier_manifest_builder,
+        evidence_candidate_builder,
+        [selected, unselected],
+        states=("selected", "candidate"),
+    )
+    repository, client = _validation_repository([_current_citation_row(selected)], [selected])
+
+    states = workflow.revalidate_dossier_citations(repository, revision)
+
+    assert states == ({"citation_id": selected.citation_id, "status": "valid", "reason": None},)
+    serialized_bind_vars = repr(client.calls[0][1])
+    assert selected.citation_id in serialized_bind_vars
+    assert unselected.citation_id not in serialized_bind_vars
+
+
+def test_validate_dossier_revision_aggregates_valid_and_invalid_results(
+    citation_builder: Callable[..., JsonObject],
+    dossier_manifest_builder: Callable[..., JsonObject],
+    evidence_candidate_builder: Callable[..., JsonObject],
+) -> None:
+    citation = _validation_citation(citation_builder, document="aggregate")
+    revision = _validation_revision(dossier_manifest_builder, evidence_candidate_builder, [citation])
+    current_row = _current_citation_row(citation)
+    valid_repository, _ = _validation_repository([current_row], [citation])
+    missing_row = deepcopy(current_row)
+    missing_row["chunk"] = None
+    invalid_repository, _ = _validation_repository([missing_row], [citation])
+
+    valid = workflow.validate_dossier_revision(
+        valid_repository,
+        revision,
+        validated_at="2026-07-12T14:00:00Z",
+    )
+    invalid = workflow.validate_dossier_revision(
+        invalid_repository,
+        revision,
+        validated_at="2026-07-12T14:00:01Z",
+    )
+
+    assert isinstance(valid, ValidationResult)
+    assert (valid.status, valid.dossier_current, valid.citations_resolved, valid.errors) == ("valid", True, True, ())
+    assert valid.target_id == revision.revision_id
+    assert valid.target_digest == revision.content_digest
+    assert valid.validated_at == "2026-07-12T14:00:00Z"
+    assert isinstance(invalid, ValidationResult)
+    assert invalid.status == "invalid"
+    assert invalid.dossier_current is False and invalid.citations_resolved is False
+    assert invalid.citations[0]["status"] == "missing"
+    assert invalid.errors
+    assert invalid.validated_at == "2026-07-12T14:00:01Z"
