@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 
 import knowledge_base.cli.main as cli
+from knowledge_base.cli import common as cli_common
+from knowledge_base.cli import platform_cmd, research_cmd, viz_cmd
 from knowledge_base.research_artifacts import (
     ArtifactContractError,
     OutputRootAcknowledgementRequired,
@@ -43,16 +45,14 @@ def test_main_includes_traceback_under_kb_debug(capsys, monkeypatch) -> None:
 
 
 def test_platform_up_exit_code_follows_status(capsys, monkeypatch) -> None:
-    monkeypatch.setattr(cli, "platform_up", lambda settings: {"status": "unavailable"})
+    monkeypatch.setattr(platform_cmd, "platform_up", lambda settings: {"status": "unavailable"})
     assert cli.main(["platform", "up"]) == 1
-    monkeypatch.setattr(cli, "platform_up", lambda settings: {"status": "started", "services": {}})
+    monkeypatch.setattr(platform_cmd, "platform_up", lambda settings: {"status": "started", "services": {}})
     assert cli.main(["platform", "up"]) == 0
 
 
 def test_platform_health_tolerates_degraded_vector_index_only(capsys, monkeypatch) -> None:
-    monkeypatch.setattr(
-        cli,
-        "health_report",
+    monkeypatch.setattr(platform_cmd, "health_report",
         lambda client: {
             "status": "degraded",
             "checks": [{"name": "collection:documents", "status": "ok"}, {"name": "vector_index", "status": "degraded"}],
@@ -62,9 +62,7 @@ def test_platform_health_tolerates_degraded_vector_index_only(capsys, monkeypatc
 
 
 def test_platform_health_fails_when_core_component_missing(capsys, monkeypatch) -> None:
-    monkeypatch.setattr(
-        cli,
-        "health_report",
+    monkeypatch.setattr(platform_cmd, "health_report",
         lambda client: {"status": "degraded", "checks": [{"name": "collection:documents", "status": "missing"}]},
     )
     assert cli.main(["platform", "health"]) == 1  # a missing core collection is not ready
@@ -77,8 +75,8 @@ def test_export_graph_wires_public_options_and_exit_status(capsys, monkeypatch, 
         captured.update({"output": output, **options})
         return {"status": "ok", "nodes": 3, "edges": 2, "bytes": 100}
 
-    monkeypatch.setattr(cli, "_repo", lambda args: object())
-    monkeypatch.setattr(cli, "export_graph", fake_export)
+    monkeypatch.setattr(cli_common, "_repo", lambda args: object())
+    monkeypatch.setattr(viz_cmd, "export_graph", fake_export)
     output = tmp_path / "graph.graphml"
     code = cli.main(
         [
@@ -112,8 +110,8 @@ def test_viz_build_uses_default_contract_and_degraded_exit(capsys, monkeypatch, 
         captured.update({"output": output, **options})
         return {"status": "degraded", "warnings": [{"code": "related_index_empty"}]}
 
-    monkeypatch.setattr(cli, "_repo", lambda args: object())
-    monkeypatch.setattr(cli, "build_visualization", fake_build)
+    monkeypatch.setattr(cli_common, "_repo", lambda args: object())
+    monkeypatch.setattr(viz_cmd, "build_visualization", fake_build)
     output = tmp_path / "viz.html"
     code = cli.main(["viz", "build", "--output", str(output), "--timeline-top-topics", "7", "--include-drafts"])
     assert code == 1
@@ -219,14 +217,14 @@ def _install_research_build_seams(
         calls["publish"] = (output_root, package)
         return "created"
 
-    monkeypatch.setattr(cli, "_settings", settings_call)
-    monkeypatch.setattr(cli, "ArangoClient", client_call)
-    monkeypatch.setattr(cli, "KnowledgeRepository", repository_call)
-    monkeypatch.setattr(cli, "build_embedding_provider", provider_call)
-    monkeypatch.setattr(cli, "validate_output_root", validate_call)
-    monkeypatch.setattr(cli, "build_dossier", build_call)
-    monkeypatch.setattr(cli, "materialize_dossier_package", materialize_call)
-    monkeypatch.setattr(cli, "publish_dossier_package", publish_call)
+    monkeypatch.setattr(cli_common, "_settings", settings_call)
+    monkeypatch.setattr(research_cmd, "ArangoClient", client_call)
+    monkeypatch.setattr(research_cmd, "KnowledgeRepository", repository_call)
+    monkeypatch.setattr(research_cmd, "build_embedding_provider", provider_call)
+    monkeypatch.setattr(research_cmd, "validate_output_root", validate_call)
+    monkeypatch.setattr(research_cmd, "build_dossier", build_call)
+    monkeypatch.setattr(research_cmd, "materialize_dossier_package", materialize_call)
+    monkeypatch.setattr(research_cmd, "publish_dossier_package", publish_call)
     return calls, settings
 
 
@@ -512,7 +510,7 @@ def test_research_build_preserves_custom_location_warning_on_downstream_error(
             calls["publish_failed"] = (output_root, package)
             raise OSError("atomic publish failed")
 
-        monkeypatch.setattr(cli, "publish_dossier_package", fail_publish)
+        monkeypatch.setattr(research_cmd, "publish_dossier_package", fail_publish)
 
     code = cli.main(
         [
@@ -732,17 +730,17 @@ def _install_research_revision_seams(
     def forbidden_retrieval(*args, **kwargs):
         pytest.fail("validation and curation must not start dossier retrieval")
 
-    monkeypatch.setattr(cli, "_settings", settings_call)
-    monkeypatch.setattr(cli, "ArangoClient", client_call)
-    monkeypatch.setattr(cli, "KnowledgeRepository", repository_call)
-    monkeypatch.setattr(cli, "validate_output_root", output_root_call)
-    monkeypatch.setattr(cli, "load_dossier_package", load_call, raising=False)
-    monkeypatch.setattr(cli, "validate_dossier_revision", validate_call, raising=False)
-    monkeypatch.setattr(cli, "curate_dossier_revision", curate_call, raising=False)
-    monkeypatch.setattr(cli, "materialize_curated_dossier_package", materialize_call, raising=False)
-    monkeypatch.setattr(cli, "publish_dossier_package", publish_call)
-    monkeypatch.setattr(cli, "build_dossier", forbidden_retrieval)
-    monkeypatch.setattr(cli, "build_embedding_provider", forbidden_retrieval)
+    monkeypatch.setattr(cli_common, "_settings", settings_call)
+    monkeypatch.setattr(research_cmd, "ArangoClient", client_call)
+    monkeypatch.setattr(research_cmd, "KnowledgeRepository", repository_call)
+    monkeypatch.setattr(research_cmd, "validate_output_root", output_root_call)
+    monkeypatch.setattr(research_cmd, "load_dossier_package", load_call, raising=False)
+    monkeypatch.setattr(research_cmd, "validate_dossier_revision", validate_call, raising=False)
+    monkeypatch.setattr(research_cmd, "curate_dossier_revision", curate_call, raising=False)
+    monkeypatch.setattr(research_cmd, "materialize_curated_dossier_package", materialize_call, raising=False)
+    monkeypatch.setattr(research_cmd, "publish_dossier_package", publish_call)
+    monkeypatch.setattr(research_cmd, "build_dossier", forbidden_retrieval)
+    monkeypatch.setattr(research_cmd, "build_embedding_provider", forbidden_retrieval)
     return calls, settings
 
 
@@ -1175,13 +1173,13 @@ def _install_research_handoff_seams(
             location_warning=location_warning,
         )
 
-    monkeypatch.setattr(cli, "_settings", settings_call)
-    monkeypatch.setattr(cli, "ArangoClient", client_call)
-    monkeypatch.setattr(cli, "KnowledgeRepository", repository_call)
-    monkeypatch.setattr(cli, "load_dossier_package", load_dossier_call)
-    monkeypatch.setattr(cli, "build_writing_handoff", build_call, raising=False)
-    monkeypatch.setattr(cli, "publish_writing_handoff", publish_call, raising=False)
-    monkeypatch.setattr(cli, "WritingHandoffError", _SafeWritingHandoffFailure, raising=False)
+    monkeypatch.setattr(cli_common, "_settings", settings_call)
+    monkeypatch.setattr(research_cmd, "ArangoClient", client_call)
+    monkeypatch.setattr(research_cmd, "KnowledgeRepository", repository_call)
+    monkeypatch.setattr(research_cmd, "load_dossier_package", load_dossier_call)
+    monkeypatch.setattr(research_cmd, "build_writing_handoff", build_call, raising=False)
+    monkeypatch.setattr(research_cmd, "publish_writing_handoff", publish_call, raising=False)
+    monkeypatch.setattr(research_cmd, "WritingHandoffError", _SafeWritingHandoffFailure, raising=False)
     return calls, settings
 
 
@@ -1599,17 +1597,17 @@ def _install_research_import_seams(
         calls["publish_import"] = (output_root, package)
         return SimpleNamespace(status=publication_status, path=path, package=package)
 
-    monkeypatch.setattr(cli, "_settings", settings_call)
-    monkeypatch.setattr(cli, "validate_output_root", output_root_call)
-    monkeypatch.setattr(cli, "ArangoClient", client_call)
-    monkeypatch.setattr(cli, "KnowledgeRepository", repository_call)
-    monkeypatch.setattr(cli, "load_writing_output_package", load_output_call, raising=False)
-    monkeypatch.setattr(cli, "load_writing_handoff", load_handoff_call, raising=False)
-    monkeypatch.setattr(cli, "load_dossier_package", load_dossier_call)
-    monkeypatch.setattr(cli, "prepare_writing_import", prepare_call, raising=False)
-    monkeypatch.setattr(cli, "materialize_imported_writing_package", materialize_call, raising=False)
-    monkeypatch.setattr(cli, "publish_imported_writing_package", publish_call, raising=False)
-    monkeypatch.setattr(cli, "WritingImportError", _SafeWritingImportFailure, raising=False)
+    monkeypatch.setattr(cli_common, "_settings", settings_call)
+    monkeypatch.setattr(research_cmd, "validate_output_root", output_root_call)
+    monkeypatch.setattr(research_cmd, "ArangoClient", client_call)
+    monkeypatch.setattr(research_cmd, "KnowledgeRepository", repository_call)
+    monkeypatch.setattr(research_cmd, "load_writing_output_package", load_output_call, raising=False)
+    monkeypatch.setattr(research_cmd, "load_writing_handoff", load_handoff_call, raising=False)
+    monkeypatch.setattr(research_cmd, "load_dossier_package", load_dossier_call)
+    monkeypatch.setattr(research_cmd, "prepare_writing_import", prepare_call, raising=False)
+    monkeypatch.setattr(research_cmd, "materialize_imported_writing_package", materialize_call, raising=False)
+    monkeypatch.setattr(research_cmd, "publish_imported_writing_package", publish_call, raising=False)
+    monkeypatch.setattr(research_cmd, "WritingImportError", _SafeWritingImportFailure, raising=False)
     return calls, settings
 
 
@@ -1968,17 +1966,17 @@ def test_research_validate_dispatches_every_artifact_type_and_resolves_links_fro
         calls["validators"].append(("imported_writing", actual_repository, revision, handoff, package, validated_at))
         return validation
 
-    monkeypatch.setattr(cli, "_settings", settings_call)
-    monkeypatch.setattr(cli, "ArangoClient", client_call)
-    monkeypatch.setattr(cli, "KnowledgeRepository", repository_call)
-    monkeypatch.setattr(cli, "load_dossier_package", load_dossier_call)
-    monkeypatch.setattr(cli, "load_writing_handoff", load_handoff_call, raising=False)
-    monkeypatch.setattr(cli, "load_writing_output_package", load_output_call, raising=False)
-    monkeypatch.setattr(cli, "load_imported_writing_package", load_imported_call, raising=False)
-    monkeypatch.setattr(cli, "validate_dossier_revision", dossier_validator)
-    monkeypatch.setattr(cli, "validate_writing_handoff", handoff_validator, raising=False)
-    monkeypatch.setattr(cli, "validate_writing_output_package", output_validator, raising=False)
-    monkeypatch.setattr(cli, "validate_imported_writing_package", imported_validator, raising=False)
+    monkeypatch.setattr(cli_common, "_settings", settings_call)
+    monkeypatch.setattr(research_cmd, "ArangoClient", client_call)
+    monkeypatch.setattr(research_cmd, "KnowledgeRepository", repository_call)
+    monkeypatch.setattr(research_cmd, "load_dossier_package", load_dossier_call)
+    monkeypatch.setattr(research_cmd, "load_writing_handoff", load_handoff_call, raising=False)
+    monkeypatch.setattr(research_cmd, "load_writing_output_package", load_output_call, raising=False)
+    monkeypatch.setattr(research_cmd, "load_imported_writing_package", load_imported_call, raising=False)
+    monkeypatch.setattr(research_cmd, "validate_dossier_revision", dossier_validator)
+    monkeypatch.setattr(research_cmd, "validate_writing_handoff", handoff_validator, raising=False)
+    monkeypatch.setattr(research_cmd, "validate_writing_output_package", output_validator, raising=False)
+    monkeypatch.setattr(research_cmd, "validate_imported_writing_package", imported_validator, raising=False)
 
     arguments = ["research", "validate", str(artifact), "--output-root", str(output_root)]
     if artifact_kind == "writing_output":
@@ -2040,12 +2038,12 @@ def test_research_validate_writing_output_requires_explicit_handoff_before_relat
         calls.append(("forbidden_related_access", args[0] if args else None))
         raise RuntimeError("related artifact access happened before the required --handoff gate")
 
-    monkeypatch.setattr(cli, "load_writing_output_package", load_output_call, raising=False)
-    monkeypatch.setattr(cli, "load_writing_handoff", forbidden, raising=False)
-    monkeypatch.setattr(cli, "load_dossier_package", forbidden)
-    monkeypatch.setattr(cli, "validate_writing_output_package", forbidden, raising=False)
-    monkeypatch.setattr(cli, "ArangoClient", forbidden)
-    monkeypatch.setattr(cli, "KnowledgeRepository", forbidden)
+    monkeypatch.setattr(research_cmd, "load_writing_output_package", load_output_call, raising=False)
+    monkeypatch.setattr(research_cmd, "load_writing_handoff", forbidden, raising=False)
+    monkeypatch.setattr(research_cmd, "load_dossier_package", forbidden)
+    monkeypatch.setattr(research_cmd, "validate_writing_output_package", forbidden, raising=False)
+    monkeypatch.setattr(research_cmd, "ArangoClient", forbidden)
+    monkeypatch.setattr(research_cmd, "KnowledgeRepository", forbidden)
 
     code = cli.main(["research", "validate", str(artifact)])
     payload, stderr = _read_cli_output(capsys)
@@ -2067,8 +2065,8 @@ def test_research_validate_rejects_oversized_standalone_artifact_before_strict_l
     def forbidden_loader(*_args, **_kwargs):
         pytest.fail("oversized standalone artifact must fail at the bounded type probe")
 
-    monkeypatch.setattr(cli, "load_writing_output_package", forbidden_loader, raising=False)
-    monkeypatch.setattr(cli, "load_writing_handoff", forbidden_loader, raising=False)
+    monkeypatch.setattr(research_cmd, "load_writing_output_package", forbidden_loader, raising=False)
+    monkeypatch.setattr(research_cmd, "load_writing_handoff", forbidden_loader, raising=False)
 
     code = cli.main(["research", "validate", str(artifact)])
     payload, _ = _read_cli_output(capsys)
