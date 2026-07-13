@@ -21,21 +21,21 @@
 
 | Поле | Значение |
 |------|----------|
-| Дата запуска (UTC) | 2026-07-12 |
-| Проверенный implementation commit | `d754f74` |
-| Real corpus identity | DB `knowledge_base`; 3 sources, 2 972 documents, 24 877 chunks, 422 topics, 11 communities; local `sentence-transformers/all-mpnet-base-v2`, 768 dimensions |
-| Real-corpus build | Два отдельных published-only запуска: `rev-20260712T154307Z-fc07b06b` за 8.37 s и `rev-20260712T154321Z-5eb0e834` за 5.78 s; оба `status=ok`, 36 candidates / 14 evidence, `dossier_key=research-topic-d003992b38b6`, одинаковый `content_digest=e5451e7f5c95a43d1ff6b83c9f3abbe286a0f7e63703dfc2f3f4d7261aaf483e` |
-| Real-corpus validation | `rev-20260712T154321Z-5eb0e834`: `status=valid`, 14/14 citations valid, 0.23 s |
-| Artifact sizes | `manifest.json` 107 539 bytes; `dossier.md` 9 695 bytes; `validation.json` 1 982 bytes |
-| Automated privacy projection | В manifest не найдены структурные `password`, `credentials`, `cookie`, `raw_payload`, archive/file/local/corpus path, provider key или token fields. Unstructured excerpts намеренно не объявляются автоматически очищенными и остаются предметом owner review |
-| Executable structural smoke | Child `rev-20260712T155157Z-766f6f37`; imported draft `writing-2c885f436d777046`; imported summary `writing-5cbb0e6b8fb1d7ee`; identical re-import reused IDs; unknown-citation и cross-kind cases отклонены целиком |
-| Full pytest + coverage | `530 passed, 1 skipped`; total coverage 83.58%; unit и live-Arango integration вместе, 74.67 s |
-| Isolated V5 integration | 10 passed; UUID test DB; canonical SHA-256 и counts всех document/edge collections совпали до и после полного pipeline |
+| Дата запуска (UTC) | 2026-07-13 |
+| Проверенный implementation commit | `80c73f2b3af0baca03558fa743128a7c378fe316` |
+| Real corpus identity | DB `knowledge_base`; 3 sources, 2 972 documents, 24 877 chunks, 422 topics, 2 authors, 0 works, 11 communities; effective artifact embedding model `hash-v1`, 8 dimensions |
+| Real-corpus build | Два отдельных published-only запуска сразу после полного CI-parity suite: `rev-20260713T234617Z-2344dd8f` за 5.441 s и `rev-20260713T234618Z-9d554152` за 1.808 s; оба `status=ok`, 36 candidates / 14 evidence, `dossier_key=research-topic-d003992b38b6`, одинаковые candidate/selected order и `content_digest=b5be84c701c3065b2016a66113998b57dbe0487bc77f8b9b1be9bb1c5f125a8d` |
+| Real-corpus validation | `rev-20260713T234618Z-9d554152`: `status=valid`, 14/14 citations valid, 0.229 s |
+| Artifact sizes | `manifest.json` 107 505 bytes; `dossier.md` 9 695 bytes; `validation.json` 1 982 bytes; revision directory `0700`, files `0600` |
+| Automated privacy projection | В manifest не найдены структурные `password`, `credentials`, `cookie`, `raw_payload`, archive/file/local/corpus path, provider key или token fields; owner DB aggregate до/после совпал. Unstructured excerpts намеренно не объявляются автоматически очищенными и остаются предметом owner review |
+| Executable structural smoke | Isolated V5 suite выполнил immutable child, оба `draft|summary` round-trip, idempotent re-import и whole-package rejection для unknown-citation/cross-kind/changed-evidence cases |
+| Full pytest + coverage | `564 passed, 1 skipped`; total branch coverage 83.94%; unit и live-Arango integration вместе, 55.67 s |
+| Isolated V5 integration | 10 passed за 22.84 s; UUID test DB; canonical SHA-256 и counts всех document/edge collections совпали до и после полного pipeline |
 | Contract gates | 6 focused Draft 2020-12/schema contract checks passed; полный suite также проверил runtime strict parsers и fixtures |
-| Static/docs/build gates | Ruff check PASS; Ruff format 72 files PASS; mypy 34 source files PASS; ADR check 10 PASS; Markdown links 317/86 PASS; visualization template PASS; wheel resource PASS; base package imports without MCP extra; `git diff --check` PASS |
+| Static/docs/build gates | Ruff check PASS; Ruff format 84 files PASS; mypy 43 source files PASS; ADR check 11 PASS; Markdown links 361/88 PASS; visualization template PASS; wheel resource PASS; base package imports without MCP extra; `git diff --check` PASS |
 | Независимая приёмка | T050–T053 не запускались; секции 1–4 и итоговое решение остаются `NOT RUN` |
 
-Первый диагностический запуск выполнялся одновременно с отдельным integration suite и получил client timeout; он не включён в performance measurement. Оба зачётных build запускались без параллельной DB-нагрузки, уложились в лимит 30 s и подтвердили одинаковый content digest; validation уложилась в лимит 5 s.
+Первый pre-fix диагностический запуск на `ddb6211` после тяжёлого integration suite получил client timeout: ArangoDB завершила lexical query за 16.43 s, но transport budget был жёстко ограничен 10 s, и валидный artifact не публиковался. В `80c73f2` обычный HTTP budget оставлен 10 s, а bounded AQL/cursor budget приведён к 30 s, совместимым с V5 performance gate. Оба зачётных build выше намеренно запускались сразу после полного suite, уложились в лимит 30 s и подтвердили одинаковый content digest и порядок; validation уложилась в лимит 5 s.
 
 ## 1. Dossier, citations и curation
 
