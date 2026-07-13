@@ -17,6 +17,7 @@ from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
 from knowledge_base.embeddings import build_embedding_provider
 from knowledge_base.ids import chunk_key, document_key, slugify, stable_key, topic_key
+from knowledge_base.language import detect_language
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.sources.contracts import NormalizedSourceItem
 
@@ -47,6 +48,22 @@ def parse_date(value: str | None) -> str | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=UTC)
     return parsed.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def finalize_import_run(
+    repository: KnowledgeRepository,
+    import_run: dict[str, Any],
+    *,
+    status: str,
+    counts: dict[str, Any],
+    error: str | None = None,
+) -> None:
+    """Persist a terminal import_run status so mid-flight crashes do not leave status=running."""
+    import_run["finished_at"] = utc_now()
+    import_run["status"] = status
+    import_run["counts"] = counts
+    import_run["error"] = error
+    repository.upsert("import_runs", import_run)
 
 
 def planned_chunk_count(items: list[NormalizedSourceItem]) -> int:
@@ -118,7 +135,7 @@ def upsert_topics(
                 {
                     "_key": key,
                     "label": tag,
-                    "language": "unknown",
+                    "language": detect_language(tag),
                     "description": "",
                     "confidence": 1.0,
                     "metadata": {"source": method, "source_key": source_key},

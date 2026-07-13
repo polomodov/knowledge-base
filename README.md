@@ -55,9 +55,11 @@ Raw-данные, нормализованные данные и generated outpu
 - `kb export jsonl` для generated exports в gitignored data zone.
 - `kb export graph` для полного doc-level графа и topic co-occurrence в node-link JSON/GraphML.
 - `kb viz build` для самодостаточного offline HTML: карта сообществ/топиков, таймлайн и ego-граф документов без CDN, сервера или npm runtime.
-- Unit и integration tests (включая проверку на живой ArangoDB), CI (ruff + mypy + pytest) и SonarCloud.
+- Unit и integration tests (включая проверку на живой ArangoDB) и CI (ruff + mypy + pytest + coverage).
 
 ## Быстрый старт
+
+Свежий clone по умолчанию использует `hash`-эмбеддинги (dim 8) для offline smoke; для реальной модели переключите `[embedding]` и выполните локальный `kb index rebuild --target embeddings`.
 
 Установить зависимости и поднять runtime:
 
@@ -341,6 +343,7 @@ Integration-тесты работают против выделенной БД `
 - [docs/visualization.md](docs/visualization.md) - команды, схемы JSON/GraphML/HTML, деградации и контрольные размеры v4.
 - [docs/viz-smoke-checklist.md](docs/viz-smoke-checklist.md) - ручная offline-проверка трёх визуальных видов.
 - [docs/roadmap.md](docs/roadmap.md) - этапы развития проекта.
+- [docs/audit-followup-plan.md](docs/audit-followup-plan.md) - follow-up аудит после v4/v5/MCP: волны PR и статус.
 - [docs/adr/README.md](docs/adr/README.md) - журнал архитектурных решений и ADR-процесс.
 - [specs/001-production-knowledge-pipeline/spec.md](specs/001-production-knowledge-pipeline/spec.md) - Spec Kit feature для ArangoDB-centered production pipeline.
 - [specs/002-tellmeabout-tech-source/spec.md](specs/002-tellmeabout-tech-source/spec.md) - Spec Kit feature для первого реального источника.
