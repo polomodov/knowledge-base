@@ -91,6 +91,8 @@ def test_lexical_scope_precedes_ranking_and_returns_exact_chunk() -> None:
         "@published_to_exclusive == null OR doc.published_at < @published_to_exclusive",
     )
     assert max(call["query"].index(value) for value in filters) < call["query"].index("SORT")
+    assert 'TOKENS(@query, "text_en")' in call["query"]
+    assert 'TOKENS(@query, "text_ru")' in call["query"]
 
 
 def test_semantic_search_bounds_overfetch_then_scopes_hydration_and_exact_cosine() -> None:
@@ -110,8 +112,11 @@ def test_semantic_search_bounds_overfetch_then_scopes_hydration_and_exact_cosine
     )
     request = ResearchRequest(query="synthetic", candidate_limit=2, evidence_limit=2)
 
-    results = semantic_chunk_candidates(_as_repository(repository), request, provider=FakeProvider(), overfetch_factor=3)
+    results, warnings = semantic_chunk_candidates(
+        _as_repository(repository), request, provider=FakeProvider(), overfetch_factor=3
+    )
 
+    assert warnings == ()
     assert [row["chunk"]["_key"] for row in results] == [
         "research-published-a-c0",
         "research-published-b-c0",
@@ -124,6 +129,34 @@ def test_semantic_search_bounds_overfetch_then_scopes_hydration_and_exact_cosine
     hydration = _call(repository, "research:hydrate_chunk_candidates")["bind_vars"]
     assert hydration["statuses"] == ["published"]
     assert set(hydration["chunk_keys"]) == {row["chunk_key"] for row in ann}
+
+
+def test_semantic_ann_failure_uses_exact_rescore_fallback_and_warns() -> None:
+    repository = FakeRepository(
+        {
+            "research:semantic_chunk_candidates": ArangoError("pre-filtered ANN unavailable"),
+            "research:scoped_semantic_fallback": [
+                {"chunk_key": "research-published-b-c0", "embedding": [0.8, 0.6]},
+                {"chunk_key": "research-published-a-c0", "embedding": [1.0, 0.0]},
+            ],
+            "research:hydrate_chunk_candidates": [
+                _hydrated_row("research-published-a-c0", embedding=[1.0, 0.0]),
+                _hydrated_row("research-published-b-c0", embedding=[0.8, 0.6]),
+            ],
+        }
+    )
+    request = ResearchRequest(query="synthetic", candidate_limit=2, evidence_limit=2)
+
+    results, warnings = semantic_chunk_candidates(
+        _as_repository(repository), request, provider=FakeProvider(), overfetch_factor=3
+    )
+
+    assert warnings == ("semantic_ann_unavailable_used_exact_rescore_fallback",)
+    assert [row["chunk"]["_key"] for row in results] == [
+        "research-published-a-c0",
+        "research-published-b-c0",
+    ]
+    assert _call(repository, "research:scoped_semantic_fallback")["bind_vars"]["batch_size"] == 500
 
 
 def test_hydration_preserves_exact_provenance_and_rejects_wrong_ownership() -> None:

@@ -5,6 +5,20 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class NormalizedWorkRef:
+    """A work/book referenced by a source item (extractive, not LLM-inferred)."""
+
+    key: str
+    title: str
+    work_type: str = "book"
+    confidence: float = 0.9
+    evidence: str = ""
+    authors: list[str] = field(default_factory=list)
+    published_at: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class NormalizedSourceItem:
     canonical_id: str
     title: str
@@ -15,6 +29,7 @@ class NormalizedSourceItem:
     language: str
     author: str | None
     tags: list[str]
+    works: list[NormalizedWorkRef] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 

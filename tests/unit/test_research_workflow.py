@@ -448,9 +448,9 @@ def _patch_build_reads(
         request: ResearchRequest,
         *,
         provider: object,
-    ) -> list[JsonObject]:
+    ) -> tuple[list[JsonObject], tuple[str, ...]]:
         calls["semantic"] = (repository, request, provider)
-        return semantic
+        return semantic, ()
 
     def context_call(
         repository: object,
