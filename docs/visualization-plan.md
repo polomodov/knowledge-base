@@ -6,7 +6,7 @@
 
 ## Статус: V4-эпик завершён ✅
 
-Python/CLI/HTML-реализация V4-1…V4-6 находится в `codex/v4-visualizations`; unit, seeded integration, real-corpus build, JSON/GraphML parse round-trip, wheel resource check, ruff, mypy, ADR и Node template gates зелёные. 12 июля 2026 года владелец подтвердил итоговый ручной acceptance артефактов. [viz-smoke-checklist.md](viz-smoke-checklist.md) сохраняется как воспроизводимая процедура регрессионной проверки browser/tool matrix.
+Python/CLI/HTML-реализация V4-1…V4-6 смерджена в `main` через [PR #42](https://github.com/polomodov/knowledge-base/pull/42) (`990a3cb`); unit, seeded integration, real-corpus build, JSON/GraphML parse round-trip, wheel resource check, ruff, mypy, ADR и Node template gates зелёные. 12 июля 2026 года владелец подтвердил итоговый ручной acceptance артефактов. [viz-smoke-checklist.md](viz-smoke-checklist.md) сохраняется как воспроизводимая процедура регрессионной проверки browser/tool matrix.
 
 ## Выбранная форма (решение пользователя)
 
@@ -98,4 +98,4 @@ Python/CLI/HTML-реализация V4-1…V4-6 находится в `codex/v4
 
 ## Метод
 
-Выполнение: единая feature-ветка с логическими коммитами V4-1…V4-6 и один gh PR против актуального `main`; полный гейт перед пушем; состязательное мультиагентное ревью изменений перед мержем. Все «measured»-числа — только из реальных замеров (read-only), расхождения замеров решаются повторным независимым замером. Итоговый ручной acceptance подтверждён владельцем 12 июля 2026 года; точечный browser/tool-чеклист остаётся процедурой для последующих регрессионных прогонов.
+Выполнение прошло в единой feature-ветке с логическими коммитами V4-1…V4-6 и завершилось merge [PR #42](https://github.com/polomodov/knowledge-base/pull/42) в `main` после полного гейта и состязательного мультиагентного ревью. Все «measured»-числа получены из реальных read-only замеров; расхождения перепроверялись независимым замером. Итоговый ручной acceptance подтверждён владельцем 12 июля 2026 года; точечный browser/tool-чеклист остаётся процедурой для последующих регрессионных прогонов.

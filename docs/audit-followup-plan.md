@@ -1,10 +1,12 @@
 # Follow-up аудит (июль 2026): план волн
 
-**База:** `main` после GraphRAG / viz / MCP / v5 runtime (`95cdb90` и новее).
+**База планирования:** `main` после GraphRAG / viz / MCP / v5 runtime (`95cdb90` и новее).
 
 **Режим:** узкие PR-волны; merge в `main` по одной.
 
-**V5 acceptance (N1):** в этом эпике только **подготовка** чеклистов/доков; `acceptance.md` остаётся `NOT RUN`; feature 007 не Complete.
+**Статус эпика:** завершён 13 июля 2026 года. Все волны W1–W14 смерджены в `main`; последняя из них вошла через PR #58 (`ddb6211`). Активных implementation-волн в этом трекере не осталось.
+
+**V5 acceptance (N1):** эпик выполнил только **подготовку** чеклистов/доков. W14 не заменяет независимую проверку: `acceptance.md` остаётся `NOT RUN`, T050–T053 не отмечены выполненными, а feature 007 не имеет статуса Complete.
 
 Предыдущий remediation (46 находок) закрыт — см. [implementation-audit-plan.md](implementation-audit-plan.md).
 
@@ -12,26 +14,28 @@
 
 | Волна | Тема | Ветка / PR | Статус |
 |------:|------|------------|--------|
-| W1 | Docs sync (AGENTS, Sonar claim) | [`docs/agents-docs-sync`](https://github.com/polomodov/knowledge-base/pull/45) | open |
-| W2 | CI `--vector-index` | [`fix/ci-vector-index`](https://github.com/polomodov/knowledge-base/pull/46) | open |
-| W3 | Retrieval degraded honesty | [`fix/retrieval-degraded-honesty`](https://github.com/polomodov/knowledge-base/pull/47) | open |
-| W4 | Run lifecycle `error` | [`fix/run-lifecycle-error-status`](https://github.com/polomodov/knowledge-base/pull/48) | open |
-| W5 | Stale derived indexes | [`fix/stale-derived-index-warnings`](https://github.com/polomodov/knowledge-base/pull/49) | open |
-| W6 | RU BM25 analyzer | [`fix/arangosearch-ru-analyzer`](https://github.com/polomodov/knowledge-base/pull/51) | open |
-| W7 | Language + Medium zip safety | [`fix/ingest-language-and-zip-safety`](https://github.com/polomodov/knowledge-base/pull/52) | open |
-| W8 | Embedding ops profile | [`fix/embedding-ops-profile`](https://github.com/polomodov/knowledge-base/pull/50) | open |
-| W9 | Book-cube works extraction | [`feat/book-cube-works-extraction`](https://github.com/polomodov/knowledge-base/pull/53) | merged |
-| W10 | CLI module split | [`refactor/cli-module-split`](https://github.com/polomodov/knowledge-base/pull/58) | open |
-| W11 | Research module boundaries | [`refactor/research-module-boundaries`](https://github.com/polomodov/knowledge-base/pull/57) | open |
-| W12 | Viz public API + retrieval facade | [`refactor/viz-retrieval-boundaries`](https://github.com/polomodov/knowledge-base/pull/55) | merged |
-| W13 | MCP/processed boundary docs | [`docs/mcp-research-boundary`](https://github.com/polomodov/knowledge-base/pull/54) | merged |
-| W14 | V5 acceptance prep only | [`docs/v5-acceptance-prep`](https://github.com/polomodov/knowledge-base/pull/56) | this PR |
+| W1 | Docs sync (AGENTS, Sonar claim) | [`docs/agents-docs-sync` / PR #45](https://github.com/polomodov/knowledge-base/pull/45) | ✅ merged (`9415bcd`) |
+| W2 | CI `--vector-index` | [`fix/ci-vector-index` / PR #46](https://github.com/polomodov/knowledge-base/pull/46) | ✅ merged (`d7770ea`) |
+| W3 | Retrieval degraded honesty | [`fix/retrieval-degraded-honesty` / PR #47](https://github.com/polomodov/knowledge-base/pull/47) | ✅ merged (`ca99b0f`) |
+| W4 | Run lifecycle `error` | [`fix/run-lifecycle-error-status` / PR #48](https://github.com/polomodov/knowledge-base/pull/48) | ✅ merged (`62d0860`) |
+| W5 | Stale derived indexes | [`fix/stale-derived-index-warnings` / PR #49](https://github.com/polomodov/knowledge-base/pull/49) | ✅ merged (`098e782`) |
+| W6 | RU BM25 analyzer | [`fix/arangosearch-ru-analyzer` / PR #51](https://github.com/polomodov/knowledge-base/pull/51) | ✅ merged (`db93076`) |
+| W7 | Language + Medium zip safety | [`fix/ingest-language-and-zip-safety` / PR #52](https://github.com/polomodov/knowledge-base/pull/52) | ✅ merged (`a08eb1c`) |
+| W8 | Embedding ops profile | [`fix/embedding-ops-profile` / PR #50](https://github.com/polomodov/knowledge-base/pull/50) | ✅ merged (`719d6e9`) |
+| W9 | Book-cube works extraction | [`feat/book-cube-works-extraction` / PR #53](https://github.com/polomodov/knowledge-base/pull/53) | ✅ merged (`ae9b1d9`) |
+| W10 | CLI module split | [`refactor/cli-module-split` / PR #58](https://github.com/polomodov/knowledge-base/pull/58) | ✅ merged (`ddb6211`) |
+| W11 | Research module boundaries | [`refactor/research-module-boundaries` / PR #57](https://github.com/polomodov/knowledge-base/pull/57) | ✅ merged (`0beb981`) |
+| W12 | Viz public API + retrieval facade | [`refactor/viz-retrieval-boundaries` / PR #55](https://github.com/polomodov/knowledge-base/pull/55) | ✅ merged (`0dd8841`) |
+| W13 | MCP/processed boundary docs | [`docs/mcp-research-boundary` / PR #54](https://github.com/polomodov/knowledge-base/pull/54) | ✅ merged (`a1789dd`) |
+| W14 | V5 acceptance prep only | [`docs/v5-acceptance-prep` / PR #56](https://github.com/polomodov/knowledge-base/pull/56) | ✅ merged (`81d3cc9`) |
 
-## W14 (prep only) — что закрывает N1 как prep
+## W14 (prep only) — зафиксированный результат
 
 - В доках явно: v5 runtime + automated gates ready; T050–T053 ещё pending.
 - Чеклист reviewer: [acceptance.md](../specs/007-writer-research-workflow/acceptance.md) §1–4 + [quickstart.md](../specs/007-writer-research-workflow/quickstart.md).
 - **Не** входит: запись PASS/FAIL в `acceptance.md`, `[x]` на T050–T053, status Complete для feature 007.
+
+Независимая приёмка остаётся следующим отдельным этапом после закрытого follow-up эпика, а не его незавершённой волной.
 
 ## Out of scope
 

@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-06
 
-**Status**: Draft
+**Status**: Complete
 
 **Input**: User description: "Import my Medium account export from Downloads into the knowledge base as a reproducible source adapter."
 
