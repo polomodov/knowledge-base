@@ -10,12 +10,14 @@ from xml.etree import ElementTree
 
 from knowledge_base.config import Settings
 from knowledge_base.ids import sha256_text, slugify, stable_key
+from knowledge_base.language import detect_language
 from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
 from knowledge_base.sources.ingest_core import (
     empty_counts,
+    finalize_import_run,
     parse_date,
     planned_chunk_count,
     upsert_author,
@@ -139,14 +141,24 @@ def ingest_tellmeabout_tech(
     }
     repository.upsert("import_runs", import_run)
 
-    for item in parsed.items:
-        counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
-
-    import_run["finished_at"] = utc_now()
-    import_run["status"] = "ok"
-    import_run["counts"] = counts
-    import_run["metadata"]["skipped"] = parsed.skipped
-    repository.upsert("import_runs", import_run)
+    failure: Exception | None = None
+    try:
+        for item in parsed.items:
+            counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
+        import_run["metadata"]["skipped"] = parsed.skipped
+        finalize_import_run(repository, import_run, status="ok", counts=counts)
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        if failure is not None and import_run["status"] == "running":
+            finalize_import_run(
+                repository,
+                import_run,
+                status="error",
+                counts=counts,
+                error=f"{type(failure).__name__}: {failure}",
+            )
 
     return {
         "status": "ok",
@@ -290,14 +302,15 @@ def _rss_item(item: ElementTree.Element) -> NormalizedSourceItem:
     author = _child_text(item, "creator") or _child_text(item, "author")
     published_at = parse_date(_child_text(item, "pubDate"))
     canonical_id = canonical_id_from_url_or_guid(url, guid)
+    body = html_to_text(content)
     return NormalizedSourceItem(
         canonical_id=canonical_id,
         title=title,
-        text=html_to_text(content),
+        text=body,
         url=url,
         guid=guid,
         published_at=published_at,
-        language="unknown",
+        language=detect_language(body),
         author=author,
         tags=tags,
         metadata={"guid": guid, "feed_item_type": "rss"},
@@ -318,14 +331,15 @@ def _atom_entry(entry: ElementTree.Element) -> NormalizedSourceItem:
     author = _child_text(author_node, "name") if author_node is not None else None
     published_at = parse_date(_child_text(entry, "published") or _child_text(entry, "updated"))
     canonical_id = canonical_id_from_url_or_guid(url, guid)
+    body = html_to_text(content)
     return NormalizedSourceItem(
         canonical_id=canonical_id,
         title=title,
-        text=html_to_text(content),
+        text=body,
         url=url,
         guid=guid,
         published_at=published_at,
-        language="unknown",
+        language=detect_language(body),
         author=author,
         tags=[tag for tag in tags if tag],
         metadata={"guid": guid, "feed_item_type": "atom"},

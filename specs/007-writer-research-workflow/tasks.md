@@ -141,6 +141,8 @@
 - [X] T048 [P] Перевести future-tense examples в исполнимый acceptance flow и сверить все команды/fixtures с runtime в `specs/007-writer-research-workflow/quickstart.md`
 - [X] T049 Запустить unit/integration/coverage, ruff, format, mypy, contract, ADR, link и `git diff --check` gates и записать automated evidence, не меняя independent results, в `specs/007-writer-research-workflow/acceptance.md`
 - [ ] T050 Независимо выполнить dossier/citation/curation acceptance и записать reviewer, artifact IDs, evidence и result секции 1 в `specs/007-writer-research-workflow/acceptance.md`
+
+> **Reviewer checklist (prep):** пошаговый независимый gate — в [acceptance.md](acceptance.md) (секции 1–4); исполнимые команды и fixtures — в [quickstart.md](quickstart.md). W14 только готовит ссылки; **не** отмечать `[x]` на T050–T053 и **не** менять Result в `acceptance.md` до реального независимого прогона.
 - [ ] T051 Независимо выполнить draft round-trip acceptance и записать reviewer, handoff/package/writing IDs, evidence и result секции 2 в `specs/007-writer-research-workflow/acceptance.md`
 - [ ] T052 Независимо выполнить summary round-trip acceptance, включая cross-kind negative case, и записать evidence/result секции 3 в `specs/007-writer-research-workflow/acceptance.md`
 - [ ] T053 Независимо выполнить privacy/path-safety acceptance, затем при четырёх PASS заполнить итоговое решение секции 4 в `specs/007-writer-research-workflow/acceptance.md`

@@ -119,4 +119,6 @@ V5 ведётся как Spec Kit feature [007 — Writer/Research Workflow](../
 
 **Аудит реализации (июль 2026) полностью отработан:** все 46 находок устранены и смерджены в `main` — единый `topic_key`, провенанс и честный дедуп (`created_at`, корректные счётчики), качество retrieval (дедуп выдачи, корректный фьюжн скора, реальное использование vector index, устранение N+1), безопасность и приватность (учётные данные, валидация fetch-URL/SSRF, path traversal, зона экспорта), инженерная гигиена (общий `ingest_core`, ruff + mypy + pytest-cov, CI против ArangoDB service-container) и робастность парсеров источников. Подробности и трекер MR - в [docs/implementation-audit-plan.md](implementation-audit-plan.md).
 
+**Follow-up аудит (после v4/v5/MCP):** открытые находки закрываются узкими PR-волнами — трекер [docs/audit-followup-plan.md](audit-followup-plan.md). W14 готовит независимую приёмку V5, но **не** записывает PASS в `acceptance.md`.
+
 Следующий фокус — независимая проверка dossier/citations/curation, `draft`, `summary` и privacy/path safety для V5; до её записи feature остаётся непринятой.
