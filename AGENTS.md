@@ -11,7 +11,7 @@
 - **v1–v2** — реализованы: ArangoDB pipeline, fixture и source adapters (`tellmeabout-tech`, `medium-export`, `book-cube`, `book-cube-archive`).
 - **v3** — реализованы: BM25/semantic/hybrid search, GraphRAG local/global, embeddings, derived indexes, read-only MCP (`kb-mcp`).
 - **v4** — реализованы: `kb export graph`, `kb viz build` (offline HTML).
-- **v5** — runtime и automated gates готовы (`kb research build|validate|curate|handoff|import-output`); **независимая приёмка T050–T053 ещё не проводилась** (`acceptance.md` остаётся `NOT RUN`; feature 007 не Complete).
+- **v5** — runtime реализован (`kb research build|validate|curate|handoff|import-output`); automated gates зелёные; **независимая приёмка T050–T053 ещё не проводилась** (`acceptance.md` остаётся `NOT RUN`; feature 007 не Complete).
 
 Не переimplementируйте существующие подсистемы. Перед работой читайте `README.md`, [docs/roadmap.md](docs/roadmap.md) и актуальный код в `src/knowledge_base/`. Трекер follow-up аудита: [docs/audit-followup-plan.md](docs/audit-followup-plan.md).
 
@@ -50,13 +50,15 @@ ADR contract:
 
 ## Ожидаемые зоны данных
 
-Когда в проекте появятся реальные данные, придерживайтесь такого разделения:
+Разделение зон сохраняется:
 
 ```text
-data/raw/         # исходные экспорты и снимки источников
-data/processed/   # нормализованные документы и метаданные
-data/generated/   # summaries, drafts, reports, LLM outputs
+data/raw/         # исходные экспорты и снимки источников (gitignored)
+data/processed/   # зарезервировано; нормализованные данные живут в ArangoDB (SSOT)
+data/generated/   # exports, viz HTML, research dossiers / handoffs / outputs (gitignored)
 ```
+
+**Processed SSOT — ArangoDB**, а не `data/processed/`: нормализованные documents/chunks и derived indexes живут в базе. Каталог `data/processed/` зарезервирован на будущее и не является вторым источником истины. Research/writing artifacts пишет file CLI в `data/generated/research/`; MCP остаётся read-only (search/document/graph/health) и не публикует dossier packages — см. [ADR 0011](docs/adr/0011-clarify-mcp-vs-research-cli-boundary-and-processed-ssot-in-arangodb.md).
 
 Если данные нельзя безопасно хранить в git, добавьте только структуру, примеры или инструкции, а сами данные держите вне репозитория.
 

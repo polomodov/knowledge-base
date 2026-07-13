@@ -6,16 +6,18 @@ database = "knowledge_base"
 user = "root"
 password_env = "KB_ARANGO_PASSWORD"
 
+# Default [embedding]: deterministic hash / dim 8 for offline smoke and CI (zero deps, no model download).
+# For production semantic quality, switch to the commented local profile below (or env KB_EMBEDDING_*).
 [embedding]
 # provider: "hash" (default) is the built-in deterministic, offline, zero-dependency model.
 # "local" uses a real sentence-transformers model; install it yourself with
 # `uv pip install sentence-transformers` (kept out of the locked deps on purpose).
 provider = "hash"
 dimension = 8
-# For provider = "local", set the model and a dimension that matches it, e.g.:
+# Production / real-corpus profile (uncomment and comment out hash defaults above):
 # provider = "local"
-# model = "sentence-transformers/all-MiniLM-L6-v2"
-# dimension = 384
+# model = "sentence-transformers/all-mpnet-base-v2"
+# dimension = 768
 # After changing provider/model/dimension, re-embed the existing corpus (no re-ingest needed):
 #   kb index rebuild --target embeddings   # recompute vectors + rebuild index; clears stale similarity edges
 #   kb index rebuild --target related      # rebuild item_related_to_item on the new embeddings

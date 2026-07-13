@@ -20,12 +20,12 @@
 | W6 | RU BM25 analyzer | [`fix/arangosearch-ru-analyzer`](https://github.com/polomodov/knowledge-base/pull/51) | open |
 | W7 | Language + Medium zip safety | [`fix/ingest-language-and-zip-safety`](https://github.com/polomodov/knowledge-base/pull/52) | open |
 | W8 | Embedding ops profile | [`fix/embedding-ops-profile`](https://github.com/polomodov/knowledge-base/pull/50) | open |
-| W9 | Book-cube works extraction | [`feat/book-cube-works-extraction`](https://github.com/polomodov/knowledge-base/pull/53) | open |
-| W10 | CLI module split | `refactor/cli-module-split` | pending |
-| W11 | Research module boundaries | `refactor/research-module-boundaries` | pending |
-| W12 | Viz public API + retrieval facade | `refactor/viz-retrieval-boundaries` | pending |
-| W13 | MCP/processed boundary docs | [`docs/mcp-research-boundary`](https://github.com/polomodov/knowledge-base/pull/54) | open |
-| W14 | V5 acceptance prep only | this PR (`docs/v5-acceptance-prep`) | this PR |
+| W9 | Book-cube works extraction | [`feat/book-cube-works-extraction`](https://github.com/polomodov/knowledge-base/pull/53) | merged |
+| W10 | CLI module split | [`refactor/cli-module-split`](https://github.com/polomodov/knowledge-base/pull/58) | open |
+| W11 | Research module boundaries | [`refactor/research-module-boundaries`](https://github.com/polomodov/knowledge-base/pull/57) | open |
+| W12 | Viz public API + retrieval facade | [`refactor/viz-retrieval-boundaries`](https://github.com/polomodov/knowledge-base/pull/55) | merged |
+| W13 | MCP/processed boundary docs | [`docs/mcp-research-boundary`](https://github.com/polomodov/knowledge-base/pull/54) | merged |
+| W14 | V5 acceptance prep only | [`docs/v5-acceptance-prep`](https://github.com/polomodov/knowledge-base/pull/56) | this PR |
 
 ## W14 (prep only) — что закрывает N1 как prep
 

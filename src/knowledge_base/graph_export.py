@@ -20,11 +20,15 @@ from knowledge_base.visualizing import (
     topic_cooccurrence,
 )
 from knowledge_base.viz_builder import (
-    _visualization_documents,
-    _visualization_metadata,
     assert_visualization_ready,
     safe_public_url,
+    visualization_documents,
+    visualization_metadata,
 )
+
+# Back-compat aliases for tests and older call sites.
+_visualization_documents = visualization_documents
+_visualization_metadata = visualization_metadata
 
 GRAPH_SCHEMA_VERSION = "1"
 _GRAPHML_NS = "http://graphml.graphdrawing.org/xmlns"

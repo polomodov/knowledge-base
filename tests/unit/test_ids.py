@@ -1,4 +1,4 @@
-from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key
+from knowledge_base.ids import chunk_key, document_key, sha256_text, slugify, stable_key, topic_key, work_key
 from knowledge_base.sources import book_cube
 
 
@@ -48,3 +48,27 @@ def test_topic_key_is_shared_across_adapters() -> None:
 def test_topic_key_empty_label_falls_back() -> None:
     assert topic_key("#") == "topic"
     assert topic_key("   ") == "topic"
+
+
+def test_work_key_ascii_includes_collision_safe_suffix() -> None:
+    thinking = work_key("Thinking in Systems")
+    assert thinking.startswith("thinking-in-systems-")
+    assert thinking == work_key("Thinking in Systems")
+    graphs = work_key("Knowledge Graphs for Notes")
+    assert graphs.startswith("knowledge-graphs-for-notes-")
+
+
+def test_work_key_ascii_avoids_punctuation_collisions() -> None:
+    csharp = work_key("C# in Depth")
+    plain = work_key("C in Depth")
+    assert csharp.startswith("c-in-depth-")
+    assert plain.startswith("c-in-depth-")
+    assert csharp != plain
+    assert work_key("C++ Primer") != work_key("C Primer")
+
+
+def test_work_key_non_ascii_is_stable() -> None:
+    key = work_key("Системное мышление")
+    assert key.startswith("work-")
+    assert work_key("Системное мышление") == key
+    assert work_key("Другая книга") != key

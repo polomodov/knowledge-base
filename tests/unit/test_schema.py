@@ -10,6 +10,17 @@ def test_text_view_indexes_body_once_via_chunks() -> None:
     assert set(links["chunks"]["fields"]) == {"text"}
 
 
+def test_text_view_uses_bilingual_analyzers() -> None:
+    # W6 / F4: full-text fields are indexed with both text_en and text_ru.
+    links = _text_view_body()["links"]
+    expected = ["text_en", "text_ru"]
+    assert links["documents"]["fields"]["title"]["analyzers"] == expected
+    assert links["chunks"]["fields"]["text"]["analyzers"] == expected
+    assert links["topics"]["fields"]["label"]["analyzers"] == expected
+    assert links["topics"]["fields"]["description"]["analyzers"] == expected
+    assert links["works"]["fields"]["title"]["analyzers"] == expected
+
+
 class _FakeClient:
     def __init__(self) -> None:
         self.index_bodies: list[tuple[str, dict]] = []
