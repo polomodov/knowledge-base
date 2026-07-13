@@ -11,11 +11,13 @@ from typing import Any
 
 from knowledge_base.config import Settings
 from knowledge_base.ids import sha256_file, sha256_stream, sha256_text, slugify, stable_key, topic_key
+from knowledge_base.language import detect_language
 from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
 from knowledge_base.sources.ingest_core import (
+    finalize_import_run,
     empty_counts,
     parse_date,
     planned_chunk_count,
@@ -188,13 +190,23 @@ def ingest_book_cube(
     }
     repository.upsert("import_runs", import_run)
 
-    for item in parsed.items:
-        counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
-
-    import_run["finished_at"] = utc_now()
-    import_run["status"] = "ok"
-    import_run["counts"] = counts
-    repository.upsert("import_runs", import_run)
+    failure: Exception | None = None
+    try:
+        for item in parsed.items:
+            counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
+        finalize_import_run(repository, import_run, status="ok", counts=counts)
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        if failure is not None and import_run["status"] == "running":
+            finalize_import_run(
+                repository,
+                import_run,
+                status="error",
+                counts=counts,
+                error=f"{type(failure).__name__}: {failure}",
+            )
 
     return {
         "status": "ok",
@@ -251,13 +263,23 @@ def ingest_book_cube_archive(
     }
     repository.upsert("import_runs", import_run)
 
-    for item in parsed.items:
-        counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
-
-    import_run["finished_at"] = utc_now()
-    import_run["status"] = "ok"
-    import_run["counts"] = counts
-    repository.upsert("import_runs", import_run)
+    failure: Exception | None = None
+    try:
+        for item in parsed.items:
+            counts = _ingest_item(repository, settings, item, raw, import_run_key, now, counts)
+        finalize_import_run(repository, import_run, status="ok", counts=counts)
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        if failure is not None and import_run["status"] == "running":
+            finalize_import_run(
+                repository,
+                import_run,
+                status="error",
+                counts=counts,
+                error=f"{type(failure).__name__}: {failure}",
+            )
 
     return {
         "status": "ok",
@@ -489,7 +511,7 @@ def _parse_public_html(payload: str) -> ParsedSourceFeed:
                 url=message.get("url") or f"{CHANNEL_URL}/{message_id}",
                 guid=data_post,
                 published_at=message.get("published_at"),
-                language="unknown",
+                language=detect_language(text),
                 author=None,
                 tags=tags,
                 metadata={"message_id": message_id, "data_post": data_post, "snapshot_type": "telegram_html"},
@@ -536,7 +558,7 @@ def _parse_json_export(payload: str, *, archive: ArchivePayload | None = None) -
                 url=f"{CHANNEL_URL}/{message_id}",
                 guid=guid,
                 published_at=parse_date(message.get("date")),
-                language="unknown",
+                language=detect_language(text),
                 author=None,
                 tags=tags,
                 metadata=metadata,

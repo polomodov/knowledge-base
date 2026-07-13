@@ -5,6 +5,7 @@ import pytest
 
 from knowledge_base.sources.medium_export import (
     MediumArchiveReadError,
+    _is_safe_zip_member_name,
     _MediumPostHTMLParser,
     canonical_id_from_post_id,
     medium_post_id_from_url,
@@ -161,3 +162,28 @@ def test_archive_errors_have_cli_payload(tmp_path: Path) -> None:
     with pytest.raises(MediumArchiveReadError) as export:
         read_medium_archive_payload(invalid)
     assert export.value.to_payload()["error"] == "invalid_medium_export"
+
+
+def test_is_safe_zip_member_name_rejects_traversal_absolute_and_backslash() -> None:
+    # Same rules as book_cube attachment safety (finding F13): no zip-slip vectors.
+    assert _is_safe_zip_member_name("posts/ok.html") is True
+    assert _is_safe_zip_member_name("Medium Export/README.html") is True
+    assert _is_safe_zip_member_name("../etc/passwd") is False
+    assert _is_safe_zip_member_name("posts/../../secret.html") is False
+    assert _is_safe_zip_member_name("/etc/passwd") is False
+    assert _is_safe_zip_member_name("posts\\evil.html") is False
+    assert _is_safe_zip_member_name("C:/Users/me/secret.html") is False
+    assert _is_safe_zip_member_name("") is False
+
+
+def test_read_medium_archive_zip_rejects_unsafe_member_names(tmp_path: Path) -> None:
+    zip_path = tmp_path / "unsafe-medium.zip"
+    with ZipFile(zip_path, "w") as archive:
+        archive.writestr("README.html", "<html></html>")
+        archive.writestr("posts/ok-post-abc123abc123.html", "<html><body>ok</body></html>")
+        archive.writestr("../escape.html", "<html></html>")
+
+    with pytest.raises(MediumArchiveReadError) as error:
+        read_medium_archive_payload(zip_path)
+    assert error.value.to_payload()["error"] == "invalid_medium_export"
+    assert "Unsafe zip member path" in error.value.to_payload()["reason"]

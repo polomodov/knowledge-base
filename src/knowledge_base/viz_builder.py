@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 from knowledge_base.config import REPO_ROOT
 from knowledge_base.constants import RELATED_EDGE_METHOD
 from knowledge_base.exporting import _export_zone_warning
+from knowledge_base.freshness import derived_index_stale_messages
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import health_report
 from knowledge_base.visualizing import (
@@ -458,21 +459,7 @@ def _visualization_metadata(
                 ),
             }
         )
-    related_run = index_runs.get("related")
-    communities_run = index_runs.get("communities")
-    if (
-        related_run
-        and communities_run
-        and related_run.get("finished_at")
-        and communities_run.get("finished_at")
-        and communities_run["finished_at"] < related_run["finished_at"]
-    ):
-        warnings.append(
-            {
-                "code": "communities_older_than_related",
-                "message": "Communities are older than the similarity graph; run `kb index rebuild --target communities`.",
-            }
-        )
+    warnings.extend(derived_index_stale_messages(index_runs))
     models = diagnostics["embedding_models"]
     return {
         "built_at": built_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),

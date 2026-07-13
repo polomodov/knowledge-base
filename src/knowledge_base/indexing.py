@@ -22,6 +22,22 @@ from knowledge_base.schema import bootstrap_schema, ensure_vector_index
 _INDEX_TARGETS = {"all", "text", "vector", "graph", "related", "embeddings", "communities"}
 
 
+def _finalize_index_run(
+    repository: KnowledgeRepository,
+    run: dict[str, Any],
+    *,
+    status: str,
+    counts: dict[str, Any],
+    error: str | None = None,
+) -> None:
+    """Persist a terminal index_run status so mid-flight crashes do not leave status=running."""
+    run["finished_at"] = _now()
+    run["status"] = status
+    run["counts"] = counts
+    run["error"] = error
+    repository.upsert("index_runs", run)
+
+
 def rebuild_indexes(
     repository: KnowledgeRepository,
     *,
@@ -44,43 +60,56 @@ def rebuild_indexes(
         "error": None,
     }
     repository.upsert("index_runs", run)
-    bootstrap = bootstrap_schema(repository.client, embedding_dimension=embedding_dimension)
-    counts: dict[str, Any] = {
-        "documents": repository.count("documents"),
-        "chunks": repository.count("chunks"),
-        "text_indexed": repository.count("chunks") if target in {"all", "text"} else 0,
-        "vectors_indexed": _count_chunks_with_embeddings(repository) if target in {"all", "vector"} else 0,
-        "graph_edges_checked": sum(repository.count(edge) for edge in _graph_edges()) if target in {"all", "graph"} else 0,
-    }
-    # Related-edge building is its own explicit target, not part of "all": it is O(N^2) over the
-    # corpus and mutates the graph, so it should be run deliberately (`index rebuild --target related`),
-    # not implicitly on every rebuild.
-    if target == "related":
-        related = build_related_edges(repository)
-        counts["related_pairs"] = related["pairs"]
-        counts["related_edges_created"] = related["created"]
-        counts["related_edges_removed"] = related["removed"]
-    # Re-embedding is its own explicit target (never part of "all"): it rewrites every chunk vector
-    # and the vector index, which is how you switch embedding providers/models (`--target embeddings`).
-    if target == "embeddings":
-        embedded = build_embeddings(repository, settings or load_settings())
-        counts["chunks_reembedded"] = embedded["chunks"]
-        counts["embedding_model"] = embedded["model"]
-        counts["embedding_dimension"] = embedded["dimension"]
-        counts["related_edges_removed"] = embedded["related_edges_removed"]
-    # Community detection is its own explicit target: it clusters the similarity graph, so it only
-    # makes sense after `--target related` (and, ideally, real embeddings).
-    if target == "communities":
-        resolution = (settings or load_settings()).community_resolution
-        communities = build_communities(repository, resolution=resolution)
-        counts["documents_clustered"] = communities["documents_clustered"]
-        counts["communities"] = communities["communities"]
-        counts["communities_removed"] = communities["communities_removed"]
-        counts["community_resolution"] = resolution
-    run["finished_at"] = _now()
-    run["status"] = "ok"
-    run["counts"] = counts
-    repository.upsert("index_runs", run)
+    counts: dict[str, Any] = {}
+    bootstrap: dict[str, Any] | None = None
+    failure: Exception | None = None
+    try:
+        bootstrap = bootstrap_schema(repository.client, embedding_dimension=embedding_dimension)
+        counts = {
+            "documents": repository.count("documents"),
+            "chunks": repository.count("chunks"),
+            "text_indexed": repository.count("chunks") if target in {"all", "text"} else 0,
+            "vectors_indexed": _count_chunks_with_embeddings(repository) if target in {"all", "vector"} else 0,
+            "graph_edges_checked": sum(repository.count(edge) for edge in _graph_edges()) if target in {"all", "graph"} else 0,
+        }
+        # Related-edge building is its own explicit target, not part of "all": it is O(N^2) over the
+        # corpus and mutates the graph, so it should be run deliberately (`index rebuild --target related`),
+        # not implicitly on every rebuild.
+        if target == "related":
+            related = build_related_edges(repository)
+            counts["related_pairs"] = related["pairs"]
+            counts["related_edges_created"] = related["created"]
+            counts["related_edges_removed"] = related["removed"]
+        # Re-embedding is its own explicit target (never part of "all"): it rewrites every chunk vector
+        # and the vector index, which is how you switch embedding providers/models (`--target embeddings`).
+        if target == "embeddings":
+            embedded = build_embeddings(repository, settings or load_settings())
+            counts["chunks_reembedded"] = embedded["chunks"]
+            counts["embedding_model"] = embedded["model"]
+            counts["embedding_dimension"] = embedded["dimension"]
+            counts["related_edges_removed"] = embedded["related_edges_removed"]
+        # Community detection is its own explicit target: it clusters the similarity graph, so it only
+        # makes sense after `--target related` (and, ideally, real embeddings).
+        if target == "communities":
+            resolution = (settings or load_settings()).community_resolution
+            communities = build_communities(repository, resolution=resolution)
+            counts["documents_clustered"] = communities["documents_clustered"]
+            counts["communities"] = communities["communities"]
+            counts["communities_removed"] = communities["communities_removed"]
+            counts["community_resolution"] = resolution
+        _finalize_index_run(repository, run, status="ok", counts=counts)
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        if failure is not None and run["status"] == "running":
+            _finalize_index_run(
+                repository,
+                run,
+                status="error",
+                counts=counts,
+                error=f"{type(failure).__name__}: {failure}",
+            )
     return {"status": "ok", "index_run_key": index_run_key, "target": target, "counts": counts, "bootstrap": bootstrap}
 
 

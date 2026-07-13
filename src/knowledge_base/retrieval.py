@@ -32,7 +32,10 @@ def text_search(
     rows = repository.client.aql(
         """
         FOR item IN kb_text_view
-          SEARCH ANALYZER(item.text IN TOKENS(@query, "text_en") OR item.title IN TOKENS(@query, "text_en"), "text_en")
+          SEARCH (
+            ANALYZER(item.text IN TOKENS(@query, "text_en") OR item.title IN TOKENS(@query, "text_en"), "text_en")
+            OR ANALYZER(item.text IN TOKENS(@query, "text_ru") OR item.title IN TOKENS(@query, "text_ru"), "text_ru")
+          )
           FILTER IS_SAME_COLLECTION("documents", item) OR IS_SAME_COLLECTION("chunks", item)
           LET is_chunk = HAS(item, "document_key")
           LET doc = is_chunk ? DOCUMENT("documents", item.document_key) : item
@@ -106,14 +109,14 @@ def semantic_search(
     effective_dimension = embedder.dimension
     model = embedder.model
     ranked = _vector_ranked(repository, query_vector, limit=limit, source_key=source_key, model=model)
-    if ranked is None:
+    used_fallback = ranked is None
+    if used_fallback:
         # Fallback: full-scan cosine in Python. Used when the ANN index is unavailable,
         # the embedding dimension differs from the index, or a source filter is set (the
-        # vector index cannot be combined with a filter).
+        # vector index cannot be combined with a filter). Always reported as degraded so
+        # callers do not treat O(N) Python cosine as ANN.
         chunks = _semantic_candidate_chunks(repository, dimension=effective_dimension, source_key=source_key, model=model)
         if not chunks:
-            if source_key is not None:
-                return {"query": query, "mode": "semantic", "status": "ok", "results": []}
             return {
                 "query": query,
                 "mode": "semantic",
@@ -134,8 +137,17 @@ def semantic_search(
         scored.sort(key=lambda item: item["score"], reverse=True)
         ranked = _dedup_best_by_document(scored)
 
+    assert ranked is not None
     gated = _gate_by_similarity(ranked, min_similarity)
-    return {"query": query, "mode": "semantic", "status": "ok", "results": _hydrate_semantic(repository, gated[:limit])}
+    payload: dict[str, Any] = {
+        "query": query,
+        "mode": "semantic",
+        "status": "degraded" if used_fallback else "ok",
+        "results": _hydrate_semantic(repository, gated[:limit]),
+    }
+    if used_fallback:
+        payload["degraded_components"] = ["vector"]
+    return payload
 
 
 def _gate_by_similarity(ranked: list[dict[str, Any]], min_similarity: float) -> list[dict[str, Any]]:
