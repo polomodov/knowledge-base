@@ -299,7 +299,7 @@ def test_v5_does_not_narrow_legacy_text_visibility_or_change_result_envelope() -
     assert "@visibility" not in query and "@include_drafts" not in query
     assert 'TOKENS(@query, "text_en")' in query
     assert 'TOKENS(@query, "text_ru")' in query
-    assert 'ANALYZER(' in query and '"text_ru"' in query
+    assert "ANALYZER(" in query and '"text_ru"' in query
 
 
 class _LegacySemanticClient:

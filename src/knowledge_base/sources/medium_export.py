@@ -17,8 +17,8 @@ from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
 from knowledge_base.sources.ingest_core import (
-    finalize_import_run,
     empty_counts,
+    finalize_import_run,
     parse_date,
     planned_chunk_count,
     upsert_author,
