@@ -344,7 +344,7 @@ def safe_public_url(value: Any) -> str | None:
     return value
 
 
-def _visualization_documents(repository: KnowledgeRepository, *, include_drafts: bool) -> list[dict[str, Any]]:
+def visualization_documents(repository: KnowledgeRepository, *, include_drafts: bool) -> list[dict[str, Any]]:
     return repository.client.aql(
         """
         FOR document IN documents
@@ -364,7 +364,7 @@ def _visualization_documents(repository: KnowledgeRepository, *, include_drafts:
     )
 
 
-def _visualization_sources(repository: KnowledgeRepository, used: set[Any]) -> list[dict[str, Any]]:
+def visualization_sources(repository: KnowledgeRepository, used: set[Any]) -> list[dict[str, Any]]:
     keys = sorted(key for key in used if isinstance(key, str))
     if not keys:
         return []
@@ -383,7 +383,7 @@ def _visualization_sources(repository: KnowledgeRepository, used: set[Any]) -> l
     )
 
 
-def _visualization_metadata(
+def visualization_metadata(
     repository: KnowledgeRepository,
     *,
     include_drafts: bool,
@@ -487,6 +487,12 @@ def _visualization_metadata(
         },
         "warnings": warnings,
     }
+
+
+# Back-compat aliases for tests and older call sites.
+_visualization_documents = visualization_documents
+_visualization_sources = visualization_sources
+_visualization_metadata = visualization_metadata
 
 
 def _atomic_write(output: Path, payload: bytes) -> None:
