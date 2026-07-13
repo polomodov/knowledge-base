@@ -359,3 +359,14 @@ git diff --check
 `npm run check` выполняет ADR и Markdown-link gates (`check:adr`, `check:docs-links`). Real-corpus acceptance отдельно замеряет build ≤30 seconds, content-digest determinism, package sizes и отсутствие raw payload, local paths, structured credentials и cookies. Автоматическая secret-free гарантия для unstructured exact excerpts не заявляется; их просматривает владелец до handoff.
 
 После automated gates независимый reviewer выполняет dossier/citation/curation, draft round-trip, summary round-trip и privacy/path-safety sections и заполняет [acceptance.md](acceptance.md). Automated run не выставляет `human_reviewed=true` и не заполняет independent results.
+
+### Reviewer prep
+
+Перед независимым прогоном T050–T053 откройте [acceptance.md](acceptance.md):
+
+1. **§1** — dossier, citations и curation
+2. **§2** — draft round-trip
+3. **§3** — summary round-trip
+4. **§4** — privacy и path safety
+
+Команды и fixtures для этих секций — в разделах 1–5 выше. Не заполняйте Result (`PASS`/`FAIL`) и не переводите feature в Complete, пока reviewer не завершил все четыре секции. Automated evidence (T045/T049) уже записан и не заменяет independent acceptance.

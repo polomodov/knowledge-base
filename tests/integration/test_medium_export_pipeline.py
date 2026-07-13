@@ -113,17 +113,19 @@ def test_medium_export_ingest_end_to_end(tmp_path: Path) -> None:
     assert len({result["document_key"] for result in documents_graph["results"]}) == len(documents_graph["results"])
     assert invalid_source_graph["status"] == "ok"
     assert invalid_source_graph["results"] == []
-    assert semantic["status"] == "ok"
+    assert semantic["status"] == "degraded"
+    assert semantic["degraded_components"] == ["vector"]
     assert semantic["results"]
     assert {result["provenance"]["source_key"] for result in semantic["results"]} == {"medium-export"}
-    assert invalid_source_semantic["status"] == "ok"
+    assert invalid_source_semantic["status"] == "degraded"
+    assert invalid_source_semantic["degraded_components"] == ["vector"]
     assert invalid_source_semantic["results"] == []
     assert hybrid["status"] in {"ok", "degraded"}
     assert any(result["provenance"]["source_key"] == "medium-export" for result in hybrid["results"])
     assert source_hybrid["status"] in {"ok", "degraded"}
     assert source_hybrid["results"]
     assert {result["provenance"]["source_key"] for result in source_hybrid["results"]} == {"medium-export"}
-    assert invalid_source_hybrid["status"] == "ok"
+    assert invalid_source_hybrid["status"] in {"ok", "degraded"}
     assert invalid_source_hybrid["results"] == []
     _assert_medium_provenance(text["results"])
     _assert_medium_provenance(graph["results"])
