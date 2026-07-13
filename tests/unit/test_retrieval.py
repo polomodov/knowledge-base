@@ -343,12 +343,14 @@ def test_v5_does_not_narrow_legacy_semantic_visibility_or_change_result_envelope
         min_similarity=-1.0,
     )
 
-    assert set(response) == {"query", "mode", "status", "results"}
+    # source_key forces the full-scan path; honesty contract marks vector as degraded.
+    assert set(response) == {"query", "mode", "status", "results", "degraded_components"}
     assert (response["query"], response["mode"], response["status"]) == (
         "legacy semantic query",
         "semantic",
-        "ok",
+        "degraded",
     )
+    assert response["degraded_components"] == ["vector"]
     assert {row["document_key"] for row in response["results"]} == {"published-doc", "draft-doc"}
     for row in response["results"]:
         _assert_legacy_result_shape(row)
@@ -380,3 +382,43 @@ def test_v5_does_not_narrow_legacy_graph_visibility_or_change_result_envelope() 
     query, bind_vars = client.calls[0]
     assert "status" not in bind_vars and "visibility" not in bind_vars and "include_drafts" not in bind_vars
     assert "FILTER doc.status" not in query
+
+
+def test_semantic_search_marks_full_scan_fallback_as_degraded() -> None:
+    # source_key cannot use the ANN index, so the Python full-scan path must be honest.
+    client = _LegacySemanticClient()
+    repository = cast(KnowledgeRepository, type("Repository", (), {"client": client})())
+
+    response = semantic_search(repository, "q", dimension=2, source_key="src", min_similarity=-1.0)
+
+    assert response["status"] == "degraded"
+    assert response["degraded_components"] == ["vector"]
+    assert len(response["results"]) == 2
+
+
+class _EmptyScopedSemanticClient:
+    def aql(self, query: str, bind_vars: dict) -> list[dict]:
+        if "FOR chunk IN chunks" in query:
+            assert bind_vars.get("source_key") == "legacy-source"
+            return []
+        raise AssertionError("unexpected scoped semantic query")
+
+
+def test_semantic_search_scoped_empty_chunks_reports_vector_degraded() -> None:
+    # Scoped semantic always uses fallback; empty embeddings must not look like ok vector search.
+    repository = cast(
+        KnowledgeRepository,
+        type("Repository", (), {"client": _EmptyScopedSemanticClient()})(),
+    )
+
+    response = semantic_search(
+        repository,
+        "legacy semantic query",
+        dimension=2,
+        source_key="legacy-source",
+        min_similarity=-1.0,
+    )
+
+    assert response["status"] == "degraded"
+    assert response["degraded_components"] == ["vector"]
+    assert response["results"] == []
