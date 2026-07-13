@@ -49,6 +49,22 @@ def parse_date(value: str | None) -> str | None:
     return parsed.astimezone(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def finalize_import_run(
+    repository: KnowledgeRepository,
+    import_run: dict[str, Any],
+    *,
+    status: str,
+    counts: dict[str, Any],
+    error: str | None = None,
+) -> None:
+    """Persist a terminal import_run status so mid-flight crashes do not leave status=running."""
+    import_run["finished_at"] = utc_now()
+    import_run["status"] = status
+    import_run["counts"] = counts
+    import_run["error"] = error
+    repository.upsert("import_runs", import_run)
+
+
 def planned_chunk_count(items: list[NormalizedSourceItem]) -> int:
     return sum(len(split_text(item.text)) for item in items)
 

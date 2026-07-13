@@ -10,6 +10,7 @@ from knowledge_base.config import REPO_ROOT, Settings
 from knowledge_base.embeddings import build_embedding_provider
 from knowledge_base.ids import chunk_key, document_key, sha256_text, stable_key
 from knowledge_base.repository import KnowledgeRepository
+from knowledge_base.sources.ingest_core import finalize_import_run
 from knowledge_base.schema import bootstrap_schema
 
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "safe_knowledge_fixture.json"
@@ -59,13 +60,23 @@ def ingest_fixture(repository: KnowledgeRepository, settings: Settings, fixture_
     }
     repository.upsert("import_runs", import_run)
 
-    for item in fixture["documents"]:
-        counts = _ingest_document(repository, settings, source, raw, item, import_run_key, now, counts)
-
-    import_run["finished_at"] = _now()
-    import_run["status"] = "ok"
-    import_run["counts"] = counts
-    repository.upsert("import_runs", import_run)
+    failure: Exception | None = None
+    try:
+        for item in fixture["documents"]:
+            counts = _ingest_document(repository, settings, source, raw, item, import_run_key, now, counts)
+        finalize_import_run(repository, import_run, status="ok", counts=counts)
+    except Exception as exc:
+        failure = exc
+        raise
+    finally:
+        if failure is not None and import_run["status"] == "running":
+            finalize_import_run(
+                repository,
+                import_run,
+                status="error",
+                counts=counts,
+                error=f"{type(failure).__name__}: {failure}",
+            )
 
     total_documents = len(fixture["documents"])
     total_chunks = sum(len(split_text(" ".join(item["text"].split()))) for item in fixture["documents"])
