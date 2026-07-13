@@ -583,9 +583,7 @@ def build_dossier(
     effective_request = request if isinstance(request, ResearchRequest) else ResearchRequest(**dict(request))
     try:
         lexical_rows = lexical_chunk_candidates(repository, effective_request)
-        semantic_rows, semantic_warnings = semantic_chunk_candidates(
-            repository, effective_request, provider=provider
-        )
+        semantic_rows, semantic_warnings = semantic_chunk_candidates(repository, effective_request, provider=provider)
     except (ArangoError, ResearchRetrievalError) as error:
         raise DossierBuildError("required dossier evidence retrieval failed") from error
 

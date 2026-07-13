@@ -114,13 +114,6 @@ def semantic_search(
         # callers do not treat O(N) Python cosine as ANN.
         chunks = _semantic_candidate_chunks(repository, dimension=effective_dimension, source_key=source_key, model=model)
         if not chunks:
-            if source_key is not None:
-                return {
-                    "query": query,
-                    "mode": "semantic",
-                    "status": "ok",
-                    "results": [],
-                }
             return {
                 "query": query,
                 "mode": "semantic",
@@ -141,6 +134,7 @@ def semantic_search(
         scored.sort(key=lambda item: item["score"], reverse=True)
         ranked = _dedup_best_by_document(scored)
 
+    assert ranked is not None
     gated = _gate_by_similarity(ranked, min_similarity)
     payload: dict[str, Any] = {
         "query": query,

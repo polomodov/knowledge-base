@@ -394,3 +394,31 @@ def test_semantic_search_marks_full_scan_fallback_as_degraded() -> None:
     assert response["status"] == "degraded"
     assert response["degraded_components"] == ["vector"]
     assert len(response["results"]) == 2
+
+
+class _EmptyScopedSemanticClient:
+    def aql(self, query: str, bind_vars: dict) -> list[dict]:
+        if "FOR chunk IN chunks" in query:
+            assert bind_vars.get("source_key") == "legacy-source"
+            return []
+        raise AssertionError("unexpected scoped semantic query")
+
+
+def test_semantic_search_scoped_empty_chunks_reports_vector_degraded() -> None:
+    # Scoped semantic always uses fallback; empty embeddings must not look like ok vector search.
+    repository = cast(
+        KnowledgeRepository,
+        type("Repository", (), {"client": _EmptyScopedSemanticClient()})(),
+    )
+
+    response = semantic_search(
+        repository,
+        "legacy semantic query",
+        dimension=2,
+        source_key="legacy-source",
+        min_similarity=-1.0,
+    )
+
+    assert response["status"] == "degraded"
+    assert response["degraded_components"] == ["vector"]
+    assert response["results"] == []
