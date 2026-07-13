@@ -1,7 +1,9 @@
 # Follow-up аудит (июль 2026): план волн
 
-**База:** `main` после GraphRAG / viz / MCP / v5 runtime (`95cdb90` и новее).  
-**Режим:** узкие PR-волны; merge в `main` по одной.  
+**База:** `main` после GraphRAG / viz / MCP / v5 runtime (`95cdb90` и новее).
+
+**Режим:** узкие PR-волны; merge в `main` по одной.
+
 **V5 acceptance (N1):** в этом эпике только **подготовка** чеклистов/доков; `acceptance.md` остаётся `NOT RUN`; feature 007 не Complete.
 
 Предыдущий remediation (46 находок) закрыт — см. [implementation-audit-plan.md](implementation-audit-plan.md).

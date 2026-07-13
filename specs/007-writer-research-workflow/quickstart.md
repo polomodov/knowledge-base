@@ -364,9 +364,9 @@ git diff --check
 
 Перед независимым прогоном T050–T053 откройте [acceptance.md](acceptance.md):
 
-1. **§1** — dossier, citations и curation  
-2. **§2** — draft round-trip  
-3. **§3** — summary round-trip  
-4. **§4** — privacy и path safety  
+1. **§1** — dossier, citations и curation
+2. **§2** — draft round-trip
+3. **§3** — summary round-trip
+4. **§4** — privacy и path safety
 
 Команды и fixtures для этих секций — в разделах 1–5 выше. Не заполняйте Result (`PASS`/`FAIL`) и не переводите feature в Complete, пока reviewer не завершил все четыре секции. Automated evidence (T045/T049) уже записан и не заменяет independent acceptance.
