@@ -682,10 +682,6 @@ def _graph_only_row(related_row: dict[str, Any], *, ceiling: float) -> dict[str,
     }
 
 
-
-
-
-
 def _fuse_by_document(
     text_results: list[dict[str, Any]],
     semantic_results: list[dict[str, Any]],
@@ -917,7 +913,7 @@ _cosine = cosine_similarity
 
 
 # Re-export GraphRAG search API so existing `knowledge_base.retrieval` imports keep working.
-from knowledge_base.graphrag_search import (  # noqa: E402
+from knowledge_base.graphrag_search import (  # noqa: E402, F401
     _aggregate_community_scores,
     _communities_by_id,
     _communities_for_documents,

@@ -86,6 +86,7 @@ def local_search(
         _mark_degraded(context, "graph")
     return context
 
+
 def global_search(
     repository: KnowledgeRepository,
     query: str,
@@ -148,11 +149,13 @@ def global_search(
     )
     return context
 
+
 def _mark_degraded(context: dict[str, Any], component: str) -> None:
     context["status"] = "degraded"
     context.setdefault("degraded_components", [])
     if component not in context["degraded_components"]:
         context["degraded_components"].append(component)
+
 
 def _entities_for_documents(repository: KnowledgeRepository, document_keys: list[str], *, limit: int) -> list[dict[str, Any]]:
     """Entities (topics/authors/works) linking the given documents, ranked by how many mention them."""
@@ -184,6 +187,7 @@ def _entities_for_documents(repository: KnowledgeRepository, document_keys: list
         {"document_keys": unique_keys, "limit": limit},
     )
 
+
 def _communities_for_documents(repository: KnowledgeRepository, document_keys: list[str]) -> list[dict[str, Any]]:
     """Communities (GR-4) the given documents belong to, with how many of them fall in each."""
     unique_keys = list(dict.fromkeys(document_keys))
@@ -212,6 +216,7 @@ def _communities_for_documents(repository: KnowledgeRepository, document_keys: l
         {"document_keys": unique_keys},
     )
 
+
 def _community_membership(repository: KnowledgeRepository, document_keys: list[str]) -> list[dict[str, str]]:
     """Map each document to the community it belongs to (documents not in a community are omitted)."""
     unique_keys = list(dict.fromkeys(document_keys))
@@ -226,6 +231,7 @@ def _community_membership(repository: KnowledgeRepository, document_keys: list[s
         {"document_keys": unique_keys},
     )
 
+
 def _communities_by_id(repository: KnowledgeRepository, community_ids: list[str]) -> dict[str, dict[str, Any]]:
     if not community_ids:
         return {}
@@ -234,6 +240,7 @@ def _communities_by_id(repository: KnowledgeRepository, community_ids: list[str]
         {"ids": community_ids},
     )
     return {row["id"]: row["community"] for row in rows}
+
 
 def _aggregate_community_scores(
     candidates: list[dict[str, Any]],
@@ -286,4 +293,3 @@ def _aggregate_community_scores(
     ranked.sort(key=lambda item: item["community_key"])
     ranked.sort(key=lambda item: item["score"], reverse=True)
     return ranked[:community_limit]
-

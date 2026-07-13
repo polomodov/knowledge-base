@@ -502,7 +502,6 @@ def visualization_metadata(
     }
 
 
-
 # Back-compat aliases for tests and older call sites.
 _visualization_documents = visualization_documents
 _visualization_sources = visualization_sources

@@ -26,6 +26,10 @@ from knowledge_base.viz_builder import (
     visualization_metadata,
 )
 
+# Back-compat aliases for tests and older call sites.
+_visualization_documents = visualization_documents
+_visualization_metadata = visualization_metadata
+
 GRAPH_SCHEMA_VERSION = "1"
 _GRAPHML_NS = "http://graphml.graphdrawing.org/xmlns"
 _XSI_NS = "http://www.w3.org/2001/XMLSchema-instance"
@@ -83,7 +87,7 @@ def build_graph_dataset(
     """Build the public node-link graph without document body text."""
     if topic_min_documents < 1:
         raise ValueError("topic_min_documents must be at least 1")
-    documents = visualization_documents(repository, include_drafts=include_drafts)
+    documents = _visualization_documents(repository, include_drafts=include_drafts)
     document_by_key = {row["document_key"]: row for row in documents}
     memberships = document_topic_memberships(repository, include_drafts=include_drafts)
     communities = community_rollups(repository, include_drafts=include_drafts)
@@ -182,7 +186,7 @@ def build_graph_dataset(
     )
     links.sort(key=lambda row: (row["kind"], row["source"], row["target"]))
 
-    metadata = visualization_metadata(
+    metadata = _visualization_metadata(
         repository,
         include_drafts=include_drafts,
         built_at=built_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),
