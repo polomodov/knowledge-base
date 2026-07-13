@@ -17,6 +17,7 @@ from knowledge_base.chunking import split_text
 from knowledge_base.config import Settings
 from knowledge_base.embeddings import build_embedding_provider
 from knowledge_base.ids import chunk_key, document_key, slugify, stable_key, topic_key
+from knowledge_base.language import detect_language
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.sources.contracts import NormalizedSourceItem
 
@@ -134,7 +135,7 @@ def upsert_topics(
                 {
                     "_key": key,
                     "label": tag,
-                    "language": "unknown",
+                    "language": detect_language(tag),
                     "description": "",
                     "confidence": 1.0,
                     "metadata": {"source": method, "source_key": source_key},

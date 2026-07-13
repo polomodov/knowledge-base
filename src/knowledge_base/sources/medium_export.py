@@ -7,11 +7,12 @@ import zipfile
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from knowledge_base.config import Settings
 from knowledge_base.ids import sha256_file, sha256_stream, sha256_text, slugify, stable_key
+from knowledge_base.language import detect_language
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
 from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
@@ -355,10 +356,30 @@ def _read_archive_directory(path: Path) -> MediumArchivePayload:
     )
 
 
+def _is_safe_zip_member_name(name: str) -> bool:
+    """Reject zip-slip / absolute / backslash member names (finding F13).
+
+    Mirrors book_cube attachment path rules: no ``..`` traversal, no absolute
+    POSIX/Windows paths, and no backslashes (Medium exports use ``/``).
+    """
+    if not name or "\\" in name:
+        return False
+    posix = PurePosixPath(name)
+    windows = PureWindowsPath(name)
+    return not (posix.is_absolute() or windows.is_absolute() or windows.drive or ".." in posix.parts)
+
+
 def _read_archive_zip(path: Path) -> MediumArchivePayload:
     try:
         with zipfile.ZipFile(path) as archive:
             members = [info for info in archive.infolist() if not info.is_dir()]
+            for info in members:
+                if not _is_safe_zip_member_name(info.filename):
+                    raise MediumArchiveReadError(
+                        "invalid_medium_export",
+                        path,
+                        f"Unsafe zip member path: {info.filename}",
+                    )
             root_prefix = _find_zip_root_prefix(members)
             if root_prefix is None:
                 raise MediumArchiveReadError("invalid_medium_export", path, "README.html was not found")
@@ -490,7 +511,7 @@ def _parse_post(
         url=parser.canonical_url or parser.post_url or f"https://medium.com/p/{post_id}",
         guid=post_id,
         published_at=parser.published_at,
-        language="unknown",
+        language=detect_language(text),
         author=parser.author,
         tags=[],
         metadata={
