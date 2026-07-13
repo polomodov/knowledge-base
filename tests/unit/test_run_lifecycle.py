@@ -51,9 +51,11 @@ def _latest(repository: _RecordingRepository, collection: str) -> dict[str, Any]
 def test_rebuild_indexes_marks_error_when_work_fails_after_running() -> None:
     repository = _RecordingRepository()
 
-    with patch("knowledge_base.indexing.bootstrap_schema", side_effect=RuntimeError("boom")):
-        with pytest.raises(RuntimeError, match="boom"):
-            rebuild_indexes(_as_repo(repository), target="text")
+    with (
+        patch("knowledge_base.indexing.bootstrap_schema", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        rebuild_indexes(_as_repo(repository), target="text")
 
     run = _latest(repository, "index_runs")
     assert run["status"] == "error"
@@ -69,9 +71,9 @@ def test_ingest_fixture_marks_error_when_document_loop_fails() -> None:
     with (
         patch("knowledge_base.fixture.bootstrap_schema", return_value={}),
         patch("knowledge_base.fixture._ingest_document", side_effect=RuntimeError("doc boom")),
+        pytest.raises(RuntimeError, match="doc boom"),
     ):
-        with pytest.raises(RuntimeError, match="doc boom"):
-            ingest_fixture(_as_repo(repository), settings)
+        ingest_fixture(_as_repo(repository), settings)
 
     run = _latest(repository, "import_runs")
     assert run["status"] == "error"
@@ -103,9 +105,9 @@ def test_ingest_tellmeabout_marks_error_when_item_loop_fails(tmp_path: Path) -> 
     with (
         patch("knowledge_base.sources.tellmeabout_tech.bootstrap_schema", return_value={}),
         patch("knowledge_base.sources.tellmeabout_tech._ingest_item", side_effect=RuntimeError("item boom")),
+        pytest.raises(RuntimeError, match="item boom"),
     ):
-        with pytest.raises(RuntimeError, match="item boom"):
-            ingest_tellmeabout_tech(_as_repo(repository), settings, input_path=feed)
+        ingest_tellmeabout_tech(_as_repo(repository), settings, input_path=feed)
 
     run = _latest(repository, "import_runs")
     assert run["status"] == "error"

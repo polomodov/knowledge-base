@@ -10,8 +10,8 @@ from knowledge_base.config import REPO_ROOT, Settings
 from knowledge_base.embeddings import build_embedding_provider
 from knowledge_base.ids import chunk_key, document_key, sha256_text, stable_key
 from knowledge_base.repository import KnowledgeRepository
-from knowledge_base.sources.ingest_core import finalize_import_run
 from knowledge_base.schema import bootstrap_schema
+from knowledge_base.sources.ingest_core import finalize_import_run
 
 FIXTURE_PATH = REPO_ROOT / "tests" / "fixtures" / "safe_knowledge_fixture.json"
 

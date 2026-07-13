@@ -55,8 +55,10 @@ ADR contract:
 ```text
 data/raw/         # исходные экспорты и снимки источников (gitignored)
 data/processed/   # зарезервировано; нормализованные данные живут в ArangoDB (SSOT)
-data/generated/   # exports, viz HTML, research dossiers / handoffs (gitignored)
+data/generated/   # exports, viz HTML, research dossiers / handoffs / outputs (gitignored)
 ```
+
+**Processed SSOT — ArangoDB**, а не `data/processed/`: нормализованные documents/chunks и derived indexes живут в базе. Каталог `data/processed/` зарезервирован на будущее и не является вторым источником истины. Research/writing artifacts пишет file CLI в `data/generated/research/`; MCP остаётся read-only (search/document/graph/health) и не публикует dossier packages — см. [ADR 0011](docs/adr/0011-clarify-mcp-vs-research-cli-boundary-and-processed-ssot-in-arangodb.md).
 
 Если данные нельзя безопасно хранить в git, добавьте только структуру, примеры или инструкции, а сами данные держите вне репозитория.
 
