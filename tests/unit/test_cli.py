@@ -52,7 +52,9 @@ def test_platform_up_exit_code_follows_status(capsys, monkeypatch) -> None:
 
 
 def test_platform_health_tolerates_degraded_vector_index_only(capsys, monkeypatch) -> None:
-    monkeypatch.setattr(platform_cmd, "health_report",
+    monkeypatch.setattr(
+        platform_cmd,
+        "health_report",
         lambda client: {
             "status": "degraded",
             "checks": [{"name": "collection:documents", "status": "ok"}, {"name": "vector_index", "status": "degraded"}],
@@ -62,7 +64,9 @@ def test_platform_health_tolerates_degraded_vector_index_only(capsys, monkeypatc
 
 
 def test_platform_health_fails_when_core_component_missing(capsys, monkeypatch) -> None:
-    monkeypatch.setattr(platform_cmd, "health_report",
+    monkeypatch.setattr(
+        platform_cmd,
+        "health_report",
         lambda client: {"status": "degraded", "checks": [{"name": "collection:documents", "status": "missing"}]},
     )
     assert cli.main(["platform", "health"]) == 1  # a missing core collection is not ready
