@@ -2,15 +2,19 @@ from pathlib import Path
 
 import pytest
 
+from knowledge_base.ids import work_key
 from knowledge_base.sources.book_cube import (
     DEFAULT_PUBLIC_URL,
     LiveFetchUnavailable,
     canonical_id_from_post,
+    extract_works,
     fetch_snapshot_payload,
     parse_snapshot,
     title_from_text,
     topic_key,
 )
+from knowledge_base.sources.contracts import NormalizedSourceItem
+from knowledge_base.sources.ingest_core import empty_counts, upsert_works
 
 HTML_FIXTURE = Path("tests/fixtures/book_cube_channel.html")
 JSON_FIXTURE = Path("tests/fixtures/book_cube_export.json")
@@ -30,6 +34,10 @@ def test_parse_telegram_public_html_snapshot() -> None:
     assert first.title == "Книжная заметка про системное чтение."
     assert first.tags == ["books", "systems"]
     assert "связывать цитаты" in first.text
+    assert len(first.works) == 1
+    assert first.works[0].title == "Thinking in Systems"
+    assert first.works[0].key == work_key("Thinking in Systems")
+    assert parsed.items[1].works == []
 
 
 def test_parse_telegram_desktop_json_export() -> None:
@@ -41,7 +49,11 @@ def test_parse_telegram_desktop_json_export() -> None:
     assert parsed.items[0].canonical_id == "book_cube-201"
     assert parsed.items[0].url == "https://t.me/book_cube/201"
     assert parsed.items[0].tags == ["books", "notes"]
+    assert len(parsed.items[0].works) == 1
+    assert parsed.items[0].works[0].title == "Knowledge Graphs for Notes"
+    assert parsed.items[0].works[0].key == work_key("Knowledge Graphs for Notes")
     assert parsed.items[1].tags == ["research"]
+    assert parsed.items[1].works == []
 
 
 def test_title_and_canonical_helpers_are_stable() -> None:
@@ -91,3 +103,68 @@ def test_parse_snapshot_html_void_tags_do_not_drop_messages() -> None:
     parsed = parse_snapshot(html, media_type="text/html")
     assert sorted(item.metadata["message_id"] for item in parsed.items) == ["1", "2"]
     assert parsed.items[0].text == "First message. with a break"
+
+
+def test_extract_works_from_clear_title_pattern() -> None:
+    works = extract_works("Сегодня разбираю «Системное мышление» и заметки вокруг неё.")
+    assert len(works) == 1
+    assert works[0].title == "Системное мышление"
+    assert works[0].key == work_key("Системное мышление")
+    assert works[0].key.startswith("work-")
+    assert "«Системное мышление»" in works[0].evidence
+
+
+def test_extract_works_ignores_urls_and_short_noise() -> None:
+    assert extract_works('Ссылка "https://example.com/book" не книга.') == []
+    assert extract_works("Пустые «» кавычки.") == []
+    assert extract_works("Маркер book: x") == []  # too short / filtered
+
+
+def test_quoted_work_upsert_creates_work_and_edge() -> None:
+    class _FakeRepository:
+        def __init__(self) -> None:
+            self.docs: dict[str, list[dict]] = {}
+
+        def upsert(self, collection: str, document: dict) -> dict:
+            self.docs.setdefault(collection, []).append(document)
+            return {"created": True, "document": document}
+
+        def upsert_edge(self, collection: str, edge: dict) -> dict:
+            return self.upsert(collection, edge)
+
+    repository = _FakeRepository()
+    works = extract_works('Читаю "Thinking in Systems" перед конспектом.')
+    item = NormalizedSourceItem(
+        canonical_id="book_cube-999",
+        title="test",
+        text='Читаю "Thinking in Systems" перед конспектом.',
+        url="https://t.me/book_cube/999",
+        guid="999",
+        published_at=None,
+        language="unknown",
+        author=None,
+        tags=[],
+        works=works,
+    )
+    counts = empty_counts()
+    upsert_works(
+        repository,  # type: ignore[arg-type]
+        item,
+        "doc-test",
+        "book-cube",
+        "import-1",
+        "2026-07-13T00:00:00Z",
+        counts,
+        method="telegram_title_pattern",
+        provenance={"source_key": "book-cube"},
+    )
+
+    assert counts["works"] == 1
+    assert counts["edges"] == 1
+    work = work_key("Thinking in Systems")
+    assert repository.docs["works"][0]["_key"] == work
+    assert repository.docs["works"][0]["title"] == "Thinking in Systems"
+    edge = repository.docs["document_references_work"][0]
+    assert edge["_from"] == "documents/doc-test"
+    assert edge["_to"] == f"works/{work}"
+    assert edge["method"] == "telegram_title_pattern"

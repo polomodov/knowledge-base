@@ -10,12 +10,12 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 from knowledge_base.config import Settings
-from knowledge_base.ids import sha256_file, sha256_stream, sha256_text, slugify, stable_key, topic_key
+from knowledge_base.ids import sha256_file, sha256_stream, sha256_text, slugify, stable_key, topic_key, work_key
 from knowledge_base.language import detect_language
 from knowledge_base.net import UnsafeUrlError, open_public_url
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.schema import bootstrap_schema
-from knowledge_base.sources.contracts import NormalizedSourceItem, ParsedSourceFeed
+from knowledge_base.sources.contracts import NormalizedSourceItem, NormalizedWorkRef, ParsedSourceFeed
 from knowledge_base.sources.ingest_core import (
     empty_counts,
     finalize_import_run,
@@ -24,6 +24,7 @@ from knowledge_base.sources.ingest_core import (
     upsert_chunks,
     upsert_document,
     upsert_topics,
+    upsert_works,
     utc_now,
 )
 
@@ -34,6 +35,15 @@ DEFAULT_PUBLIC_URL = "https://t.me/s/book_cube"
 LIVE_FETCH_HINT = "Save Telegram HTML/JSON export under data/raw/book-cube/ and rerun with --input."
 ARCHIVE_HINT = "Export Telegram channel as machine-readable JSON and rerun with --archive."
 HASHTAG_RE = re.compile(r"(?<!\w)#([\wа-яА-ЯёЁ_]+)")
+# Conservative title extractors: explicit quotes / guillemets, or "книга:/book:" markers.
+WORK_GUILLEMET_RE = re.compile("\u00ab([^\u00bb]{2,120})\u00bb")
+WORK_CURLY_QUOTE_RE = re.compile("\u201c([^\u201d]{2,120})\u201d")
+WORK_STRAIGHT_QUOTE_RE = re.compile(r'"([^"]{2,120})"')
+_WORK_MARKER_STOP = '#\n.!?\u00ab\u00bb"\u201c\u201d'
+WORK_MARKER_RE = re.compile(
+    rf"(?i)\b(?:книга|book)\s*[:\u2014\u2013-]\s*([^{re.escape(_WORK_MARKER_STOP)}]{{2,120}})",
+)
+_LETTER_RE = re.compile(r"[A-Za-zА-Яа-яЁё]")
 ATTACHMENT_FIELDS = ("photo", "file", "thumbnail")
 VOID_TAGS = {"br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
 
@@ -503,6 +513,7 @@ def _parse_public_html(payload: str) -> ParsedSourceFeed:
         message_id = data_post.rsplit("/", 1)[-1] if "/" in data_post else data_post
         tags = _hashtags(text)
         canonical_id = canonical_id_from_post(data_post, message_id)
+        works = extract_works(text)
         items.append(
             NormalizedSourceItem(
                 canonical_id=canonical_id,
@@ -514,6 +525,7 @@ def _parse_public_html(payload: str) -> ParsedSourceFeed:
                 language=detect_language(text),
                 author=None,
                 tags=tags,
+                works=works,
                 metadata={"message_id": message_id, "data_post": data_post, "snapshot_type": "telegram_html"},
             ),
         )
@@ -550,6 +562,7 @@ def _parse_json_export(payload: str, *, archive: ArchivePayload | None = None) -
         }
         if archive is not None:
             metadata["archive"] = _archive_payload(archive)
+        works = extract_works(text)
         items.append(
             NormalizedSourceItem(
                 canonical_id=canonical_id,
@@ -561,6 +574,7 @@ def _parse_json_export(payload: str, *, archive: ArchivePayload | None = None) -
                 language=detect_language(text),
                 author=None,
                 tags=tags,
+                works=works,
                 metadata=metadata,
             ),
         )
@@ -709,6 +723,17 @@ def _ingest_item(
         evidence=lambda tag: f"#{tag}",
         provenance=provenance,
     )
+    upsert_works(
+        repository,
+        item,
+        doc_key,
+        SOURCE_KEY,
+        import_run_key,
+        now,
+        counts,
+        method="telegram_title_pattern",
+        provenance=provenance,
+    )
     upsert_chunks(
         repository,
         settings,
@@ -807,6 +832,53 @@ def _command(snapshot: SnapshotPayload, url: str) -> str:
     if snapshot.kind == "file":
         return f"kb ingest book-cube --input {snapshot.ref}"
     return f"kb ingest book-cube --url {url}"
+
+
+def extract_works(text: str) -> list[NormalizedWorkRef]:
+    """Extract book/work titles from conservative quote and marker patterns."""
+    seen: set[str] = set()
+    works: list[NormalizedWorkRef] = []
+    candidates: list[tuple[str, str, float]] = []
+    for pattern in (WORK_GUILLEMET_RE, WORK_CURLY_QUOTE_RE, WORK_STRAIGHT_QUOTE_RE):
+        for match in pattern.finditer(text):
+            candidates.append((match.group(1), match.group(0), 0.9))
+    for match in WORK_MARKER_RE.finditer(text):
+        candidates.append((match.group(1), match.group(0), 0.75))
+    for raw_title, evidence, confidence in candidates:
+        title = _normalize_work_title(raw_title)
+        if not _is_plausible_work_title(title):
+            continue
+        key = work_key(title)
+        if key in seen:
+            continue
+        seen.add(key)
+        works.append(
+            NormalizedWorkRef(
+                key=key,
+                title=title,
+                work_type="book",
+                confidence=confidence,
+                evidence=evidence.strip(),
+                metadata={"extraction": "telegram_title_pattern"},
+            ),
+        )
+    return works
+
+
+def _normalize_work_title(value: str) -> str:
+    trimmed = value.strip().strip("-—–:;,").strip()
+    return " ".join(trimmed.split())
+
+
+def _is_plausible_work_title(title: str) -> bool:
+    if len(title) < 2 or len(title) > 120:
+        return False
+    if not _LETTER_RE.search(title):
+        return False
+    lowered = title.lower()
+    if "http://" in lowered or "https://" in lowered or "www." in lowered:
+        return False
+    return not title.startswith("#")
 
 
 def _hashtags(text: str) -> list[str]:
