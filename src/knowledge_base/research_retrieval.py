@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from knowledge_base.arango import ArangoError
 from knowledge_base.embeddings import cosine_similarity
+from knowledge_base.freshness import derived_index_stale_codes
 
 if TYPE_CHECKING:
     from knowledge_base.embeddings import EmbeddingProvider
@@ -625,6 +626,7 @@ def load_corpus_context(
         return context
     context["latest_import_run_key"] = _optional_string(rows[0].get("latest_import_run_key"))
     context["latest_index_runs"] = _sanitize_index_runs(rows[0].get("latest_index_runs"))
+    context["warnings"] = list(derived_index_stale_codes(context["latest_index_runs"]))
     return context
 
 
