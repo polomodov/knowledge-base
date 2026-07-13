@@ -36,7 +36,7 @@ def test_parse_telegram_public_html_snapshot() -> None:
     assert "связывать цитаты" in first.text
     assert len(first.works) == 1
     assert first.works[0].title == "Thinking in Systems"
-    assert first.works[0].key == "thinking-in-systems"
+    assert first.works[0].key == work_key("Thinking in Systems")
     assert parsed.items[1].works == []
 
 
@@ -51,7 +51,7 @@ def test_parse_telegram_desktop_json_export() -> None:
     assert parsed.items[0].tags == ["books", "notes"]
     assert len(parsed.items[0].works) == 1
     assert parsed.items[0].works[0].title == "Knowledge Graphs for Notes"
-    assert parsed.items[0].works[0].key == "knowledge-graphs-for-notes"
+    assert parsed.items[0].works[0].key == work_key("Knowledge Graphs for Notes")
     assert parsed.items[1].tags == ["research"]
     assert parsed.items[1].works == []
 
@@ -161,9 +161,10 @@ def test_quoted_work_upsert_creates_work_and_edge() -> None:
 
     assert counts["works"] == 1
     assert counts["edges"] == 1
-    assert repository.docs["works"][0]["_key"] == "thinking-in-systems"
+    work = work_key("Thinking in Systems")
+    assert repository.docs["works"][0]["_key"] == work
     assert repository.docs["works"][0]["title"] == "Thinking in Systems"
     edge = repository.docs["document_references_work"][0]
     assert edge["_from"] == "documents/doc-test"
-    assert edge["_to"] == "works/thinking-in-systems"
+    assert edge["_to"] == f"works/{work}"
     assert edge["method"] == "telegram_title_pattern"

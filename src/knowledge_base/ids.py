@@ -52,16 +52,20 @@ def topic_key(label: str) -> str:
 def work_key(title: str) -> str:
     """Canonical work key shared by adapters that extract book/work titles.
 
-    ASCII titles collapse to a readable slug ("Thinking in Systems" -> "thinking-in-systems").
-    Non-ASCII titles get a stable hash-suffixed key ("системное мышление" -> "work-<digest>").
+    ASCII titles use a readable slug plus a hash suffix so lossy punctuation
+    stripping (e.g. "C# in Depth" vs "C in Depth") cannot collide. Non-ASCII
+    titles get a stable hash-suffixed key ("системное мышление" -> "work-<digest>").
     """
     normalized = title.strip().lower()
     if not normalized:
         return "work"
     slug = re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9_-]+", "-", normalized)).strip("-_")
-    if slug and normalized.isascii():
-        return slug
-    return f"work-{sha256_text(normalized)[:12]}"
+    digest = sha256_text(normalized)[:12]
+    if normalized.isascii():
+        if slug:
+            return f"{slug}-{digest}"
+        return f"work-{digest}"
+    return f"work-{digest}"
 
 
 def stable_key(*parts: str, prefix: str | None = None, max_slug: int = 64) -> str:
