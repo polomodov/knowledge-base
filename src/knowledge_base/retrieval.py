@@ -32,7 +32,10 @@ def text_search(
     rows = repository.client.aql(
         """
         FOR item IN kb_text_view
-          SEARCH ANALYZER(item.text IN TOKENS(@query, "text_en") OR item.title IN TOKENS(@query, "text_en"), "text_en")
+          SEARCH (
+            ANALYZER(item.text IN TOKENS(@query, "text_en") OR item.title IN TOKENS(@query, "text_en"), "text_en")
+            OR ANALYZER(item.text IN TOKENS(@query, "text_ru") OR item.title IN TOKENS(@query, "text_ru"), "text_ru")
+          )
           FILTER IS_SAME_COLLECTION("documents", item) OR IS_SAME_COLLECTION("chunks", item)
           LET is_chunk = HAS(item, "document_key")
           LET doc = is_chunk ? DOCUMENT("documents", item.document_key) : item

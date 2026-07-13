@@ -98,6 +98,7 @@ def _ensure_persistent_indexes(client: ArangoClient) -> list[dict[str, Any]]:
 
 
 def _text_view_body() -> dict[str, Any]:
+    # Body/title/label/description full-text is bilingual: text_en + text_ru (W6).
     return {
         "name": TEXT_VIEW_NAME,
         "type": "arangosearch",
@@ -108,26 +109,26 @@ def _text_view_body() -> dict[str, Any]:
             "documents": {
                 "includeAllFields": False,
                 "fields": {
-                    "title": {"analyzers": ["text_en"]},
+                    "title": {"analyzers": ["text_en", "text_ru"]},
                 },
             },
             "chunks": {
                 "includeAllFields": False,
                 "fields": {
-                    "text": {"analyzers": ["text_en"]},
+                    "text": {"analyzers": ["text_en", "text_ru"]},
                 },
             },
             "topics": {
                 "includeAllFields": False,
                 "fields": {
-                    "label": {"analyzers": ["text_en"]},
-                    "description": {"analyzers": ["text_en"]},
+                    "label": {"analyzers": ["text_en", "text_ru"]},
+                    "description": {"analyzers": ["text_en", "text_ru"]},
                 },
             },
             "works": {
                 "includeAllFields": False,
                 "fields": {
-                    "title": {"analyzers": ["text_en"]},
+                    "title": {"analyzers": ["text_en", "text_ru"]},
                 },
             },
         },

@@ -91,6 +91,8 @@ def test_lexical_scope_precedes_ranking_and_returns_exact_chunk() -> None:
         "@published_to_exclusive == null OR doc.published_at < @published_to_exclusive",
     )
     assert max(call["query"].index(value) for value in filters) < call["query"].index("SORT")
+    assert 'TOKENS(@query, "text_en")' in call["query"]
+    assert 'TOKENS(@query, "text_ru")' in call["query"]
 
 
 def test_semantic_search_bounds_overfetch_then_scopes_hydration_and_exact_cosine() -> None:

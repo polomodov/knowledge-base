@@ -106,7 +106,10 @@ def lexical_chunk_candidates(
         """
         /* research:lexical_chunk_candidates */
         FOR chunk IN kb_text_view
-          SEARCH ANALYZER(chunk.text IN TOKENS(@query, "text_en"), "text_en")
+          SEARCH (
+            ANALYZER(chunk.text IN TOKENS(@query, "text_en"), "text_en")
+            OR ANALYZER(chunk.text IN TOKENS(@query, "text_ru"), "text_ru")
+          )
           FILTER IS_SAME_COLLECTION("chunks", chunk)
           LET doc = DOCUMENT("documents", chunk.document_key)
           FILTER doc != null
