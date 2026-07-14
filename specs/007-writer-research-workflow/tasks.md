@@ -140,14 +140,14 @@
 - [X] T047 [P] Обновить реализованные `kb research` commands, generated-data boundary и фактический V5 status в `README.md`, `docs/architecture.md` и `docs/roadmap.md`
 - [X] T048 [P] Перевести future-tense examples в исполнимый acceptance flow и сверить все команды/fixtures с runtime в `specs/007-writer-research-workflow/quickstart.md`
 - [X] T049 Запустить unit/integration/coverage, ruff, format, mypy, contract, ADR, link и `git diff --check` gates и записать automated evidence, не меняя independent results, в `specs/007-writer-research-workflow/acceptance.md`
-- [ ] T050 Независимо выполнить dossier/citation/curation acceptance и записать reviewer, artifact IDs, evidence и result секции 1 в `specs/007-writer-research-workflow/acceptance.md`
+- [X] T050 Независимо выполнить dossier/citation/curation acceptance и записать reviewer, artifact IDs, evidence и result секции 1 в `specs/007-writer-research-workflow/acceptance.md`
 
-> **Reviewer checklist (prep):** пошаговый независимый gate — в [acceptance.md](acceptance.md) (секции 1–4); исполнимые команды и fixtures — в [quickstart.md](quickstart.md). W14 только готовит ссылки; **не** отмечать `[x]` на T050–T053 и **не** менять Result в `acceptance.md` до реального независимого прогона.
-- [ ] T051 Независимо выполнить draft round-trip acceptance и записать reviewer, handoff/package/writing IDs, evidence и result секции 2 в `specs/007-writer-research-workflow/acceptance.md`
-- [ ] T052 Независимо выполнить summary round-trip acceptance, включая cross-kind negative case, и записать evidence/result секции 3 в `specs/007-writer-research-workflow/acceptance.md`
-- [ ] T053 Независимо выполнить privacy/path-safety acceptance, затем при четырёх PASS заполнить итоговое решение секции 4 в `specs/007-writer-research-workflow/acceptance.md`
+> **Историческая отметка:** W14 подготовила пошаговый gate и ссылки на [acceptance.md](acceptance.md) и [quickstart.md](quickstart.md), не выставляя результатов. 14 июля 2026 года независимые reviewers выполнили секции 1–4; четыре `PASS`, artifact IDs, evidence digests и итоговый peer audit записаны в `acceptance.md`.
+- [X] T051 Независимо выполнить draft round-trip acceptance и записать reviewer, handoff/package/writing IDs, evidence и result секции 2 в `specs/007-writer-research-workflow/acceptance.md`
+- [X] T052 Независимо выполнить summary round-trip acceptance, включая cross-kind negative case, и записать evidence/result секции 3 в `specs/007-writer-research-workflow/acceptance.md`
+- [X] T053 Независимо выполнить privacy/path-safety acceptance, затем при четырёх PASS заполнить итоговое решение секции 4 в `specs/007-writer-research-workflow/acceptance.md`
 
-**Checkpoint**: Feature 007 завершена только после T045+T049 и четырёх независимых PASS в T050–T053.
+**Checkpoint**: Feature 007 завершена после T045+T049 и четырёх независимо записанных `PASS` в T050–T053.
 
 ---
 
@@ -216,7 +216,7 @@ Parallel implementation: T038 handoff builder | T040 imported artifact publisher
 1. Выполнить T001–T008.
 2. Выполнить T009–T019 для US1.
 3. Остановиться и независимо проверить published-only dossier, citation provenance, determinism и no-mutation.
-4. Не называть MVP завершённой Feature 007: обязательные US2, US3 и independent acceptance ещё впереди.
+4. На MVP checkpoint Feature 007 ещё не считалась завершённой: после него требовались обязательные US2, US3 и independent acceptance.
 
 ### Incremental delivery
 

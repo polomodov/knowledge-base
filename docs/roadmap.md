@@ -94,7 +94,7 @@
 - самодостаточный CSP-защищённый HTML с картой сообществ/топиков, timeline и ego-графом;
 - seeded integration tests, no-data/degradation tests и CI `node --check` для offline JS.
 
-## v5 - Writer/research workflow
+## v5 - Writer/research workflow ✅
 
 Цель: использовать knowledge database при написании постов, исследований и книг.
 
@@ -111,14 +111,14 @@
 - stdlib-only parsing и secure artifact I/O в runtime; JSON Schemas применяются только в dev/tests;
 - автоматизированные unit/integration, typing, formatting, ADR и documentation gates.
 
-V5 ведётся как Spec Kit feature [007 — Writer/Research Workflow](../specs/007-writer-research-workflow/spec.md). Structural validation не является factual verification или автоматической secret redaction, а generated outputs не становятся источником истины. Реализация и automated gates готовы, однако V5 завершается только после четырёх записанных independent acceptance sections: dossier/citation/curation, `draft`, `summary` и privacy/path safety. T050–T053 ещё не проводились, поэтому feature пока не считается принятой. Технический план и контракты — в [plan.md](../specs/007-writer-research-workflow/plan.md), исполнимый flow — в [quickstart.md](../specs/007-writer-research-workflow/quickstart.md), форма независимой проверки — в [acceptance.md](../specs/007-writer-research-workflow/acceptance.md), архитектурная граница — в принятом [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md).
+V5 завершена как Spec Kit feature [007 — Writer/Research Workflow](../specs/007-writer-research-workflow/spec.md). 14 июля 2026 года dossier/citation/curation, `draft`, `summary` и privacy/path safety получили четыре независимых `PASS`; artifact IDs, evidence digests и итоговый peer audit записаны в [acceptance.md](../specs/007-writer-research-workflow/acceptance.md). Structural validation по-прежнему не является factual verification или автоматической secret redaction, а generated outputs не становятся источником истины. Технический план и контракты — в [plan.md](../specs/007-writer-research-workflow/plan.md), воспроизводимый flow — в [quickstart.md](../specs/007-writer-research-workflow/quickstart.md), архитектурная граница — в принятом [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md).
 
 ## Текущий статус
 
-Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server**; и **v4 — graph export + самодостаточная offline-визуализация трёх видов** (команды и контракты — [docs/visualization.md](visualization.md)). Для **v5** runtime и automated gates реализованы; независимая приёмка T050–T053 ещё не запускалась.
+Завершены v1 fixture pipeline; v2 source adapters (`tellmeabout.tech`, Medium account export, public/snapshot import для "Книжного куба" и полный владельческий Telegram archive import); **v3 — GraphRAG-эпик (GR-0…GR-6): семантические эмбеддинги (`all-mpnet-base-v2`, 768d), граф-осведомлённый hybrid, community detection, local/global GraphRAG-поиск и локальный read-only MCP server**; **v4 — graph export + самодостаточная offline-визуализация трёх видов** (команды и контракты — [docs/visualization.md](visualization.md)); и **v5 — независимо принятый writer/research workflow** с четырьмя `PASS` T050–T053.
 
 **Аудит реализации (июль 2026) полностью отработан:** все 46 находок устранены и смерджены в `main` — единый `topic_key`, провенанс и честный дедуп (`created_at`, корректные счётчики), качество retrieval (дедуп выдачи, корректный фьюжн скора, реальное использование vector index, устранение N+1), безопасность и приватность (учётные данные, валидация fetch-URL/SSRF, path traversal, зона экспорта), инженерная гигиена (общий `ingest_core`, ruff + mypy + pytest-cov, CI против ArangoDB service-container) и робастность парсеров источников. Подробности и трекер MR - в [docs/implementation-audit-plan.md](implementation-audit-plan.md).
 
-**Follow-up аудит (после v4/v5/MCP) завершён:** все узкие волны W1–W14 смерджены в `main` через PR #45–#58 — итоговый трекер [docs/audit-followup-plan.md](audit-followup-plan.md). W14 подготовила независимую приёмку V5, но **не** выполняла её и не записывала PASS в `acceptance.md`.
+**Follow-up аудит (после v4/v5/MCP) завершён:** все узкие волны W1–W14 смерджены в `main` через PR #45–#58 — итоговый трекер [docs/audit-followup-plan.md](audit-followup-plan.md). W14 исторически подготовила независимую приёмку V5, а отдельный последующий прогон завершил её 14 июля 2026 года.
 
-Следующий фокус — независимая проверка dossier/citations/curation, `draft`, `summary` и privacy/path safety для V5; до её записи feature остаётся непринятой.
+Следующая продуктовая волна пока не выбрана. Новый scope следует отдельно определить и приоритизировать, не выводя его автоматически из закрытых V5 или audit trackers.

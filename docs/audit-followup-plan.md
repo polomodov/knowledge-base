@@ -6,7 +6,7 @@
 
 **Статус эпика:** завершён 13 июля 2026 года. Все волны W1–W14 смерджены в `main`; последняя из них вошла через PR #58 (`ddb6211`). Активных implementation-волн в этом трекере не осталось.
 
-**V5 acceptance (N1):** эпик выполнил только **подготовку** чеклистов/доков. W14 не заменяет независимую проверку: `acceptance.md` остаётся `NOT RUN`, T050–T053 не отмечены выполненными, а feature 007 не имеет статуса Complete.
+**V5 acceptance (N1):** сам эпик выполнил только **подготовку** чеклистов/доков. На момент merge W14 13 июля 2026 года `acceptance.md` оставался `NOT RUN`, T050–T053 не были отмечены выполненными, а feature 007 не имела статуса Complete. Отдельная независимая приёмка завершилась 14 июля четырьмя `PASS`; evidence и итоговый peer audit записаны в [acceptance.md](../specs/007-writer-research-workflow/acceptance.md).
 
 Предыдущий remediation (46 находок) закрыт — см. [implementation-audit-plan.md](implementation-audit-plan.md).
 
@@ -31,13 +31,13 @@
 
 ## W14 (prep only) — зафиксированный результат
 
-- В доках явно: v5 runtime + automated gates ready; T050–T053 ещё pending.
+- На момент merge в доках было явно: v5 runtime + automated gates ready; T050–T053 pending.
 - Чеклист reviewer: [acceptance.md](../specs/007-writer-research-workflow/acceptance.md) §1–4 + [quickstart.md](../specs/007-writer-research-workflow/quickstart.md).
-- **Не** входит: запись PASS/FAIL в `acceptance.md`, `[x]` на T050–T053, status Complete для feature 007.
+- В scope W14 **не входили**: запись PASS/FAIL в `acceptance.md`, `[x]` на T050–T053 и status Complete для feature 007.
 
-Независимая приёмка остаётся следующим отдельным этапом после закрытого follow-up эпика, а не его незавершённой волной.
+Независимая приёмка была выполнена позднее отдельным этапом после закрытого follow-up эпика, а не как его незавершённая волна.
 
-## Out of scope
+## Out of scope на момент эпика
 
-- PASS/FAIL в `specs/007-writer-research-workflow/acceptance.md` и Complete для feature 007 (отдельный follow-up после независимого review).
+- PASS/FAIL в `specs/007-writer-research-workflow/acceptance.md` и Complete для feature 007 оставались отдельным follow-up после независимого review; этот follow-up завершён 14 июля 2026 года.
 - Новые source adapters, LLM-synthesis, managed ArangoDB, второй store в `data/processed/`.

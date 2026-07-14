@@ -2,7 +2,7 @@
 
 Персональная база знаний для сбора, нормализации, поиска и переиспользования материалов из собственных источников: канала "Книжный куб", блога на Medium и будущих архивов заметок, публикаций или исследовательских материалов.
 
-Проект содержит исполнимый вертикальный срез с GraphRAG-, visualization- и writer/research-слоями: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск**, локальный read-only MCP server, стандартный graph export, самодостаточная offline-визуализация и immutable research dossiers с проверяемым file round-trip для внешнего writing-agent. Независимая приёмка writer/research workflow ещё не проводилась.
+Проект содержит исполнимый вертикальный срез с GraphRAG-, visualization- и writer/research-слоями: локальный ArangoDB runtime, безопасный fixture ingest, source adapters для публичного блога `tellmeabout.tech`, Medium account export и Telegram-канала "Книжный куб" (включая владельческий Telegram Desktop archive import), schema/index bootstrap, полнотекстовый (BM25) и семантический (ANN) поиск, подключаемые эмбеддинги (детерминированный hash и локальная модель), граф знаний с similarity-рёбрами, **граф-осведомлённый hybrid retrieval**, community detection (Louvain), **local/global GraphRAG-поиск**, локальный read-only MCP server, стандартный graph export, самодостаточная offline-визуализация и immutable research dossiers с проверяемым file round-trip для внешнего writing-agent. Writer/research workflow независимо принят 14 июля 2026 года после четырёх `PASS` и peer audit сохранённых evidence.
 
 ## Зачем
 
@@ -278,7 +278,7 @@ uv run kb research validate ./writing-output.json \
 
 Внешняя передача exact excerpts всегда требует `--acknowledge-external-disclosure`; handoff, содержащий draft evidence, дополнительно требует `--allow-draft-evidence`. Writing-agent следует передавать только handoff-файл, без DB credentials, raw exports и workspace. Импорт проверяет строгий JSON-контракт, digests, связь с доверенным handoff, допустимые citation IDs и structural coverage, но не выполняет factual verification и не гарантирует автоматическое удаление секретов. Парсинг и artifact I/O в установленном runtime используют стандартную библиотеку Python; JSON Schemas и `jsonschema` нужны только dev/tests.
 
-Полный исполнимый сценарий и отрицательные проверки описаны в [quickstart Feature 007](specs/007-writer-research-workflow/quickstart.md). Реализация и automated gates готовы, однако четыре independent acceptance секции в [acceptance.md](specs/007-writer-research-workflow/acceptance.md) ещё не выполнены, поэтому Feature 007 пока не считается принятой.
+Полный исполнимый сценарий и отрицательные проверки описаны в [quickstart Feature 007](specs/007-writer-research-workflow/quickstart.md). Feature 007 завершена и принята 14 июля 2026 года: dossier/citation/curation, `draft`, `summary` и privacy/path-safety получили четыре независимых `PASS`; artifact IDs, evidence digests и итоговый peer audit записаны в [acceptance.md](specs/007-writer-research-workflow/acceptance.md). Приёмка подтверждает выполнение контрактов, но не превращает structural validation в factual verification и не обещает автоматическую secret redaction exact excerpts.
 
 Проверки:
 
@@ -351,7 +351,7 @@ Integration-тесты работают против выделенной БД `
 - [specs/004-book-cube-owner-archive-import/spec.md](specs/004-book-cube-owner-archive-import/spec.md) - Spec Kit feature для полного владельческого Telegram archive import.
 - [specs/005-medium-export-source/spec.md](specs/005-medium-export-source/spec.md) - Spec Kit feature для Medium account export import.
 - [specs/006-knowledge-base-mcp-server/spec.md](specs/006-knowledge-base-mcp-server/spec.md) - Spec Kit feature для read-only MCP server.
-- [specs/007-writer-research-workflow/spec.md](specs/007-writer-research-workflow/spec.md) - Spec Kit feature V5 для provenance-first research dossier, citations и file round-trip с writing-agent; runtime реализован, independent acceptance ожидается.
+- [specs/007-writer-research-workflow/spec.md](specs/007-writer-research-workflow/spec.md) - завершённая Spec Kit feature V5 для provenance-first research dossier, citations и file round-trip с writing-agent; independent acceptance evidence — в [acceptance.md](specs/007-writer-research-workflow/acceptance.md).
 
 ## Spec-Driven Development
 
@@ -412,6 +412,6 @@ npm run check:adr
 - **v2** - импорт первых реальных источников `tellmeabout.tech` и "Книжный куб", включая полный владельческий archive import.
 - **v3** ✅ - расширенный GraphRAG (граф-осведомлённый hybrid, community detection, local/global search), семантические эмбеддинги, качество retrieval и локальный read-only MCP server — завершён (GR-0…GR-6, см. [docs/graphrag-plan.md](docs/graphrag-plan.md)).
 - **v4** ✅ - node-link JSON/GraphML + самодостаточный offline HTML с картой сообществ/топиков, таймлайном и ego-графом документов (см. [docs/visualization.md](docs/visualization.md) и [ADR 0008](docs/adr/0008-adopt-offline-visualization-and-graph-export.md)).
-- **v5** 🟡 - runtime Feature 007 и automated gates реализованы: immutable research dossier, chunk citations, curation и проверяемый file round-trip с внешним writing-agent. Независимая приёмка T050–T053 ещё не проводилась, поэтому V5 пока не отмечен завершённым.
+- **v5** ✅ - Feature 007 завершена: immutable research dossier, chunk citations, curation и проверяемый file round-trip с внешним writing-agent прошли automated gates и независимую приёмку T050–T053 с четырьмя `PASS` 14 июля 2026 года.
 
 Подробнее: [docs/roadmap.md](docs/roadmap.md).
