@@ -30,7 +30,7 @@ flowchart LR
 - **Store** - долговременное хранение raw-данных, обработанных документов, индексов и generated outputs в разных зонах.
 - **Index/Search** - полнотекстовый (BM25) и семантический (ANN) поиск, graph-aware hybrid-ранжирование, community detection и local/global GraphRAG-поиск поверх графа знаний (GraphRAG-эпик GR-0…GR-6 завершён — см. [graphrag-plan.md](graphrag-plan.md)).
 - **Visualize** - реализованные graph exports и offline-представления тем, сообществ, публикаций и ego-связей.
-- **Write** - реализованный file-first workflow для evidence dossier, curation и контролируемого round-trip с внешним writing-agent; независимая приёмка ещё не выполнена.
+- **Write** - реализованный и независимо принятый file-first workflow для evidence dossier, curation и контролируемого round-trip с внешним writing-agent.
 
 ## Подсистемы
 
@@ -131,7 +131,7 @@ Read side не выполняет ingest/index rebuild и не меняет Aran
 
 Dossier хранит exact selected excerpts, canonical chunk/document/source provenance, digests, порядок evidence и curation lineage. Handoff содержит только выбранный evidence allowlist и writing request; DB credentials, raw payload и локальные source/archive paths в контракт не входят. Imported `draft`/`summary` остаётся generated artifact и явно не становится источником истины. Validation проверяет строгую форму JSON, integrity, citation resolution и structural coverage, но не выполняет автоматическую factual verification и не гарантирует secret redaction. Парсеры и secure artifact I/O не добавляют runtime-зависимостей сверх стандартной библиотеки Python; JSON Schema validation используется только в dev/tests.
 
-Реализация и automated gates готовы, но Feature 007 не считается принятой до четырёх записанных independent acceptance sections: dossier/citation/curation, `draft`, `summary` и privacy/path safety. T050–T053 ещё не выполнялись. Архитектурная граница зафиксирована в принятом [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md), исполнимый сценарий — в [quickstart](../specs/007-writer-research-workflow/quickstart.md), форма результатов — в [acceptance.md](../specs/007-writer-research-workflow/acceptance.md).
+Feature 007 завершена 14 июля 2026 года после четырёх независимых `PASS`: dossier/citation/curation, `draft`, `summary` и privacy/path safety. Artifact IDs, evidence digests и итоговый peer audit записаны в [acceptance.md](../specs/007-writer-research-workflow/acceptance.md). Это подтверждает реализацию архитектурного контракта, но не расширяет автоматическую проверку до factual verification или гарантированной secret redaction exact excerpts. Архитектурная граница зафиксирована в принятом [ADR 0010](adr/0010-adopt-provenance-gated-writer-research-file-workflow.md), исполнимый сценарий — в [quickstart](../specs/007-writer-research-workflow/quickstart.md).
 
 ### Architecture Decision Records
 

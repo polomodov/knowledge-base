@@ -1,6 +1,6 @@
 # Quickstart: Production Knowledge Pipeline
 
-This quickstart is a planned validation path for the first implementation slice. It uses safe synthetic fixture data only.
+This quickstart is the reproducible validation path for the implemented first slice. It uses safe synthetic fixture data only.
 
 ## Prerequisites
 

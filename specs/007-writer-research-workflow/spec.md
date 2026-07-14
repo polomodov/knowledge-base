@@ -4,7 +4,7 @@
 
 **Created**: 2026-07-12
 
-**Status**: Draft
+**Status**: Complete
 
 **Input**: User description: "Спроектировать волну 5: writer/research workflow поверх готовых retrieval, GraphRAG, MCP и visualization read models."
 
@@ -169,7 +169,7 @@
 
 - Основной пользователь — владелец локальной персональной базы знаний; remote и multi-user сценарии отсутствуют.
 - Existing retrieval, GraphRAG, MCP и visualization read models считаются входными зависимостями V5, но workflow обязан честно деградировать при недоступности необязательных слоёв.
-- Реализация идёт extractive-first: dossier и citations должны работать без генеративной модели; drafts/summaries реализуются следующим зависимым инкрементом, но обязательны для завершения Feature 007.
+- Реализация выполнена extractive-first: dossier и citations работают без генеративной модели, а файловый round-trip для drafts/summaries реализован как зависимый слой. 14 июля 2026 года независимая приёмка обоих output kinds и остальных T050–T053 gates завершилась четырьмя `PASS`; evidence и итоговый peer audit записаны в [acceptance.md](acceptance.md).
 - Research artifacts по умолчанию хранятся file-first в выделенной generated-зоне и не становятся canonical документами.
 - Published-only является безопасным default; включение импортированных drafts — отдельное явное действие локального владельца.
 - Published-only ограничен V5 pipeline и применяется внутри всех его retrieval/expansion стадий; legacy CLI/MCP reads сохраняют текущую совместимость и не используются как готовый неотфильтрованный источник handoff.

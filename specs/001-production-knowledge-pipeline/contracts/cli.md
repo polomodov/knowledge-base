@@ -1,6 +1,6 @@
 # CLI Contract: Production Knowledge Pipeline
 
-All commands are planned under the `kb` executable. Commands should accept `--config` and environment variable overrides for ArangoDB connection settings.
+These commands are implemented under the `kb` executable. They accept `--config` and environment variable overrides for ArangoDB connection settings.
 
 ## Platform
 

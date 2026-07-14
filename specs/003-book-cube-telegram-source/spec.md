@@ -4,7 +4,7 @@
 
 **Created**: 2026-06-25
 
-**Status**: Draft
+**Status**: Complete
 
 **Input**: User description: "Add second data source: Telegram channel 'Книжный куб' (https://t.me/book_cube)."
 

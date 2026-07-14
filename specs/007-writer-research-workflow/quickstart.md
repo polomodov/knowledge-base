@@ -358,15 +358,15 @@ git diff --check
 
 `npm run check` выполняет ADR и Markdown-link gates (`check:adr`, `check:docs-links`). Real-corpus acceptance отдельно замеряет build ≤30 seconds, content-digest determinism, package sizes и отсутствие raw payload, local paths, structured credentials и cookies. Автоматическая secret-free гарантия для unstructured exact excerpts не заявляется; их просматривает владелец до handoff.
 
-После automated gates независимый reviewer выполняет dossier/citation/curation, draft round-trip, summary round-trip и privacy/path-safety sections и заполняет [acceptance.md](acceptance.md). Automated run не выставляет `human_reviewed=true` и не заполняет independent results.
+Для воспроизводимого повторного acceptance после automated gates независимый reviewer выполняет dossier/citation/curation, draft round-trip, summary round-trip и privacy/path-safety sections по [acceptance.md](acceptance.md). Первый независимый прогон завершён четырьмя `PASS` 14 июля 2026 года; сохранённые artifact IDs, evidence digests и peer audit находятся в `acceptance.md`. Новый automated run по-прежнему не выставляет `human_reviewed=true` и не подменяет independent results.
 
-### Reviewer prep
+### Reviewer rerun
 
-Перед независимым прогоном T050–T053 откройте [acceptance.md](acceptance.md):
+Для воспроизводимого повторного прогона T050–T053 откройте [acceptance.md](acceptance.md):
 
 1. **§1** — dossier, citations и curation
 2. **§2** — draft round-trip
 3. **§3** — summary round-trip
 4. **§4** — privacy и path safety
 
-Команды и fixtures для этих секций — в разделах 1–5 выше. Не заполняйте Result (`PASS`/`FAIL`) и не переводите feature в Complete, пока reviewer не завершил все четыре секции. Automated evidence (T045/T049) уже записан и не заменяет independent acceptance.
+Команды и fixtures для этих секций — в разделах 1–5 выше. Исторический initial result уже равен `PASS`, поэтому повторный прогон фиксируйте как новый evidence set и не заменяйте его результат до завершения всех четырёх секций. Automated evidence (T045/T049) не заменяет independent acceptance, а автоматическая validation не становится factual verification.

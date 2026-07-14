@@ -11,7 +11,7 @@
 - **v1–v2** — реализованы: ArangoDB pipeline, fixture и source adapters (`tellmeabout-tech`, `medium-export`, `book-cube`, `book-cube-archive`).
 - **v3** — реализованы: BM25/semantic/hybrid search, GraphRAG local/global, embeddings, derived indexes, read-only MCP (`kb-mcp`).
 - **v4** — реализованы: `kb export graph`, `kb viz build` (offline HTML).
-- **v5** — runtime реализован (`kb research build|validate|curate|handoff|import-output`); automated gates зелёные; **независимая приёмка T050–T053 ещё не проводилась** (`acceptance.md` остаётся `NOT RUN`; feature 007 не Complete).
+- **v5** — завершена: `kb research build|validate|curate|handoff|import-output`, automated gates и независимая приёмка T050–T053 с четырьмя `PASS` от 14 июля 2026 года; evidence и peer audit записаны в [acceptance.md](specs/007-writer-research-workflow/acceptance.md).
 
 Не переimplementируйте существующие подсистемы. Перед работой читайте `README.md`, [docs/roadmap.md](docs/roadmap.md) и актуальный код в `src/knowledge_base/`. Трекер follow-up аудита: [docs/audit-followup-plan.md](docs/audit-followup-plan.md).
 

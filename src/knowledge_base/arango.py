@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import sys
 import urllib.error
 import urllib.parse
@@ -12,6 +13,9 @@ from typing import Any
 from knowledge_base.config import Settings
 
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 10.0
+_DEFAULT_AQL_TIMEOUT_SECONDS = 30.0
+_MAX_TIMEOUT_SECONDS = 300.0
 _warned_insecure_transport = False
 
 
@@ -49,7 +53,9 @@ class ArangoClient:
         database: str | None = None,
         body: dict[str, Any] | None = None,
         expected: tuple[int, ...] = (200, 201, 202),
+        timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
     ) -> Any:
+        timeout_seconds = _validate_timeout_seconds(timeout_seconds)
         url = self._url(path, database=database)
         data = None if body is None else json.dumps(body).encode("utf-8")
         request = urllib.request.Request(url, data=data, method=method.upper())
@@ -62,7 +68,7 @@ class ArangoClient:
 
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         try:
-            with opener.open(request, timeout=10) as response:
+            with opener.open(request, timeout=timeout_seconds) as response:
                 payload = response.read().decode("utf-8")
                 if response.status not in expected:
                     raise ArangoError(
@@ -162,9 +168,11 @@ class ArangoClient:
         bind_vars: dict[str, Any] | None = None,
         *,
         batch_size: int | None = None,
+        timeout_seconds: float = _DEFAULT_AQL_TIMEOUT_SECONDS,
     ) -> list[Any]:
         if batch_size is not None and batch_size < 1:
             raise ValueError("batch_size must be at least 1")
+        timeout_seconds = _validate_timeout_seconds(timeout_seconds)
         body: dict[str, Any] = {"query": query, "bindVars": bind_vars or {}}
         if batch_size is not None:
             body["batchSize"] = batch_size
@@ -173,6 +181,7 @@ class ArangoClient:
             "/_api/cursor",
             database=self.settings.arango_database,
             body=body,
+            timeout_seconds=timeout_seconds,
         )
         results = list(response.get("result", []))
         while response.get("hasMore"):
@@ -180,6 +189,7 @@ class ArangoClient:
                 "PUT",
                 f"/_api/cursor/{response['id']}",
                 database=self.settings.arango_database,
+                timeout_seconds=timeout_seconds,
             )
             results.extend(response.get("result", []))
         return results
@@ -195,3 +205,14 @@ def _parse_json(payload: str) -> Any:
         return json.loads(payload)
     except json.JSONDecodeError:
         return payload
+
+
+def _validate_timeout_seconds(timeout_seconds: float) -> float:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout_seconds)
+        or not 0 < timeout_seconds <= _MAX_TIMEOUT_SECONDS
+    ):
+        raise ValueError(f"timeout_seconds must be finite and within (0, {_MAX_TIMEOUT_SECONDS:g}]")
+    return float(timeout_seconds)
