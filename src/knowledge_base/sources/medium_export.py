@@ -373,24 +373,33 @@ def _is_safe_zip_member_name(name: str) -> bool:
     return not (posix.is_absolute() or windows.is_absolute() or windows.drive or ".." in posix.parts)
 
 
+def _validate_zip_members(members: list[zipfile.ZipInfo], path: Path) -> None:
+    """Reject unsafe member names and bound declared decompression size (zip-slip / zip-bomb)."""
+    declared_total = 0
+    for info in members:
+        if not _is_safe_zip_member_name(info.filename):
+            raise MediumArchiveReadError("invalid_medium_export", path, f"Unsafe zip member path: {info.filename}")
+        if info.file_size > _MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES:
+            raise MediumArchiveReadError(
+                "invalid_medium_export",
+                path,
+                f"Zip member {info.filename} declares {info.file_size} bytes, above the "
+                f"{_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES} per-member limit",
+            )
+        declared_total += max(info.file_size, 0)
+    if declared_total > _MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
+        raise MediumArchiveReadError(
+            "invalid_medium_export",
+            path,
+            f"Archive declares {declared_total} uncompressed bytes, above the {_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES} limit",
+        )
+
+
 def _read_archive_zip(path: Path) -> MediumArchivePayload:
     try:
         with zipfile.ZipFile(path) as archive:
             members = [info for info in archive.infolist() if not info.is_dir()]
-            for info in members:
-                if not _is_safe_zip_member_name(info.filename):
-                    raise MediumArchiveReadError(
-                        "invalid_medium_export",
-                        path,
-                        f"Unsafe zip member path: {info.filename}",
-                    )
-            declared_total = sum(max(info.file_size, 0) for info in members)
-            if declared_total > _MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
-                raise MediumArchiveReadError(
-                    "invalid_medium_export",
-                    path,
-                    f"Archive declares {declared_total} uncompressed bytes, above the {_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES} limit",
-                )
+            _validate_zip_members(members, path)
             root_prefix = _find_zip_root_prefix(members)
             if root_prefix is None:
                 raise MediumArchiveReadError("invalid_medium_export", path, "README.html was not found")
@@ -402,13 +411,6 @@ def _read_archive_zip(path: Path) -> MediumArchivePayload:
                 relative = _zip_relative_name(info.filename, root_prefix)
                 if relative is None:
                     continue
-                if info.file_size > _MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES:
-                    raise MediumArchiveReadError(
-                        "invalid_medium_export",
-                        path,
-                        f"Zip member {info.filename} declares {info.file_size} bytes, above the "
-                        f"{_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES} per-member limit",
-                    )
                 if _is_post_path(relative):
                     data = archive.read(info.filename)
                     digest = sha256_text(data)

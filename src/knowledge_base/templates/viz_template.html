@@ -1908,21 +1908,13 @@
 
     // Linear-scan min/max. Math.min/max.apply spreads the array as call arguments and throws
     // RangeError once a large corpus exceeds the engine's argument-count ceiling (~100k), so
-    // reduce over the array instead of applying it.
+    // reduce over the array instead of applying it (ES5, no spread, no argument-count ceiling).
     function arrayMin(list) {
-      var result = Infinity;
-      for (var i = 0; i < list.length; i += 1) {
-        if (list[i] < result) { result = list[i]; }
-      }
-      return result;
+      return list.reduce(function (result, value) { return value < result ? value : result; }, Infinity);
     }
 
     function arrayMax(list) {
-      var result = -Infinity;
-      for (var i = 0; i < list.length; i += 1) {
-        if (list[i] > result) { result = list[i]; }
-      }
-      return result;
+      return list.reduce(function (result, value) { return value > result ? value : result; }, -Infinity);
     }
 
     function clamp(value, minimum, maximum) {

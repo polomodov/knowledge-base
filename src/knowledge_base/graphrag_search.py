@@ -136,14 +136,20 @@ def global_search(
     try:
         membership = _community_membership(repository, [row["document_key"] for row in candidates])
         communities = _communities_by_id(repository, sorted({m["community"] for m in membership}))
+        # Empty membership is ambiguous: the community index may be missing/never built, or the
+        # retrieved candidates may all be singleton documents that a successful rebuild legitimately
+        # omits (Louvain keeps only groups of >= COMMUNITY_MIN_SIZE). Only degrade on the former —
+        # decide from index-run evidence, not empty membership alone.
+        community_index_built = _community_index_built(repository) if not membership else True
     except ArangoError:
         _mark_degraded(context, "graph")
         return context
     if not membership:
-        # A fresh Louvain index assigns every document to a community, so retrieved candidates with
-        # zero membership mean the community derived index is missing or stale. Report degraded
-        # rather than an empty "ok" global view that looks like "no communities matched" (GR honesty).
-        _mark_degraded(context, "communities")
+        if not community_index_built:
+            # No successful community rebuild exists: an empty global view would hide a stale/missing
+            # index behind an "ok" that looks like "no communities matched" (GR honesty).
+            _mark_degraded(context, "communities")
+        # Otherwise the candidates are genuinely un-clustered singletons; "ok" with no communities.
         return context
     # `limit` is the CLI "documents shown per community" flag, so it bounds citations directly.
     context["communities"] = _aggregate_community_scores(
@@ -236,6 +242,25 @@ def _community_membership(repository: KnowledgeRepository, document_keys: list[s
         """,
         {"document_keys": unique_keys},
     )
+
+
+def _community_index_built(repository: KnowledgeRepository) -> bool:
+    """True when a successful community rebuild has ever run (index-run evidence, not membership).
+
+    Distinguishes "the community derived index was never built" (degrade) from "it is built but the
+    retrieved candidates are all singleton documents Louvain omits" (a legitimate empty result).
+    """
+    rows = repository.client.aql(
+        """
+        RETURN LENGTH(
+          FOR run IN index_runs
+            FILTER run.target == "communities" AND run.status == "ok"
+            LIMIT 1
+            RETURN 1
+        ) > 0
+        """,
+    )
+    return bool(rows[0]) if rows else False
 
 
 def _communities_by_id(repository: KnowledgeRepository, community_ids: list[str]) -> dict[str, dict[str, Any]]:

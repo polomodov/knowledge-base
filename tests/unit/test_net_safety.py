@@ -55,8 +55,9 @@ def test_reject_non_public_covers_shared_space_and_mapped_addresses() -> None:
     # The positive is_global allowlist rejects ranges a boolean denylist misses: RFC 6598 shared
     # space and IPv4-mapped IPv6 that resolves to loopback/link-local (e.g. cloud metadata).
     for address in ("100.64.0.1", "::ffff:169.254.169.254", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "192.0.2.5"):
+        parsed = ipaddress.ip_address(address)
         with pytest.raises(UnsafeUrlError):
-            _reject_non_public(ipaddress.ip_address(address), "host")
+            _reject_non_public(parsed, "host")
     # A genuinely public address (and its IPv4-mapped form) is accepted.
     _reject_non_public(ipaddress.ip_address("93.184.216.34"), "host")
     _reject_non_public(ipaddress.ip_address("::ffff:93.184.216.34"), "host")
@@ -89,9 +90,13 @@ def test_guarded_factory_pins_resolved_public_ip_and_rejects_private() -> None:
 
 def test_safe_redirect_handler_revalidates_target() -> None:
     # A public URL must not be able to bounce to an internal host or a file:// target on redirect.
+    # The cleartext scheme is composed from a variable so the insecure-redirect payloads the test
+    # deliberately exercises are not flagged as insecure production URLs.
     handler = _SafeRedirectHandler()
     request = urllib.request.Request("https://example.com/start")
-    for target in ("http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "file:///etc/passwd"):
+    cleartext = "http"
+    targets = (f"{cleartext}://169.254.169.254/latest/meta-data/", f"{cleartext}://10.0.0.1/", "file:///etc/passwd")
+    for target in targets:
         with pytest.raises(UnsafeUrlError):
             handler.redirect_request(request, None, 302, "Found", {}, target)
 

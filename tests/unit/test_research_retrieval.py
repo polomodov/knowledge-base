@@ -170,9 +170,11 @@ def test_semantic_transient_ann_error_propagates_without_exact_rescan() -> None:
         }
     )
     request = ResearchRequest(query="synthetic", candidate_limit=2, evidence_limit=2)
+    typed_repository = _as_repository(repository)
+    provider = FakeProvider()
 
     with pytest.raises(ArangoError):
-        semantic_chunk_candidates(_as_repository(repository), request, provider=FakeProvider(), overfetch_factor=3)
+        semantic_chunk_candidates(typed_repository, request, provider=provider, overfetch_factor=3)
     assert all(call["marker"] != "research:scoped_semantic_fallback" for call in repository.client.calls)
 
 
