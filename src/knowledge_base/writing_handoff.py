@@ -431,7 +431,7 @@ def parse_handoff_package(payload: bytes | str) -> HandoffPackage:
         return HandoffPackage(**value)
     except WritingHandoffError:
         raise
-    except (ArtifactContractError, KeyError, TypeError, ValueError):
+    except (ArtifactContractError, KeyError, TypeError, ValueError, RecursionError):
         raise WritingHandoffError("invalid_handoff") from None
 
 
@@ -646,7 +646,7 @@ def parse_writing_output_package(payload: bytes | str) -> WritingOutputPackage:
         return WritingOutputPackage(**value)
     except WritingOutputContractError:
         raise
-    except (ArtifactContractError, KeyError, TypeError, ValueError):
+    except (ArtifactContractError, KeyError, TypeError, ValueError, RecursionError):
         raise WritingOutputContractError("invalid_writing_output") from None
 
 

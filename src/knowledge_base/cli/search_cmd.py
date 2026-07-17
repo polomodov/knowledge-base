@@ -86,16 +86,17 @@ def _search_global(args: argparse.Namespace) -> int:
 
 
 def _graph_neighbors(args: argparse.Namespace) -> int:
-    return emit_json(
-        graph_neighbors(
-            cli_common._repo(args),
-            topic=args.topic,
-            author=args.author,
-            work=args.work,
-            document=args.document,
-            chunk=args.chunk,
-            limit=args.limit,
-            source_key=args.source,
-            documents_only=args.documents_only,
-        ),
+    result = graph_neighbors(
+        cli_common._repo(args),
+        topic=args.topic,
+        author=args.author,
+        work=args.work,
+        document=args.document,
+        chunk=args.chunk,
+        limit=args.limit,
+        source_key=args.source,
+        documents_only=args.documents_only,
     )
+    # graph_neighbors returns only "ok" or "error" (e.g. a missing start vertex); mirror
+    # _export_graph/_viz_build so a failed query surfaces a non-zero exit code instead of 0.
+    return emit_json(result, exit_code=0 if result["status"] == "ok" else 1)

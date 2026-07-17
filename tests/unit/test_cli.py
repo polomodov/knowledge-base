@@ -8,7 +8,7 @@ import pytest
 
 import knowledge_base.cli.main as cli
 from knowledge_base.cli import common as cli_common
-from knowledge_base.cli import platform_cmd, research_cmd, viz_cmd
+from knowledge_base.cli import platform_cmd, research_cmd, search_cmd, viz_cmd
 from knowledge_base.research_artifacts import (
     ArtifactContractError,
     OutputRootAcknowledgementRequired,
@@ -70,6 +70,24 @@ def test_platform_health_fails_when_core_component_missing(capsys, monkeypatch) 
         lambda client: {"status": "degraded", "checks": [{"name": "collection:documents", "status": "missing"}]},
     )
     assert cli.main(["platform", "health"]) == 1  # a missing core collection is not ready
+
+
+def test_graph_neighbors_exit_code_follows_status(monkeypatch) -> None:
+    monkeypatch.setattr(cli_common, "_repo", lambda args: object())
+
+    monkeypatch.setattr(
+        search_cmd,
+        "graph_neighbors",
+        lambda *a, **k: {"query": "", "mode": "graph", "status": "error", "results": [], "error": "missing start vertex"},
+    )
+    assert cli.main(["graph", "neighbors", "--topic", "x"]) == 1
+
+    monkeypatch.setattr(
+        search_cmd,
+        "graph_neighbors",
+        lambda *a, **k: {"query": "topics/x", "mode": "graph", "status": "ok", "results": []},
+    )
+    assert cli.main(["graph", "neighbors", "--topic", "x"]) == 0
 
 
 def test_export_graph_wires_public_options_and_exit_status(capsys, monkeypatch, tmp_path) -> None:

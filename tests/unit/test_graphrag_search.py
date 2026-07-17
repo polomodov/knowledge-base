@@ -1,5 +1,6 @@
 import pytest
 
+import knowledge_base.graphrag_search as graphrag_search
 import knowledge_base.retrieval as retrieval
 from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import load_settings
@@ -15,6 +16,41 @@ from knowledge_base.retrieval import (
 
 def _candidate(key: str, score: float, provenance: dict | None = None) -> dict:
     return {"document_key": key, "score": score, "title": key.upper(), "provenance": provenance or {"source_key": "s"}}
+
+
+def _stub_global_search_internals(monkeypatch: pytest.MonkeyPatch, *, index_built: bool) -> None:
+    monkeypatch.setattr(
+        graphrag_search,
+        "_hybrid_search",
+        lambda *a, **k: {"status": "ok", "degraded_components": [], "results": [{"document_key": "d1", "score": 0.9}]},
+    )
+    monkeypatch.setattr(graphrag_search, "_community_membership", lambda *a, **k: [])
+    monkeypatch.setattr(graphrag_search, "_communities_by_id", lambda *a, **k: {})
+    monkeypatch.setattr(graphrag_search, "_community_index_built", lambda *a, **k: index_built)
+
+
+def test_global_search_degraded_when_community_index_never_built(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Empty membership AND no successful community rebuild: the index is missing, so an empty "ok"
+    # global view would hide a stale-index signal. global_search must degrade.
+    _stub_global_search_internals(monkeypatch, index_built=False)
+
+    result = global_search(object(), "q")  # repository is unused once the internals are stubbed
+
+    assert result["status"] == "degraded"
+    assert "communities" in result["degraded_components"]
+    assert result["communities"] == []
+
+
+def test_global_search_ok_when_candidates_are_singletons_after_a_built_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Empty membership but the community index WAS built: Louvain legitimately omits singleton
+    # documents (< COMMUNITY_MIN_SIZE), so this is a valid empty result, not a stale-index signal.
+    _stub_global_search_internals(monkeypatch, index_built=True)
+
+    result = global_search(object(), "q")
+
+    assert result["status"] == "ok"
+    assert "communities" not in result["degraded_components"]
+    assert result["communities"] == []
 
 
 def test_aggregate_community_scores_ranks_by_summed_relevance() -> None:

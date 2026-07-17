@@ -587,4 +587,7 @@ def _graph_edges() -> list[str]:
 
 
 def _now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    # Keep microsecond precision (fixed-width via timespec) so two derived-index runs finishing in
+    # the same wall-clock second still order correctly; the freshness comparison would otherwise
+    # treat an equal-second child index as fresh (see freshness.derived_index_stale_codes).
+    return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")

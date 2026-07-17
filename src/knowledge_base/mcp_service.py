@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,8 @@ from knowledge_base.retrieval import (
     text_search,
 )
 from knowledge_base.schema import health_report
+
+_logger = logging.getLogger(__name__)
 
 SEARCH_MODES = {"text", "semantic", "hybrid", "local", "global"}
 GRAPH_START_TYPES = {"topic", "author", "work", "document", "chunk"}
@@ -100,7 +103,10 @@ class KnowledgeBaseMCPService:
                         min_similarity=self.settings.retrieval_min_similarity,
                     )
         except EmbeddingProviderError as error:
-            return _error("embedding_provider_error", str(error))
+            # Provider errors can embed local model paths / configuration detail; keep the detail
+            # server-side and hand the external agent a stable code and generic message.
+            _logger.warning("MCP embedding provider error: %s", error)
+            return _error("embedding_provider_error", "The configured embedding provider is unavailable.")
         except ArangoError as error:
             return _arango_error(error)
 
@@ -530,8 +536,12 @@ def _error(error: str, message: str, *, status: str = "error") -> dict[str, Any]
 
 
 def _arango_error(error: ArangoError) -> dict[str, Any]:
+    # The raw ArangoError text can carry the backend URL and internal diagnostics. This response
+    # crosses the read-only MCP trust boundary to an external agent, so log the detail server-side
+    # and return only a stable code plus a generic client-facing message.
+    _logger.warning("MCP database error: %s", error)
     return {
         "status": "error",
         "error": "database_error",
-        "message": str(error),
+        "message": "The knowledge-base database is currently unavailable.",
     }

@@ -438,6 +438,31 @@ def test_draft_visibility_warning_is_informational_and_explicit_degradation_stay
     assert degraded.validation["status"] == "valid_with_warnings"
 
 
+def test_materialize_forces_degraded_when_warnings_present_despite_ready_status(
+    research_request_builder,
+    evidence_candidate_builder,
+    dossier_manifest_builder,
+) -> None:
+    # Degraded honesty is symmetric: an explicit status="ready" must not launder a genuine
+    # degradation warning into a "ready" revision.
+    context = deepcopy(dossier_manifest_builder()["corpus_context"])
+    context["warnings"] = []
+
+    package = materialize_dossier_package(
+        request=research_request_builder(),
+        corpus_context=context,
+        candidate_evidence=[evidence_candidate_builder()],
+        derived_context={"topics": [], "leads": []},
+        warnings=["optional related context is unavailable"],
+        status="ready",
+        clock=lambda: "2026-07-12T12:00:00Z",
+        entropy=lambda: "89abcdef",
+    )
+
+    assert package.manifest["status"] == "degraded"
+    assert package.validation["status"] == "valid_with_warnings"
+
+
 def test_no_selected_evidence_refuses_materialization_and_publishes_nothing(
     tmp_path: Path,
     research_request_builder,

@@ -134,6 +134,17 @@ def test_parse_writing_output_accepts_both_fixture_kinds_and_preserves_unicode()
     assert "🧭" in summary.content_markdown
 
 
+def test_parse_writing_output_maps_deeply_nested_json_to_contract_error() -> None:
+    # A deeply nested untrusted payload (within the byte cap) makes json.loads raise RecursionError.
+    # It must surface as the stable contract error, not crash the import across the trust boundary.
+    parse = _api("parse_writing_output_package")
+    contract_error = _api("WritingOutputContractError")
+    bomb = ("[" * 100_000 + "]" * 100_000).encode("utf-8")
+
+    with pytest.raises(contract_error):
+        parse(bomb)
+
+
 def test_parse_writing_output_enforces_exact_two_mib_byte_boundary(
     writing_output_package_builder: Builder,
 ) -> None:

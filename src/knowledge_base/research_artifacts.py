@@ -393,6 +393,12 @@ def parse_strict_object(
         )
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ArtifactContractError("artifact is not valid UTF-8 JSON") from error
+    except RecursionError:
+        # Deeply nested untrusted JSON (e.g. hundreds of thousands of nested arrays inside the
+        # byte cap) makes json.loads exceed the interpreter recursion limit. Map it to the stable
+        # contract error like every other malformed-input case instead of letting a RecursionError
+        # escape the parser and crash the caller across the trust boundary.
+        raise ArtifactContractError("artifact nesting is too deep") from None
     if not isinstance(value, dict):
         raise ArtifactContractError("artifact must be a JSON object")
 
@@ -483,7 +489,10 @@ def materialize_dossier_package(
         manifest_warnings.append("draft_visibility_enabled")
     if len(manifest_warnings) > 100:
         raise ArtifactContractError("combined dossier warnings exceed 100 items")
-    effective_status = status or ("degraded" if degradation_warnings else "ready")
+    # Degraded honesty is symmetric: an explicit status must never launder present degradation
+    # warnings into "ready". If any genuine degradation warning is present the revision is at least
+    # "degraded"; only when there are none does the caller's status (or "ready") apply.
+    effective_status = "degraded" if degradation_warnings else (status or "ready")
     dossier_key = _dossier_key(request_projection)
     manifest: dict[str, Any] = {
         "schema_version": _SCHEMA_VERSION,

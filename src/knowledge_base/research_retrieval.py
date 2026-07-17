@@ -542,7 +542,7 @@ def clean_community_leads(
                 RETURN member_edge._from
             )
             FILTER LENGTH(disallowed_members) == 0
-            COLLECT community_key = community._key
+            COLLECT community_key = community._key AGGREGATE max_disallowed = MAX(LENGTH(disallowed_members))
             LET clean = DOCUMENT("communities", community_key)
             SORT clean.size DESC, community_key ASC
             LIMIT @limit
@@ -552,7 +552,7 @@ def clean_community_leads(
               method: clean.method,
               top_topics: clean.top_topics,
               summary: clean.summary,
-              is_clean: true
+              is_clean: max_disallowed == 0
             }
         """,
         {
@@ -595,7 +595,7 @@ def load_corpus_context(
                 FILTER @source_key == null OR run.source_key == @source_key
                 SORT run.finished_at DESC, run.started_at DESC, run._key DESC
                 LIMIT 1
-                RETURN run._key
+                RETURN { run_key: run._key, finished_at: run.finished_at }
             )
             LET index_rows = (
               FOR target IN @index_targets
@@ -614,7 +614,8 @@ def load_corpus_context(
                 RETURN { target: target, run: latest }
             )
             RETURN {
-              latest_import_run_key: latest_import,
+              latest_import_run_key: latest_import.run_key,
+              latest_import_finished_at: latest_import.finished_at,
               latest_index_runs: ZIP(index_rows[*].target, index_rows[*].run)
             }
             """,
@@ -629,7 +630,10 @@ def load_corpus_context(
         return context
     context["latest_import_run_key"] = _optional_string(rows[0].get("latest_import_run_key"))
     context["latest_index_runs"] = _sanitize_index_runs(rows[0].get("latest_index_runs"))
-    context["warnings"] = list(derived_index_stale_codes(context["latest_index_runs"]))
+    # Anchor derived-index freshness to the latest import (kept as a local, not stored in the
+    # context, so the dossier's corpus-context shape and digest are unchanged).
+    import_finished_at = _optional_string(rows[0].get("latest_import_finished_at"))
+    context["warnings"] = list(derived_index_stale_codes(context["latest_index_runs"], import_finished_at=import_finished_at))
     return context
 
 
@@ -670,10 +674,15 @@ def _semantic_discovery(
             bind_vars,
         )
         return rows, False
-    except ArangoError:
-        # ArangoDB before 3.12.6 and some vector-index plans reject pre-filtered
-        # APPROX_NEAR_COSINE queries. Never fall back to an unscoped ANN result:
-        # exact-rescore a scoped batch in Python and let the caller mark degraded.
+    except ArangoError as error:
+        if error.status is None:
+            # No HTTP status means a transient connection/timeout failure (URLError), not a query
+            # the server rejected. Propagate it instead of silently escalating into a full-corpus
+            # exact rescan — a slow database must fail fast, not be handed more work to do.
+            raise
+        # A query-level rejection (HTTP status set): ArangoDB before 3.12.6 and some vector-index
+        # plans reject pre-filtered APPROX_NEAR_COSINE queries. Never fall back to an unscoped ANN
+        # result: exact-rescore a scoped batch in Python and let the caller mark degraded.
         return _semantic_fallback_exact_window(
             repository,
             request,
@@ -977,10 +986,10 @@ def _all_statuses_allowed(value: Any, allowed: Sequence[str]) -> bool:
 
 
 def _community_is_clean(row: Any) -> bool:
-    if not isinstance(row, dict) or row.get("is_clean") is not True:
-        return False
-    disallowed = row.get("disallowed_members", [])
-    return isinstance(disallowed, list) and not disallowed
+    # `is_clean` is now derived in AQL from the actual out-of-scope member count (max_disallowed == 0),
+    # not a hardcoded literal, so this defensive gate genuinely rejects a community whose scope FILTER
+    # was ever weakened or removed upstream, instead of trivially passing every returned row.
+    return isinstance(row, dict) and row.get("is_clean") is True
 
 
 def _optional_string(value: Any) -> str | None:
