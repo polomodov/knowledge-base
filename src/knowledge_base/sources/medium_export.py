@@ -30,6 +30,10 @@ from knowledge_base.sources.ingest_core import (
 SOURCE_KEY = "medium-export"
 DISPLAY_NAME = "Medium Export"
 ARCHIVE_HINT = "Copy Medium export under data/raw/medium/ and rerun with --archive."
+# Bound zip decompression so a crafted archive with a small compressed footprint but huge declared
+# member sizes cannot exhaust memory (zip bomb). Owner-supplied Medium exports stay well under these.
+_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES = 64 * 1024 * 1024
+_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 README_NAME = "README.html"
 POST_ID_RE = re.compile(r"([0-9a-f]{12,})$", re.IGNORECASE)
 EXPORT_DATE_RE = re.compile(r"Exported from .*? on ([A-Za-z]+ \d{1,2}, \d{4})", re.DOTALL)
@@ -380,6 +384,13 @@ def _read_archive_zip(path: Path) -> MediumArchivePayload:
                         path,
                         f"Unsafe zip member path: {info.filename}",
                     )
+            declared_total = sum(max(info.file_size, 0) for info in members)
+            if declared_total > _MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
+                raise MediumArchiveReadError(
+                    "invalid_medium_export",
+                    path,
+                    f"Archive declares {declared_total} uncompressed bytes, above the {_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES} limit",
+                )
             root_prefix = _find_zip_root_prefix(members)
             if root_prefix is None:
                 raise MediumArchiveReadError("invalid_medium_export", path, "README.html was not found")
@@ -391,6 +402,13 @@ def _read_archive_zip(path: Path) -> MediumArchivePayload:
                 relative = _zip_relative_name(info.filename, root_prefix)
                 if relative is None:
                     continue
+                if info.file_size > _MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES:
+                    raise MediumArchiveReadError(
+                        "invalid_medium_export",
+                        path,
+                        f"Zip member {info.filename} declares {info.file_size} bytes, above the "
+                        f"{_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES} per-member limit",
+                    )
                 if _is_post_path(relative):
                     data = archive.read(info.filename)
                     digest = sha256_text(data)

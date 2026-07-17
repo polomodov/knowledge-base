@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +37,7 @@ def export_jsonl(repository: KnowledgeRepository, output: Path) -> dict[str, Any
     rows = repository.client.aql(
         """
         FOR doc IN documents
+          SORT doc._key ASC
           LET source = DOCUMENT("sources", doc.source_key)
           LET chunks = (
             FOR chunk IN chunks
@@ -45,11 +48,26 @@ def export_jsonl(repository: KnowledgeRepository, output: Path) -> dict[str, Any
           RETURN { document: doc, source: source, chunks: chunks }
         """,
     )
-    with output.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True))
-            handle.write("\n")
+    # Deterministic outer order (SORT doc._key) plus an atomic write keep the export byte-stable
+    # across runs, so downstream change-detection can hash/diff it, and a mid-write failure never
+    # leaves a partially written file at the destination.
+    payload = "".join(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n" for row in rows)
+    _atomic_write_text(output, payload)
     result: dict[str, Any] = {"status": "ok", "output": str(output), "records": len(rows)}
     if warning:
         result["warning"] = warning
     return result
+
+
+def _atomic_write_text(output: Path, payload: str) -> None:
+    """Write ``payload`` to ``output`` via a same-directory temp file and atomic rename."""
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_name, output)
+    except BaseException:
+        Path(temporary_name).unlink(missing_ok=True)
+        raise

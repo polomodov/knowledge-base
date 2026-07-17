@@ -448,6 +448,17 @@ def visualization_metadata(
         {"targets": ["embeddings", "related", "communities"]},
     )
     index_runs = {row["target"]: row["run"] for row in run_rows}
+    import_finished_at = repository.client.aql(
+        """
+        RETURN FIRST(
+          FOR run IN import_runs
+            FILTER run.status == "ok"
+            SORT run.finished_at DESC, run.started_at DESC, run._key DESC
+            LIMIT 1
+            RETURN run.finished_at
+        )
+        """,
+    )[0]
     warnings: list[dict[str, str]] = []
     if warn_empty_similarity and selected_documents > 1 and not selected_similarity_edges:
         warnings.append(
@@ -459,7 +470,12 @@ def visualization_metadata(
                 ),
             }
         )
-    warnings.extend(derived_index_stale_messages(index_runs))
+    warnings.extend(
+        derived_index_stale_messages(
+            index_runs,
+            import_finished_at=import_finished_at if isinstance(import_finished_at, str) else None,
+        )
+    )
     models = diagnostics["embedding_models"]
     return {
         "built_at": built_at or datetime.now(UTC).isoformat().replace("+00:00", "Z"),

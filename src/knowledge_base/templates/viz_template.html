@@ -783,10 +783,10 @@
       if (xs.length === 0) {
         return { minX: -1, maxX: 1, minY: -1, maxY: 1 };
       }
-      var minX = Math.min.apply(null, xs);
-      var maxX = Math.max.apply(null, xs);
-      var minY = Math.min.apply(null, ys);
-      var maxY = Math.max.apply(null, ys);
+      var minX = arrayMin(xs);
+      var maxX = arrayMax(xs);
+      var minY = arrayMin(ys);
+      var maxY = arrayMax(ys);
       if (minX === maxX) {
         minX -= 1;
         maxX += 1;
@@ -1062,7 +1062,7 @@
           return sum + number(entry.values[monthIndex], 0);
         }, 0);
       });
-      var maximum = Math.max(1, Math.max.apply(null, totals));
+      var maximum = Math.max(1, arrayMax(totals));
       var group = svg("g", { id: "timeline-world" });
       setSvgTransform(group, svgTransforms.timeline);
       addAxes(group, months, size, margin, maximum);
@@ -1101,7 +1101,7 @@
       var width = Math.max(1, size.width - margin.left - margin.right);
       var height = Math.max(1, size.height - margin.top - margin.bottom);
       var maximum = Math.max(1, series.reduce(function (max, entry) {
-        return Math.max(max, Math.max.apply(null, entry.values.map(function (value) { return number(value, 0); })));
+        return Math.max(max, arrayMax(entry.values.map(function (value) { return number(value, 0); })));
       }, 0));
       var group = svg("g", { id: "timeline-world" });
       setSvgTransform(group, svgTransforms.timeline);
@@ -1904,6 +1904,25 @@
     function number(value, fallback) {
       var parsed = Number(value);
       return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    // Linear-scan min/max. Math.min/max.apply spreads the array as call arguments and throws
+    // RangeError once a large corpus exceeds the engine's argument-count ceiling (~100k), so
+    // reduce over the array instead of applying it.
+    function arrayMin(list) {
+      var result = Infinity;
+      for (var i = 0; i < list.length; i += 1) {
+        if (list[i] < result) { result = list[i]; }
+      }
+      return result;
+    }
+
+    function arrayMax(list) {
+      var result = -Infinity;
+      for (var i = 0; i < list.length; i += 1) {
+        if (list[i] > result) { result = list[i]; }
+      }
+      return result;
     }
 
     function clamp(value, minimum, maximum) {

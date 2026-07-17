@@ -239,6 +239,12 @@ def _vector_ranked(
         if not candidates:
             return None
         matching = [row for row in candidates if row.get("embedding_model") == model]
+        if not matching:
+            # The index returned hits, but the model filter removed every one: the corpus was
+            # embedded under an incompatible same-dimension provider (e.g. a partial re-ingest
+            # under a different model). Signal fallback (return None) so the caller marks the
+            # result degraded instead of reporting a spurious empty "ok" ANN answer (GR-2 review).
+            return None
         deduped = _dedup_best_by_document(matching)
         # Enough distinct documents, or the index returned fewer rows than asked (exhausted).
         if len(deduped) >= limit or len(candidates) < candidates_limit:

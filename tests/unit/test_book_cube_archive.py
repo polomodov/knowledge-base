@@ -1,6 +1,9 @@
 from pathlib import Path
 from zipfile import ZipFile
 
+import pytest
+
+import knowledge_base.sources.book_cube as book_cube
 from knowledge_base.sources.book_cube import (
     ArchiveReadError,
     collect_attachment_refs,
@@ -71,6 +74,35 @@ def test_collect_attachment_refs_without_archive() -> None:
             "size_bytes": None,
         },
     ]
+
+
+def test_read_archive_zip_rejects_unsafe_member_name(tmp_path: Path) -> None:
+    # Symmetric with medium_export: a zip-slip member name is rejected on read (defense in depth).
+    zip_path = tmp_path / "book-cube-export.zip"
+    with ZipFile(zip_path, "w") as archive:
+        for path in ARCHIVE_DIR.rglob("*"):
+            if path.is_file():
+                archive.write(path, Path("Book Cube Export") / path.relative_to(ARCHIVE_DIR))
+        archive.writestr("../evil.txt", b"x")
+
+    with pytest.raises(ArchiveReadError) as error:
+        read_archive_payload(zip_path)
+    assert error.value.to_payload()["error"] == "archive_not_readable"
+
+
+def test_read_archive_zip_rejects_oversized_total(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Bound zip decompression: a total declared size over the cap is rejected before result.json is
+    # read fully into memory (zip-bomb guard). Lower the cap so the fixture trips it.
+    monkeypatch.setattr(book_cube, "_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES", 8)
+    zip_path = tmp_path / "book-cube-export.zip"
+    with ZipFile(zip_path, "w") as archive:
+        for path in ARCHIVE_DIR.rglob("*"):
+            if path.is_file():
+                archive.write(path, Path("Book Cube Export") / path.relative_to(ARCHIVE_DIR))
+
+    with pytest.raises(ArchiveReadError) as error:
+        read_archive_payload(zip_path)
+    assert error.value.to_payload()["error"] == "archive_not_readable"
 
 
 def test_archive_errors_have_cli_payload() -> None:

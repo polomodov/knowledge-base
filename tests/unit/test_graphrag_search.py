@@ -1,5 +1,6 @@
 import pytest
 
+import knowledge_base.graphrag_search as graphrag_search
 import knowledge_base.retrieval as retrieval
 from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import load_settings
@@ -15,6 +16,25 @@ from knowledge_base.retrieval import (
 
 def _candidate(key: str, score: float, provenance: dict | None = None) -> dict:
     return {"document_key": key, "score": score, "title": key.upper(), "provenance": provenance or {"source_key": "s"}}
+
+
+def test_global_search_reports_degraded_when_community_index_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Hybrid retrieval finds candidates, but no candidate belongs to any community: a fresh Louvain
+    # index would assign every document, so empty membership means the community index is missing or
+    # stale. global_search must degrade, not return an empty "ok" global view.
+    monkeypatch.setattr(
+        graphrag_search,
+        "_hybrid_search",
+        lambda *a, **k: {"status": "ok", "degraded_components": [], "results": [{"document_key": "d1", "score": 0.9}]},
+    )
+    monkeypatch.setattr(graphrag_search, "_community_membership", lambda *a, **k: [])
+    monkeypatch.setattr(graphrag_search, "_communities_by_id", lambda *a, **k: {})
+
+    result = global_search(object(), "q")  # repository is unused once the internals are stubbed
+
+    assert result["status"] == "degraded"
+    assert "communities" in result["degraded_components"]
+    assert result["communities"] == []
 
 
 def test_aggregate_community_scores_ranks_by_summed_relevance() -> None:

@@ -14,14 +14,16 @@ class UnsafeUrlError(ValueError):
 
 
 def _reject_non_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address, host: str) -> None:
-    if (
-        address.is_private
-        or address.is_loopback
-        or address.is_link_local
-        or address.is_reserved
-        or address.is_multicast
-        or address.is_unspecified
-    ):
+    # Unwrap IPv4-mapped IPv6 (e.g. ``::ffff:169.254.169.254``) so the classification runs on the
+    # embedded IPv4 address; on Python < 3.12.4 the IPv6 properties do not see through the mapping,
+    # which would otherwise let a cloud-metadata address slip past a link-local/private check.
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    # Positive allowlist rather than a boolean denylist: reject anything that is not a globally
+    # routable public address. `is_global` is the inverse of the full IANA special-purpose registry,
+    # so it also covers ranges a denylist misses — RFC 6598 shared space (100.64.0.0/10), the
+    # documentation blocks, and future special-purpose allocations — and fails closed by default.
+    if not address.is_global:
         raise UnsafeUrlError(f"host {host} resolves to a non-public address: {address}")
 
 
@@ -121,10 +123,20 @@ def open_public_url(url: str, *, headers: dict[str, str], timeout: float) -> HTT
     request = urllib.request.Request(url, method="GET")
     for name, value in headers.items():
         request.add_header(name, value)
-    opener = urllib.request.build_opener(
-        _GuardedHTTPHandler,
-        _GuardedHTTPSHandler,
-        _SafeRedirectHandler,
+    # Build a minimal http(s)-only opener instead of urllib.request.build_opener, which also
+    # registers FileHandler/FTPHandler/DataHandler. check_public_url already rejects non-http(s)
+    # schemes on the initial request and on every redirect, but omitting those handlers entirely
+    # means a bug that ever bypassed that check still cannot turn a fetch into a local-file,
+    # ftp, or data read. An unknown scheme now raises URLError (no UnknownHandler) rather than
+    # being served.
+    opener = urllib.request.OpenerDirector()
+    for handler in (
         urllib.request.ProxyHandler({}),
-    )
+        _GuardedHTTPHandler(),
+        _GuardedHTTPSHandler(),
+        _SafeRedirectHandler(),
+        urllib.request.HTTPDefaultErrorHandler(),
+        urllib.request.HTTPErrorProcessor(),
+    ):
+        opener.add_handler(handler)
     return opener.open(request, timeout=timeout)

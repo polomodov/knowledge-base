@@ -11,6 +11,7 @@ from typing import Any, cast
 import pytest
 
 from knowledge_base import mcp_service
+from knowledge_base.arango import ArangoError
 from knowledge_base.config import Settings
 from knowledge_base.embeddings import EmbeddingProviderError
 from knowledge_base.mcp_service import (
@@ -262,17 +263,42 @@ def test_search_rejects_unknown_mode_with_complete_allowlist() -> None:
     assert all(mode in result["message"] for mode in ("text", "semantic", "hybrid", "local", "global"))
 
 
-def test_search_returns_structured_embedding_provider_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_search_returns_structured_embedding_provider_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     def fail_to_build(settings: object) -> object:
-        raise EmbeddingProviderError(f"provider unavailable for {settings!r}")
+        raise EmbeddingProviderError("provider unavailable: /models/secret-path")
 
     monkeypatch.setattr(mcp_service, "build_embedding_provider", fail_to_build)
 
-    result = _service().search("query", mode="semantic")
+    with caplog.at_level("WARNING", logger="knowledge_base.mcp_service"):
+        result = _service().search("query", mode="semantic")
 
     assert result["status"] == "error"
     assert result["error"] == "embedding_provider_error"
-    assert "provider unavailable" in result["message"]
+    # The client-facing message is generic; raw provider detail must not cross the trust boundary.
+    assert result["message"] == "The configured embedding provider is unavailable."
+    assert "secret-path" not in result["message"]
+    # The detail is retained server-side for operators.
+    assert "provider unavailable: /models/secret-path" in caplog.text
+
+
+def test_search_redacts_backend_database_error(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        raise ArangoError("Cannot reach ArangoDB at http://internal-db:8529: timed out")
+
+    monkeypatch.setattr(mcp_service, "text_search", fail)
+
+    with caplog.at_level("WARNING", logger="knowledge_base.mcp_service"):
+        result = _service().search("q", mode="text")
+
+    assert result["status"] == "error"
+    assert result["error"] == "database_error"
+    # The backend URL / raw diagnostics must not cross the read-only trust boundary to the client.
+    assert result["message"] == "The knowledge-base database is currently unavailable."
+    assert "internal-db" not in result["message"]
+    # But operators still see the detail server-side.
+    assert "internal-db" in caplog.text
 
 
 def test_document_uri_parsing_and_markdown() -> None:

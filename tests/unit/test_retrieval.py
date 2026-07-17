@@ -2,6 +2,7 @@ from typing import cast
 
 import pytest
 
+from knowledge_base.embeddings import HASH_EMBEDDING_MODEL
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import (
     _cosine,
@@ -421,6 +422,80 @@ def test_semantic_search_scoped_empty_chunks_reports_vector_degraded() -> None:
         source_key="legacy-source",
         min_similarity=-1.0,
     )
+
+    assert response["status"] == "degraded"
+    assert response["degraded_components"] == ["vector"]
+    assert response["results"] == []
+
+
+class _AnnSemanticClient:
+    """Serves the ANN discovery + hydration queries; the full-scan fallback returns nothing."""
+
+    def __init__(self, *, candidate_model: str) -> None:
+        self.candidate_model = candidate_model
+        self.calls: list[tuple[str, dict]] = []
+
+    def aql(self, query: str, bind_vars: dict | None = None) -> list[dict]:
+        self.calls.append((query, dict(bind_vars or {})))
+        if "APPROX_NEAR_COSINE" in query:
+            return [
+                {
+                    "id": "chunks/a-c0",
+                    "key": "a-c0",
+                    "document_key": "a",
+                    "text": "alpha",
+                    "score": 0.95,
+                    "embedding_model": self.candidate_model,
+                },
+                {
+                    "id": "chunks/b-c0",
+                    "key": "b-c0",
+                    "document_key": "b",
+                    "text": "beta",
+                    "score": 0.80,
+                    "embedding_model": self.candidate_model,
+                },
+            ]
+        if "FOR item IN @items" in query:
+            return [
+                {
+                    "id": item["id"],
+                    "document_key": item["document_key"],
+                    "chunk_key": item["key"],
+                    "title": item["document_key"],
+                    "snippet": item["text"],
+                    "score": item["score"],
+                    "score_components": {"bm25": None, "vector": item["score"], "graph_boost": None},
+                    "provenance": {"source_key": "s", "raw_snapshot_key": "r", "import_run_key": "i"},
+                }
+                for item in bind_vars["items"]
+            ]
+        if "FOR chunk IN chunks" in query:  # full-scan fallback path
+            return []
+        raise AssertionError(f"unexpected semantic query: {query}")
+
+
+def test_semantic_search_ann_ok_path_is_not_marked_degraded() -> None:
+    # The non-degraded ANN path (source_key=None, model matches) must report status "ok" with no
+    # degraded_components — the mirror of the fallback tests, so a regression that marks every
+    # result degraded cannot pass unnoticed.
+    client = _AnnSemanticClient(candidate_model=HASH_EMBEDDING_MODEL)
+    repository = cast(KnowledgeRepository, type("Repository", (), {"client": client})())
+
+    response = semantic_search(repository, "q", dimension=2, min_similarity=-1.0)
+
+    assert response["status"] == "ok"
+    assert "degraded_components" not in response
+    assert {row["document_key"] for row in response["results"]} == {"a", "b"}
+
+
+def test_semantic_search_model_mismatched_ann_falls_back_to_degraded() -> None:
+    # ANN returns hits, but they were embedded under a different same-dimension model, so the model
+    # filter drops them all. This must degrade (fall back), not return a spurious empty "ok".
+    client = _AnnSemanticClient(candidate_model="foreign-model-v9")
+    repository = cast(KnowledgeRepository, type("Repository", (), {"client": client})())
+
+    response = semantic_search(repository, "q", dimension=2, min_similarity=-1.0)
 
     assert response["status"] == "degraded"
     assert response["degraded_components"] == ["vector"]

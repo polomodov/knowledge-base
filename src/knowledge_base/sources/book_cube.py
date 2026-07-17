@@ -46,6 +46,19 @@ WORK_MARKER_RE = re.compile(
 _LETTER_RE = re.compile(r"[A-Za-zА-Яа-яЁё]")
 ATTACHMENT_FIELDS = ("photo", "file", "thumbnail")
 VOID_TAGS = {"br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+# Bound zip decompression (zip bomb) for owner-supplied Telegram Desktop archives; real exports
+# stay far under these.
+_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES = 256 * 1024 * 1024
+_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES = 4 * 1024 * 1024 * 1024
+
+
+def _is_safe_zip_member_name(name: str) -> bool:
+    """Reject zip-slip / absolute / backslash / drive member names."""
+    if not name or "\\" in name:
+        return False
+    posix = PurePosixPath(name)
+    windows = PureWindowsPath(name)
+    return not (posix.is_absolute() or windows.is_absolute() or windows.drive or ".." in posix.parts)
 
 
 @dataclass(frozen=True)
@@ -372,9 +385,29 @@ def _read_archive_zip(path: Path) -> ArchivePayload:
     try:
         with zipfile.ZipFile(path) as archive:
             members = [info for info in archive.infolist() if not info.is_dir()]
+            for info in members:
+                # Reject zip-slip / absolute / drive member names to match medium_export and the
+                # attachment path rules (finding #41). These names never write to disk here, but
+                # validating on read keeps the two archive readers symmetric and defensive.
+                if not _is_safe_zip_member_name(info.filename):
+                    raise ArchiveReadError("archive_not_readable", path, f"Unsafe zip member path: {info.filename}")
+            declared_total = sum(max(info.file_size, 0) for info in members)
+            if declared_total > _MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES:
+                raise ArchiveReadError(
+                    "archive_not_readable",
+                    path,
+                    f"Archive declares {declared_total} uncompressed bytes, above the {_MAX_ZIP_TOTAL_UNCOMPRESSED_BYTES} limit",
+                )
             result_name = _find_result_json_in_zip(members)
             if result_name is None:
                 raise ArchiveReadError("result_json_not_found", path)
+            result_info = next((info for info in members if info.filename == result_name), None)
+            if result_info is not None and result_info.file_size > _MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES:
+                raise ArchiveReadError(
+                    "archive_not_readable",
+                    path,
+                    f"result.json declares {result_info.file_size} bytes, above the {_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES} limit",
+                )
             payload = archive.read(result_name).decode("utf-8", errors="replace")
             member_hashes = {}
             for info in members:

@@ -139,6 +139,12 @@ def global_search(
     except ArangoError:
         _mark_degraded(context, "graph")
         return context
+    if not membership:
+        # A fresh Louvain index assigns every document to a community, so retrieved candidates with
+        # zero membership mean the community derived index is missing or stale. Report degraded
+        # rather than an empty "ok" global view that looks like "no communities matched" (GR honesty).
+        _mark_degraded(context, "communities")
+        return context
     # `limit` is the CLI "documents shown per community" flag, so it bounds citations directly.
     context["communities"] = _aggregate_community_scores(
         candidates,

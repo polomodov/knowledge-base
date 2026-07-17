@@ -134,7 +134,7 @@ def test_semantic_search_bounds_overfetch_then_scopes_hydration_and_exact_cosine
 def test_semantic_ann_failure_uses_exact_rescore_fallback_and_warns() -> None:
     repository = FakeRepository(
         {
-            "research:semantic_chunk_candidates": ArangoError("pre-filtered ANN unavailable"),
+            "research:semantic_chunk_candidates": ArangoError("pre-filtered ANN unavailable", status=400),
             "research:scoped_semantic_fallback": [
                 {"chunk_key": "research-published-b-c0", "embedding": [0.8, 0.6]},
                 {"chunk_key": "research-published-a-c0", "embedding": [1.0, 0.0]},
@@ -157,6 +157,23 @@ def test_semantic_ann_failure_uses_exact_rescore_fallback_and_warns() -> None:
         "research-published-b-c0",
     ]
     assert _call(repository, "research:scoped_semantic_fallback")["bind_vars"]["batch_size"] == 500
+
+
+def test_semantic_transient_ann_error_propagates_without_exact_rescan() -> None:
+    # A status-less ArangoError models a transient connection/timeout failure (not a query the
+    # server rejected). It must propagate rather than silently escalate into the full-corpus
+    # exact-rescore fallback.
+    repository = FakeRepository(
+        {
+            "research:semantic_chunk_candidates": ArangoError("Cannot reach ArangoDB", status=None),
+            "research:scoped_semantic_fallback": [{"chunk_key": "research-published-a-c0", "embedding": [1.0, 0.0]}],
+        }
+    )
+    request = ResearchRequest(query="synthetic", candidate_limit=2, evidence_limit=2)
+
+    with pytest.raises(ArangoError):
+        semantic_chunk_candidates(_as_repository(repository), request, provider=FakeProvider(), overfetch_factor=3)
+    assert all(call["marker"] != "research:scoped_semantic_fallback" for call in repository.client.calls)
 
 
 def test_hydration_preserves_exact_provenance_and_rejects_wrong_ownership() -> None:

@@ -3,6 +3,7 @@ from zipfile import ZipFile
 
 import pytest
 
+import knowledge_base.sources.medium_export as medium_export
 from knowledge_base.sources.medium_export import (
     MediumArchiveReadError,
     _is_safe_zip_member_name,
@@ -162,6 +163,21 @@ def test_archive_errors_have_cli_payload(tmp_path: Path) -> None:
     with pytest.raises(MediumArchiveReadError) as export:
         read_medium_archive_payload(invalid)
     assert export.value.to_payload()["error"] == "invalid_medium_export"
+
+
+def test_read_medium_archive_zip_rejects_oversized_member(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # A member declaring more uncompressed bytes than the cap is rejected before the reader loads it
+    # into memory (zip-bomb guard). Lower the cap so a normal fixture member trips it.
+    monkeypatch.setattr(medium_export, "_MAX_ZIP_MEMBER_UNCOMPRESSED_BYTES", 8)
+    zip_path = tmp_path / "medium-export.zip"
+    with ZipFile(zip_path, "w") as archive:
+        for path in ARCHIVE_DIR.rglob("*"):
+            if path.is_file():
+                archive.write(path, Path("Medium Export") / path.relative_to(ARCHIVE_DIR))
+
+    with pytest.raises(MediumArchiveReadError) as error:
+        read_medium_archive_payload(zip_path)
+    assert error.value.to_payload()["error"] == "invalid_medium_export"
 
 
 def test_is_safe_zip_member_name_rejects_traversal_absolute_and_backslash() -> None:
