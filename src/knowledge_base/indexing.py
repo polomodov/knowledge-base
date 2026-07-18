@@ -140,12 +140,17 @@ def build_embeddings(repository: KnowledgeRepository, settings: Settings) -> dic
     provider = build_embedding_provider(settings)
 
     # Phase 1 (long, non-destructive): stage new vectors beside the live ones.
-    staged = _stage_pending_embeddings(repository, provider)
+    _stage_pending_embeddings(repository, provider)
+    # Gate on the actual number of rows that carry a shadow field, not on the fetched-row counter:
+    # a concurrent delete during the offset-paginated staging scan could shift a surviving row behind
+    # the offset and skip it while the counter still matched `total`. Counting HAS(embedding_pending)
+    # proves every chunk was really staged before we touch the live space.
     total = _count_chunks(repository)
+    staged = _count_pending_embeddings(repository)
     if staged != total:
-        # A gap between staged and total (a concurrent ingest/delete, or a lost batch) means we cannot
-        # prove the swap would cover the whole corpus. Roll the shadow fields back and fail loudly
-        # rather than promote a partial re-embed into a split live space.
+        # Not every chunk carries a staged vector (a concurrent ingest/delete, or a lost batch), so we
+        # cannot prove the swap would cover the whole corpus. Roll the shadow fields back and fail
+        # loudly rather than promote a partial re-embed into a split live space.
         _clear_pending_embeddings(repository)
         raise EmbeddingRebuildError(f"staged {staged} of {total} chunks; aborting embedding swap to avoid a split corpus")
 
@@ -155,6 +160,11 @@ def build_embeddings(repository: KnowledgeRepository, settings: Settings) -> dic
     # recoverable by re-running.
     repository.client.drop_index("chunks", "idx_chunks_embedding_vector")
     swapped = _swap_pending_embeddings(repository)
+    if swapped != total:
+        # The atomic swap promoted a different number of rows than were staged (only possible under a
+        # concurrent write in the tiny gate→swap window). Surface it instead of reporting a clean
+        # rebuild; re-running converges since staging overwrites all shadow fields.
+        raise EmbeddingRebuildError(f"promoted {swapped} of {total} chunks; embedding space may be mixed, re-run the rebuild")
     index = ensure_vector_index(repository.client, dimension=provider.dimension)
     related_removed = _clear_related_edges(repository, [], scoped=False)
     return {
@@ -230,6 +240,10 @@ def _clear_pending_embeddings(repository: KnowledgeRepository) -> None:
 
 def _count_chunks(repository: KnowledgeRepository) -> int:
     return int(repository.client.aql("RETURN LENGTH(chunks)")[0])
+
+
+def _count_pending_embeddings(repository: KnowledgeRepository) -> int:
+    return int(repository.client.aql('RETURN LENGTH(FOR c IN chunks FILTER HAS(c, "embedding_pending") RETURN 1)')[0])
 
 
 def build_communities(

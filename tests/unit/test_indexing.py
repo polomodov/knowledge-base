@@ -103,8 +103,9 @@ def test_build_embeddings_stages_before_touching_the_live_index(monkeypatch: pyt
     # only dropped/rebuilt in the short swap phase, AFTER staging proves complete.
     events: list[str] = []
     monkeypatch.setattr(indexing, "build_embedding_provider", lambda settings: _FakeProvider())
-    monkeypatch.setattr(indexing, "_stage_pending_embeddings", lambda repo, provider, **k: (events.append("stage"), 3)[1])
-    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: (events.append("count"), 3)[1])
+    monkeypatch.setattr(indexing, "_stage_pending_embeddings", lambda repo, provider, **k: events.append("stage"))
+    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: (events.append("count_total"), 3)[1])
+    monkeypatch.setattr(indexing, "_count_pending_embeddings", lambda repo: (events.append("count_pending"), 3)[1])
     monkeypatch.setattr(indexing, "_swap_pending_embeddings", lambda repo: (events.append("swap"), 3)[1])
     monkeypatch.setattr(
         indexing, "ensure_vector_index", lambda client, *, dimension: (events.append(f"index:{dimension}"), {"status": "ok"})[1]
@@ -121,7 +122,8 @@ def test_build_embeddings_stages_before_touching_the_live_index(monkeypatch: pyt
 
     result = build_embeddings(cast(KnowledgeRepository, _Repo()), _settings())
 
-    assert events == ["stage", "count", "drop_index", "swap", "index:16", "clear_related"]
+    # Gate reads the real pending count before touching the live index; swap is verified to cover it.
+    assert events == ["stage", "count_total", "count_pending", "drop_index", "swap", "index:16", "clear_related"]
     assert result == {
         "chunks": 3,
         "model": "new-model-v1",
@@ -136,8 +138,9 @@ def test_build_embeddings_aborts_and_rolls_back_on_incomplete_staging(monkeypatc
     # re-embed: roll the shadow fields back and fail loudly.
     events: list[str] = []
     monkeypatch.setattr(indexing, "build_embedding_provider", lambda settings: _FakeProvider())
-    monkeypatch.setattr(indexing, "_stage_pending_embeddings", lambda repo, provider, **k: 2)  # only 2 staged
-    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: 5)  # but 5 chunks exist
+    monkeypatch.setattr(indexing, "_stage_pending_embeddings", lambda repo, provider, **k: None)
+    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: 5)  # 5 chunks exist
+    monkeypatch.setattr(indexing, "_count_pending_embeddings", lambda repo: 2)  # but only 2 carry a staged vector
     monkeypatch.setattr(indexing, "_clear_pending_embeddings", lambda repo: events.append("clear_pending"))
     monkeypatch.setattr(indexing, "_swap_pending_embeddings", lambda repo: (events.append("swap"), 0)[1])
 
@@ -153,6 +156,36 @@ def test_build_embeddings_aborts_and_rolls_back_on_incomplete_staging(monkeypatc
         build_embeddings(cast(KnowledgeRepository, _Repo()), _settings())
 
     assert events == ["clear_pending"]  # rolled back; the live index and swap were never touched
+
+
+def test_build_embeddings_raises_if_swap_does_not_cover_the_corpus(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Even when the completeness gate passes, if the atomic swap promotes fewer rows than were staged
+    # (a concurrent write in the gate->swap window), report failure instead of a clean rebuild — and
+    # never recreate the index over a half-promoted space.
+    ensured: list[int] = []
+    monkeypatch.setattr(indexing, "build_embedding_provider", lambda settings: _FakeProvider())
+    monkeypatch.setattr(indexing, "_stage_pending_embeddings", lambda repo, provider, **k: None)
+    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: 3)
+    monkeypatch.setattr(indexing, "_count_pending_embeddings", lambda repo: 3)  # gate passes
+    monkeypatch.setattr(indexing, "_swap_pending_embeddings", lambda repo: 2)  # but only 2 promoted
+
+    def _record_index(client: object, *, dimension: int) -> dict[str, Any]:
+        ensured.append(dimension)
+        return {"status": "ok"}
+
+    monkeypatch.setattr(indexing, "ensure_vector_index", _record_index)
+    monkeypatch.setattr(indexing, "_clear_related_edges", lambda repo, ids, *, scoped: 0)
+
+    class _Client:
+        def drop_index(self, collection: str, name: str) -> dict[str, Any]:
+            return {}
+
+    class _Repo:
+        client = _Client()
+
+    with pytest.raises(EmbeddingRebuildError):
+        build_embeddings(cast(KnowledgeRepository, _Repo()), _settings())
+    assert ensured == []  # the index is not recreated when the swap did not cover the corpus
 
 
 def test_stage_pending_embeddings_writes_only_shadow_fields() -> None:
