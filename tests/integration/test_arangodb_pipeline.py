@@ -7,11 +7,12 @@ from typing import cast
 
 import pytest
 
+from knowledge_base import indexing
 from knowledge_base.arango import ArangoClient, ArangoError
 from knowledge_base.config import Settings, load_settings
 from knowledge_base.embeddings import hash_embedding
 from knowledge_base.fixture import ingest_fixture
-from knowledge_base.indexing import build_communities, build_related_edges, rebuild_indexes
+from knowledge_base.indexing import EmbeddingRebuildError, build_communities, build_related_edges, rebuild_indexes
 from knowledge_base.repository import KnowledgeRepository
 from knowledge_base.retrieval import (
     global_search,
@@ -28,6 +29,11 @@ pytestmark = pytest.mark.integration
 
 def _integration_enabled() -> bool:
     return os.getenv("KB_RUN_INTEGRATION") == "1"
+
+
+def _vector_index_present(client: ArangoClient) -> bool:
+    response = client.request("GET", "/_api/index?collection=chunks", database=client.settings.arango_database)
+    return any(index.get("name") == "idx_chunks_embedding_vector" for index in response.get("indexes", []))
 
 
 @pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
@@ -589,8 +595,85 @@ def test_reembed_switches_embedding_dimension() -> None:
         'RETURN LENGTH(FOR e IN item_related_to_item FILTER e.method == "embedding-similarity" RETURN 1)'
     )
     assert remaining[0] == 0
-    # Semantic search works against the rebuilt (16-dim) vector index.
-    assert semantic_search(repository, "systems thinking", dimension=16)["status"] in {"ok", "degraded"}
+    # Semantic search serves via the rebuilt 16-dim ANN index — status "ok" proves the index was
+    # actually recreated and is serving (a broken/absent index would degrade to full-scan).
+    assert semantic_search(repository, "systems thinking", dimension=16)["status"] == "ok"
+
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_reembed_abort_leaves_the_old_embedding_space_intact(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Crash-safety: if the completeness gate fails partway (a lost batch / concurrent change), the
+    # rebuild must roll back the shadow fields and leave the live embeddings and index untouched,
+    # rather than promoting a partial re-embed into a split space with a mismatched/dropped index.
+    base = load_settings()
+    settings = cast(
+        Settings, dataclasses.replace(base, arango_database=f"{base.arango_database}_reembed_abort", embedding_dimension=8)
+    )
+    client = ArangoClient(settings)
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+    repository = KnowledgeRepository(client)
+    bootstrap_schema(client, embedding_dimension=settings.embedding_dimension)
+    ingest_fixture(repository, settings)
+
+    # Force the gate to see a corpus larger than what was staged, as a lost batch would.
+    real_count = indexing._count_chunks
+    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: real_count(repo) + 1)
+
+    new_settings = cast(Settings, dataclasses.replace(settings, embedding_dimension=16))
+    with pytest.raises(EmbeddingRebuildError):
+        rebuild_indexes(repository, target="embeddings", embedding_dimension=16, settings=new_settings)
+
+    # The old 8-dim space is fully intact: dimension and model unchanged, and no shadow fields leaked.
+    assert set(repository.client.aql("FOR c IN chunks FILTER HAS(c, 'embedding') RETURN LENGTH(c.embedding)")) == {8}
+    assert set(repository.client.aql("FOR c IN chunks RETURN c.embedding_model")) == {"hash-v1"}
+    assert repository.client.aql("RETURN LENGTH(FOR c IN chunks FILTER HAS(c, 'embedding_pending') RETURN 1)")[0] == 0
+    # The 8-dim vector index was never dropped (the abort happened before Phase 2). Assert its presence
+    # directly rather than via semantic status, which on the tiny fixture depends on ANN recall.
+    assert _vector_index_present(client)
+    assert semantic_search(repository, "systems thinking", dimension=8)["status"] in {"ok", "degraded"}
+
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+
+
+@pytest.mark.skipif(not _integration_enabled(), reason="set KB_RUN_INTEGRATION=1 with ArangoDB running")
+def test_reembed_recovers_after_a_mid_swap_interruption(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Crash-safety recovery: interrupt Phase 2 after the index is dropped but before the swap
+    # completes (live embeddings still old, shadow fields staged, no index), then re-run and assert
+    # the rebuild converges to the new dimension with a serving index and no shadow-field residue.
+    base = load_settings()
+    settings = cast(
+        Settings, dataclasses.replace(base, arango_database=f"{base.arango_database}_reembed_recover", embedding_dimension=8)
+    )
+    client = ArangoClient(settings)
+    with contextlib.suppress(ArangoError):
+        client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))
+    repository = KnowledgeRepository(client)
+    bootstrap_schema(client, embedding_dimension=settings.embedding_dimension)
+    ingest_fixture(repository, settings)
+    new_settings = cast(Settings, dataclasses.replace(settings, embedding_dimension=16))
+
+    # First run: drop_index has already executed by the time the swap is reached, so raising here
+    # leaves the mid-Phase-2 state (index gone, shadow fields present, live embeddings still 8-dim).
+    def _crash_during_swap(_repository: KnowledgeRepository) -> int:
+        raise RuntimeError("simulated crash during embedding swap")
+
+    monkeypatch.setattr(indexing, "_swap_pending_embeddings", _crash_during_swap)
+    with pytest.raises(RuntimeError):
+        rebuild_indexes(repository, target="embeddings", embedding_dimension=16, settings=new_settings)
+    assert repository.client.aql("RETURN LENGTH(FOR c IN chunks FILTER HAS(c, 'embedding_pending') RETURN 1)")[0] >= 1
+
+    # Recovery: restore the real swap and re-run — the corpus must converge to the new space.
+    monkeypatch.undo()
+    result = rebuild_indexes(repository, target="embeddings", embedding_dimension=16, settings=new_settings)
+    assert result["status"] == "ok"
+    assert set(repository.client.aql("FOR c IN chunks FILTER HAS(c, 'embedding') RETURN LENGTH(c.embedding)")) == {16}
+    assert repository.client.aql("RETURN LENGTH(FOR c IN chunks FILTER HAS(c, 'embedding_pending') RETURN 1)")[0] == 0
+    assert semantic_search(repository, "systems thinking", dimension=16)["status"] == "ok"
 
     with contextlib.suppress(ArangoError):
         client.request("DELETE", f"/_api/database/{settings.arango_database}", expected=(200, 404))

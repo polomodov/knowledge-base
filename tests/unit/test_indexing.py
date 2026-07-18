@@ -1,6 +1,11 @@
-from typing import cast
+from typing import Any, cast
 
-from knowledge_base.indexing import _ann_related, _scored_candidates, _select_related
+import pytest
+
+import knowledge_base.indexing as indexing
+from knowledge_base.config import Settings
+from knowledge_base.embeddings import HashEmbeddingProvider
+from knowledge_base.indexing import EmbeddingRebuildError, _ann_related, _scored_candidates, _select_related, build_embeddings
 from knowledge_base.repository import KnowledgeRepository
 
 
@@ -79,3 +84,97 @@ def test_scored_candidates_scores_pool_and_drops_self() -> None:
     ]
     scored = {candidate["id"]: candidate["score"] for candidate in _scored_candidates(chunk, pool)}
     assert scored == {"chunks/b1": 1.0, "chunks/c1": 0.0}  # self excluded
+
+
+class _FakeProvider:
+    model = "new-model-v1"
+    dimension = 16
+
+    def embed(self, text: str) -> list[float]:
+        return [0.0] * self.dimension
+
+
+def _settings() -> Settings:
+    return Settings(embedding_dimension=16, embedding_provider="hash")
+
+
+def test_build_embeddings_stages_before_touching_the_live_index(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Crash-safety invariant: the long re-embed writes shadow fields first; the live vector index is
+    # only dropped/rebuilt in the short swap phase, AFTER staging proves complete.
+    events: list[str] = []
+    monkeypatch.setattr(indexing, "build_embedding_provider", lambda settings: _FakeProvider())
+    monkeypatch.setattr(indexing, "_stage_pending_embeddings", lambda repo, provider, **k: (events.append("stage"), 3)[1])
+    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: (events.append("count"), 3)[1])
+    monkeypatch.setattr(indexing, "_swap_pending_embeddings", lambda repo: (events.append("swap"), 3)[1])
+    monkeypatch.setattr(
+        indexing, "ensure_vector_index", lambda client, *, dimension: (events.append(f"index:{dimension}"), {"status": "ok"})[1]
+    )
+    monkeypatch.setattr(indexing, "_clear_related_edges", lambda repo, ids, *, scoped: (events.append("clear_related"), 2)[1])
+
+    class _Client:
+        def drop_index(self, collection: str, name: str) -> dict[str, Any]:
+            events.append("drop_index")
+            return {"name": name, "dropped": True}
+
+    class _Repo:
+        client = _Client()
+
+    result = build_embeddings(cast(KnowledgeRepository, _Repo()), _settings())
+
+    assert events == ["stage", "count", "drop_index", "swap", "index:16", "clear_related"]
+    assert result == {
+        "chunks": 3,
+        "model": "new-model-v1",
+        "dimension": 16,
+        "vector_index": {"status": "ok"},
+        "related_edges_removed": 2,
+    }
+
+
+def test_build_embeddings_aborts_and_rolls_back_on_incomplete_staging(monkeypatch: pytest.MonkeyPatch) -> None:
+    # If staging does not cover the whole corpus, never drop the live index or promote a partial
+    # re-embed: roll the shadow fields back and fail loudly.
+    events: list[str] = []
+    monkeypatch.setattr(indexing, "build_embedding_provider", lambda settings: _FakeProvider())
+    monkeypatch.setattr(indexing, "_stage_pending_embeddings", lambda repo, provider, **k: 2)  # only 2 staged
+    monkeypatch.setattr(indexing, "_count_chunks", lambda repo: 5)  # but 5 chunks exist
+    monkeypatch.setattr(indexing, "_clear_pending_embeddings", lambda repo: events.append("clear_pending"))
+    monkeypatch.setattr(indexing, "_swap_pending_embeddings", lambda repo: (events.append("swap"), 0)[1])
+
+    class _Client:
+        def drop_index(self, collection: str, name: str) -> dict[str, Any]:
+            events.append("drop_index")
+            return {}
+
+    class _Repo:
+        client = _Client()
+
+    with pytest.raises(EmbeddingRebuildError):
+        build_embeddings(cast(KnowledgeRepository, _Repo()), _settings())
+
+    assert events == ["clear_pending"]  # rolled back; the live index and swap were never touched
+
+
+def test_stage_pending_embeddings_writes_only_shadow_fields() -> None:
+    # Staging must not touch the live `embedding`/`embedding_model` so retrieval keeps serving the old
+    # space during the rebuild.
+    captured: list[str] = []
+
+    class _Client:
+        def aql(self, query: str, bind_vars: dict | None = None) -> list[dict]:
+            captured.append(query)
+            if "SORT c._key" in query:
+                assert bind_vars is not None
+                return [{"key": "c1", "text": "alpha"}] if bind_vars["offset"] == 0 else []
+            return []
+
+    class _Repo:
+        client = _Client()
+
+    staged = indexing._stage_pending_embeddings(cast(KnowledgeRepository, _Repo()), HashEmbeddingProvider(dimension=8))
+
+    assert staged == 1
+    update = next(query for query in captured if "UPDATE item.key" in query)
+    assert "embedding_pending" in update and "embedding_model_pending" in update
+    # Live fields are never assigned during staging.
+    assert "embedding:" not in update and "embedding_model:" not in update

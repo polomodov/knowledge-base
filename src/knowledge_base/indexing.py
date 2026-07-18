@@ -113,26 +113,52 @@ def rebuild_indexes(
     return {"status": "ok", "index_run_key": index_run_key, "target": target, "counts": counts, "bootstrap": bootstrap}
 
 
-def build_embeddings(repository: KnowledgeRepository, settings: Settings) -> dict[str, Any]:
-    """Re-embed every chunk with the configured provider and rebuild the vector index.
+# Crash-safe embedding rebuild: new vectors are staged into the `embedding_pending` /
+# `embedding_model_pending` shadow fields first, so the live `embedding`/`embedding_model` and the
+# vector index keep serving the old space during the long re-embed; a tight swap then promotes them.
+class EmbeddingRebuildError(RuntimeError):
+    """Raised when an embedding rebuild is aborted before promoting staged vectors."""
 
-    This is how you switch embedding providers/models after ingest without re-running the source
-    adapters: it recomputes each chunk's vector (and stored `embedding_model`) with the current
-    provider. The vector index is dropped first because its dimension is fixed at creation — a new
-    provider may use a different dimension — then recreated at the provider's dimension once the
-    chunks carry vectors of the new size.
+
+def build_embeddings(repository: KnowledgeRepository, settings: Settings) -> dict[str, Any]:
+    """Re-embed every chunk with the configured provider and rebuild the vector index, crash-safely.
+
+    Switching embedding providers/models after ingest recomputes each chunk's vector (and stored
+    `embedding_model`). The vector index freezes its dimension at creation, so a dimension change
+    requires dropping and recreating it.
+
+    A naive "drop index, re-embed in place, recreate" leaves the corpus split across two models with
+    no vector index if the long re-embed fails partway. Instead the new vectors are staged into shadow
+    fields while the old `embedding`/index keep serving the old space; only once every chunk is staged
+    are they promoted in a single atomic swap, the index recreated at the new dimension, and the stale
+    similarity graph cleared. A crash during staging leaves the old space fully intact, and re-running
+    converges. Only the short swap/reindex window degrades retrieval — honestly, to full-scan.
 
     Re-embedding invalidates the similarity graph: item_related_to_item edges were computed from the
-    previous vector space, so they are cleared here to stop hybrid ranking from using stale boosts
-    (PR #30 review). Rebuild them on the new embeddings with `kb index rebuild --target related`.
+    previous vector space, so they are cleared here (rebuild them with `kb index rebuild --target related`).
     """
     provider = build_embedding_provider(settings)
+
+    # Phase 1 (long, non-destructive): stage new vectors beside the live ones.
+    staged = _stage_pending_embeddings(repository, provider)
+    total = _count_chunks(repository)
+    if staged != total:
+        # A gap between staged and total (a concurrent ingest/delete, or a lost batch) means we cannot
+        # prove the swap would cover the whole corpus. Roll the shadow fields back and fail loudly
+        # rather than promote a partial re-embed into a split live space.
+        _clear_pending_embeddings(repository)
+        raise EmbeddingRebuildError(f"staged {staged} of {total} chunks; aborting embedding swap to avoid a split corpus")
+
+    # Phase 2 (short): drop the old-dimension index so new-dimension vectors can be written, promote
+    # the staged vectors atomically, recreate the index at the new dimension, and clear the now-stale
+    # similarity graph. drop_index is a no-op if the index is already gone, so a crash mid-phase is
+    # recoverable by re-running.
     repository.client.drop_index("chunks", "idx_chunks_embedding_vector")
-    reembedded = _reembed_chunks(repository, provider)
+    swapped = _swap_pending_embeddings(repository)
     index = ensure_vector_index(repository.client, dimension=provider.dimension)
     related_removed = _clear_related_edges(repository, [], scoped=False)
     return {
-        "chunks": reembedded,
+        "chunks": swapped,
         "model": provider.model,
         "dimension": provider.dimension,
         "vector_index": index,
@@ -140,7 +166,8 @@ def build_embeddings(repository: KnowledgeRepository, settings: Settings) -> dic
     }
 
 
-def _reembed_chunks(repository: KnowledgeRepository, provider: EmbeddingProvider, *, batch_size: int = 500) -> int:
+def _stage_pending_embeddings(repository: KnowledgeRepository, provider: EmbeddingProvider, *, batch_size: int = 500) -> int:
+    """Compute vectors and write them into the shadow fields, leaving the live embedding/index untouched."""
     total = 0
     offset = 0
     while True:
@@ -152,13 +179,57 @@ def _reembed_chunks(repository: KnowledgeRepository, provider: EmbeddingProvider
             return total
         updates = [{"key": row["key"], "embedding": provider.embed(row["text"]), "model": provider.model} for row in chunks]
         repository.client.aql(
-            "FOR item IN @items UPDATE item.key WITH { embedding: item.embedding, embedding_model: item.model } IN chunks",
+            "FOR item IN @items UPDATE item.key WITH "
+            "{ embedding_pending: item.embedding, embedding_model_pending: item.model } IN chunks",
             {"items": updates},
         )
         total += len(chunks)
         if len(chunks) < batch_size:
             return total
         offset += batch_size
+
+
+def _swap_pending_embeddings(repository: KnowledgeRepository) -> int:
+    """Promote every staged vector to live in one atomic AQL modification; returns how many moved.
+
+    A single-collection AQL data-modification query runs as one transaction, so for realistic corpus
+    sizes the promotion is all-or-nothing. If an extreme corpus ever forced intermediate commits,
+    retrieval's embedding_model filter still degrades honestly rather than serving a mixed space, and
+    re-running converges.
+    """
+    return int(
+        repository.client.aql(
+            """
+            RETURN LENGTH(
+              FOR chunk IN chunks
+                FILTER HAS(chunk, "embedding_pending")
+                UPDATE chunk WITH {
+                  embedding: chunk.embedding_pending,
+                  embedding_model: chunk.embedding_model_pending,
+                  embedding_pending: null,
+                  embedding_model_pending: null
+                } IN chunks OPTIONS { keepNull: false }
+                RETURN 1
+            )
+            """
+        )[0]
+    )
+
+
+def _clear_pending_embeddings(repository: KnowledgeRepository) -> None:
+    """Drop any staged shadow fields (rollback of an aborted or crashed re-embed)."""
+    repository.client.aql(
+        """
+        FOR chunk IN chunks
+          FILTER HAS(chunk, "embedding_pending")
+          UPDATE chunk WITH { embedding_pending: null, embedding_model_pending: null }
+            IN chunks OPTIONS { keepNull: false }
+        """
+    )
+
+
+def _count_chunks(repository: KnowledgeRepository) -> int:
+    return int(repository.client.aql("RETURN LENGTH(chunks)")[0])
 
 
 def build_communities(
